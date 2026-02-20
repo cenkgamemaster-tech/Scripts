@@ -1,0 +1,153 @@
+--[[
+	Test script for Roblox game.
+	Small UI that gets the local player and displays the player's name.
+	Reference: Roblox/Referrence/JunkieKeySystem Example.lua
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Remove any existing UI so we don't stack
+local existing = PlayerGui:FindFirstChild("PlayerNameTest")
+if existing then
+	existing:Destroy()
+end
+
+-- Test: get player name
+local function getPlayerName()
+	return LocalPlayer.Name or "Unknown"
+end
+
+-- Build small UI
+local screen = Instance.new("ScreenGui")
+screen.Name = "PlayerNameTest"
+screen.ResetOnSpawn = false
+screen.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 220, 0, 90)
+main.Position = UDim2.new(0, 16, 0, 16)
+main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+main.BorderSizePixel = 0
+main.Parent = screen
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = main
+
+-- Top bar (drag handle)
+local top = Instance.new("Frame")
+top.Name = "Top"
+top.Size = UDim2.new(1, 0, 0, 28)
+top.Position = UDim2.new(0, 0, 0, 0)
+top.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+top.BorderSizePixel = 0
+top.Parent = main
+
+local topCorner = Instance.new("UICorner")
+topCorner.CornerRadius = UDim.new(0, 10)
+topCorner.Parent = top
+
+local topCover = Instance.new("Frame")
+topCover.Size = UDim2.new(1, 0, 0, 14)
+topCover.Position = UDim2.new(0, 0, 1, -14)
+topCover.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+topCover.BorderSizePixel = 0
+topCover.Parent = top
+
+local bar = Instance.new("Frame")
+bar.Name = "Bar"
+bar.Size = UDim2.new(1, 0, 0, 4)
+bar.Position = UDim2.new(0, 0, 0, 28)
+bar.BackgroundColor3 = Color3.fromRGB(90, 170, 255)
+bar.BorderSizePixel = 0
+bar.Parent = main
+
+local barCorner = Instance.new("UICorner")
+barCorner.CornerRadius = UDim.new(0, 2)
+barCorner.Parent = bar
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, -44, 0, 28)
+title.Position = UDim2.new(0, 8, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "Player Name Test"
+title.TextColor3 = Color3.fromRGB(200, 230, 255)
+title.TextSize = 14
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = top
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Name = "Close"
+closeBtn.Size = UDim2.new(0, 28, 0, 28)
+closeBtn.Position = UDim2.new(1, -28, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "×"
+closeBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+closeBtn.TextSize = 20
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = top
+
+-- Drag state and connection (so we can disconnect when UI closes)
+local dragInput, dragStart, startPos
+local inputChangedConnection
+
+local function startDrag(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragInput = inp
+		dragStart = inp.Position
+		startPos = main.Position
+		local conn
+		conn = inp.Changed:Connect(function()
+			if inp.UserInputState == Enum.UserInputState.End then
+				dragInput = nil
+				if conn then conn:Disconnect() end
+			end
+		end)
+	end
+end
+
+-- Connect drag to both top frame and title (title covers most of the bar, so we need both)
+top.InputBegan:Connect(startDrag)
+title.InputBegan:Connect(startDrag)
+
+inputChangedConnection = UserInputService.InputChanged:Connect(function(inp)
+	if dragInput and inp == dragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = inp.Position - dragStart
+		main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	if inputChangedConnection then
+		inputChangedConnection:Disconnect()
+		inputChangedConnection = nil
+	end
+	screen:Destroy()
+end)
+
+local nameLabel = Instance.new("TextLabel")
+nameLabel.Name = "PlayerName"
+nameLabel.Size = UDim2.new(1, -16, 0, 28)
+nameLabel.Position = UDim2.new(0, 8, 0, 44)
+nameLabel.BackgroundTransparency = 1
+nameLabel.Text = getPlayerName()
+nameLabel.TextColor3 = Color3.new(1, 1, 1)
+nameLabel.TextSize = 16
+nameLabel.Font = Enum.Font.Gotham
+nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+nameLabel.Parent = main
+
+-- Keep UI in sync if display name or name changes
+LocalPlayer:GetPropertyChangedSignal("Name"):Connect(function()
+	nameLabel.Text = getPlayerName()
+end)
+
+print("Player name:", getPlayerName())
