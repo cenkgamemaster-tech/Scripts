@@ -38,7 +38,137 @@ local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
 -- Objects list: only show models whose FullName starts with this path (e.g. Workspace.Map.Zones.Field includes Field and all descendants); set to nil or "" to skip
 local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.NPC"
 
+-- Take Bubu with E: max distance to consider "near" the player (studs)
+local TAKE_BUBU_MAX_RANGE = 30
+
 local workspace = game:GetService("Workspace")
+
+-- Get all Bubu models (same filter as list: path + Mutation ~= Normal)
+local function getBubuModels()
+	local collected = {}
+	local prefix = OBJECTS_LIST_PARENT_FILTER
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj.ClassName == "Model" then
+			local fullName = obj:GetFullName()
+			local parentMatch = not prefix or prefix == ""
+				or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
+			if parentMatch then
+				local mutation = obj:GetAttribute("Mutation")
+				if mutation ~= nil and mutation ~= "Normal" then
+					table.insert(collected, obj)
+				end
+			end
+		end
+	end
+	return collected
+end
+
+-- Rarity sort (same as list: rarest first). Used for "Go to top" and E-hold teleport.
+local RARITY_ORDER = {
+	Exclusive = 1, Secret = 2, God = 3, Mythic = 4, Legendary = 5,
+	Epic = 6, Rare = 7, Uncommon = 8, Common = 9
+}
+local function raritySortKey(rarityStr)
+	if not rarityStr or rarityStr == "" then return 99 end
+	return RARITY_ORDER[rarityStr] or 99
+end
+local function getCharacterInfoLabelTopLevel(model, labelName)
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BillboardGui") and desc.Name == "CharacterInfo" then
+			local lbl = desc:FindFirstChild(labelName, true)
+			if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text then
+				return lbl.Text
+			end
+			break
+		end
+	end
+	local charInfo = model:FindFirstChild("CharacterInfo", true)
+	if charInfo then
+		local gui = charInfo:IsA("BillboardGui") and charInfo or charInfo:FindFirstChildOfClass("BillboardGui")
+		if gui then
+			local lbl = gui:FindFirstChild(labelName, true)
+			if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text then
+				return lbl.Text
+			end
+		end
+	end
+	return nil
+end
+local function getSortedBubuListTopLevel()
+	local collected = getBubuModels()
+	table.sort(collected, function(a, b)
+		return raritySortKey(getCharacterInfoLabelTopLevel(a, "Rarity")) < raritySortKey(getCharacterInfoLabelTopLevel(b, "Rarity"))
+	end)
+	return collected
+end
+-- Position of top Bubu (rarest), 4 studs in front; same as "Go to top" button. Returns nil if no Bubus.
+local function getTopBubuPosition()
+	local sorted = getSortedBubuListTopLevel()
+	if #sorted == 0 then return nil end
+	local topModel = sorted[1]
+	local ok, pivot = pcall(function() return topModel:GetPivot() end)
+	if ok and pivot then
+		return pivot.Position + Vector3.new(0, 0, 4)
+	end
+	if topModel.PrimaryPart then
+		return topModel.PrimaryPart.Position + Vector3.new(0, 0, 4)
+	end
+	return nil
+end
+
+-- Take nearest Bubu (within range), teleport to top Bubu (same as Go to top), then take the Bubu.
+local function takeNearestBubuAndTeleportToTop()
+	local character = LocalPlayer.Character
+	if not character then return end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local playerPos = root.Position
+	local bubus = getBubuModels()
+	local nearest = nil
+	local nearestDist = TAKE_BUBU_MAX_RANGE
+	for _, model in ipairs(bubus) do
+		local pos = nil
+		local ok, pivot = pcall(function() return model:GetPivot() end)
+		if ok and pivot then pos = pivot.Position
+		elseif model.PrimaryPart then pos = model.PrimaryPart.Position
+		end
+		if not pos then continue end
+		local dist = (pos - playerPos).Magnitude
+		if dist < nearestDist then
+			nearestDist = dist
+			nearest = model
+		end
+	end
+	if not nearest then return end
+	local topPos = getTopBubuPosition()
+	if not topPos then return end
+	-- First teleport to top Bubu (same as Go to top button), then take the Bubu
+	root.CFrame = CFrame.new(topPos)
+	nearest.Parent = character
+end
+
+-- E must be held for 2 seconds to take Bubu and teleport
+local eKeyHeld = false
+local eHoldWaiting = false
+UserInputService.InputBegan:Connect(function(inp)
+	if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == Enum.KeyCode.E then
+		if not eHoldWaiting then
+			eHoldWaiting = true
+			eKeyHeld = true
+			task.delay(2, function()
+				if eKeyHeld then
+					takeNearestBubuAndTeleportToTop()
+				end
+				eHoldWaiting = false
+			end)
+		end
+	end
+end)
+UserInputService.InputEnded:Connect(function(inp)
+	if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == Enum.KeyCode.E then
+		eKeyHeld = false
+	end
+end)
 
 local main = Instance.new("Frame")
 main.Name = "Main"
@@ -241,7 +371,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 1"
+objectsBtn.Text = "Spawned Bubus 2"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
