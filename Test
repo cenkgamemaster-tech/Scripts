@@ -41,11 +41,14 @@ local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.NPC"
 
 -- Take Bubu with E: max distance to consider "near" the player (studs)
 local TAKE_BUBU_MAX_RANGE = 30
--- First teleport after taking Bubu; then script walks to outside
+-- First teleport after taking Bubu; then step teleport (Z only) until Z = -30, then MoveTo to Z = -10 (X,Y unchanged)
 local TELEPORT_FIRST_EXIT = Vector3.new(-35, 4.2, -31)
--- "Teleport back" button and final walk destination
+-- Step teleport back: change only Z until we reach this (then MoveTo from here to Z = -10)
+local TELEPORT_BACK_Z_END = -30
+local TELEPORT_BACK_Z_STEP = 10
+-- MoveTo goes to (same X, same Y, -10). "Teleport back" button uses this.
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
--- Walk to outside: max time (s) and distance (studs) to consider "arrived"
+-- MoveTo to outside: max time (s) and distance (studs) to consider "arrived"
 local WALK_TO_OUTSIDE_TIMEOUT = 20
 local WALK_ARRIVED_DISTANCE = 4
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
@@ -269,34 +272,31 @@ local function tryTakeViaRemote(nearest)
 		end
 	end
 
-	-- If this is the "state changed" remote, mimic hold E 2 sec. Try (npc or id, true)/(false) so server knows which NPC.
+	-- If this is the "state changed" remote: only fire (pickTarget, true) and wait 2s. Do NOT fire false here –
+	-- we release after teleport + walk so the Bubu doesn’t drop in the field. Call releasePickupState(nearest) after arriving.
 	if isStateChanged then
-		local function tryStateSequence(pickTarget)
+		local function tryStartPickup(pickTarget)
 			local ok = pcall(function() fireRemote(pickTarget, true) end)
 			if not ok then return false end
 			task.wait(2)
-			pcall(function() fireRemote(pickTarget, false) end)
 			return true
 		end
-		-- Try model, then string id, then name
-		if tryStateSequence(nearest) then
-			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s, then (nearest, false)")
+		if tryStartPickup(nearest) then
+			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s. Release after walk.")
 			return true
 		end
-		if tryStateSequence(id) then
-			print("[Take] Called PickupNPCStateChanged(id, true), waited 2s, then (id, false)")
+		if tryStartPickup(id) then
+			print("[Take] Called PickupNPCStateChanged(id, true), waited 2s. Release after walk.")
 			return true
 		end
-		if tryStateSequence(nearest.Name) then
-			print("[Take] Called PickupNPCStateChanged(nearest.Name, true), waited 2s, then false")
+		if tryStartPickup(nearest.Name) then
+			print("[Take] Called PickupNPCStateChanged(nearest.Name, true), waited 2s. Release after walk.")
 			return true
 		end
-		-- Fallback: (true) then (false) – server may use proximity
 		local ok = pcall(function() fireRemote(true) end)
 		if ok then
 			task.wait(2)
-			pcall(function() fireRemote(false) end)
-			print("[Take] Called PickupNPCStateChanged true, waited 2s, then false")
+			print("[Take] Called PickupNPCStateChanged true, waited 2s. Release after walk.")
 			return true
 		end
 	end
@@ -323,6 +323,22 @@ local function tryTakeViaRemote(nearest)
 	end
 	print("[Take] Remote", fullName, "failed all argument patterns. Try setting TAKE_REMOTE_PATH and correct args.")
 	return false
+end
+
+-- Release pickup state after we’ve teleported and walked outside (so Bubu doesn’t drop in the field).
+local function releasePickupState(nearest)
+	if not nearest or not nearest.Parent then return end
+	local remote = findTakeRemote()
+	if not remote then return end
+	local fullName = remote:GetFullName()
+	if not string.find(fullName, "PickupNPCStateChanged") then return end
+	local id = nearest:GetAttribute("NPCId") or nearest:GetAttribute("NpcId") or nearest.Name
+	local function fire(...)
+		if remote:IsA("RemoteEvent") then remote:FireServer(...) else remote:InvokeServer(...) end
+	end
+	pcall(function() fire(nearest, false) end)
+	pcall(function() fire(id, false) end)
+	pcall(function() fire(false) end)
 end
 
 -- Print all RemoteEvents/RemoteFunctions under ReplicatedStorage to Output (use "List remotes" button or call once).
@@ -395,11 +411,25 @@ local function takeNearestBubuAndTeleportOutside()
 	if nearest.Parent ~= character then
 		nearest.Parent = character
 	end
-	-- Teleport to first exit spot, then script walks to outside
+	-- Teleport to first exit; step teleport (Z only, X Y unchanged) until Z = -30; then MoveTo to (x, y, -10)
 	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
 	task.spawn(function()
+		local char = LocalPlayer.Character
+		local r = char and char:FindFirstChild("HumanoidRootPart")
+		if not r then releasePickupState(nearest) return end
 		task.wait(0.3)
-		walkToPosition(LocalPlayer.Character, OUTSIDE_FIELD_POSITION, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
+		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
+		local z = TELEPORT_FIRST_EXIT.Z
+		-- Step teleport: change only Z until Z = -30 (do not change X and Y)
+		while z < TELEPORT_BACK_Z_END do
+			z = math.min(z + TELEPORT_BACK_Z_STEP, TELEPORT_BACK_Z_END)
+			r.CFrame = CFrame.new(x, y, z)
+			task.wait(0.1)
+		end
+		-- From (x, y, -30) MoveTo to (x, y, -10) – do not change X and Y
+		local moveToTarget = Vector3.new(x, y, -10)
+		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
+		releasePickupState(nearest)
 	end)
 end
 
@@ -618,7 +648,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 5"
+objectsBtn.Text = "Spawned Bubus 6"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
