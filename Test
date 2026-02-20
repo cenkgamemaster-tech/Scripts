@@ -43,8 +43,13 @@ local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.NPC"
 local TAKE_BUBU_MAX_RANGE = 30
 -- When holding E to take Bubu: teleport destination (player + Bubu) outside the field
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)  -- change to your desired "outside field" location
--- Optional: set to a path string (e.g. "ReplicatedStorage.TakeBubu") to use that remote for taking; nil = auto-detect
+-- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
+-- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
+local TAKE_REMOTE_CANDIDATES = {
+	"ReplicatedStorage.Remotes.Field.PickupNPCStateChanged",
+	"ReplicatedStorage.Remotes.Plot.PickupSlotNPC",
+}
 
 local workspace = game:GetService("Workspace")
 
@@ -121,18 +126,27 @@ local function getTopBubuPosition()
 	return nil
 end
 
--- Find a remote that might be the game's "take/capture" API (scan ReplicatedStorage by name).
+local function resolveRemotePath(pathString)
+	local node = game
+	for part in string.gmatch(pathString, "[^.]+") do
+		node = node:FindFirstChild(part)
+		if not node then return nil end
+	end
+	if node:IsA("RemoteEvent") or node:IsA("RemoteFunction") then return node end
+	return nil
+end
+
+-- Find a remote that might be the game's "take/capture" API. Tries TAKE_REMOTE_PATH, then TAKE_REMOTE_CANDIDATES, then name scan.
 local function findTakeRemote()
 	if type(TAKE_REMOTE_PATH) == "string" and TAKE_REMOTE_PATH ~= "" then
-		local node = game
-		for part in string.gmatch(TAKE_REMOTE_PATH, "[^.]+") do
-			node = node:FindFirstChild(part)
-			if not node then return nil end
-		end
-		if node:IsA("RemoteEvent") or node:IsA("RemoteFunction") then return node end
-		return nil
+		local r = resolveRemotePath(TAKE_REMOTE_PATH)
+		if r then return r end
 	end
-	local keywords = { "take", "capture", "pick", "collect", "catch", "bubu", "pet", "npc", "add" }
+	for _, path in ipairs(TAKE_REMOTE_CANDIDATES or {}) do
+		local r = resolveRemotePath(path)
+		if r then return r end
+	end
+	local keywords = { "take", "capture", "pick", "collect", "catch", "bubu", "pet", "npc", "add", "pickup" }
 	local function nameMatches(name)
 		local lower = string.lower(name or "")
 		for _, kw in ipairs(keywords) do
@@ -145,7 +159,6 @@ local function findTakeRemote()
 			return child
 		end
 	end
-	-- Also check direct children (common place for remotes)
 	for _, child in ipairs(ReplicatedStorage:GetChildren()) do
 		if (child:IsA("RemoteEvent") or child:IsA("RemoteFunction")) and nameMatches(child.Name) then
 			return child
@@ -154,7 +167,7 @@ local function findTakeRemote()
 	return nil
 end
 
--- Try to take the Bubu via the game's remote (FireServer/InvokeServer). Returns true if we called a remote.
+-- Try to take the Bubu via the game's remote. For PickupNPCStateChanged, mimics "hold E 2 sec": fire true, wait 2, fire false.
 local function tryTakeViaRemote(nearest)
 	local remote = findTakeRemote()
 	if not remote then
@@ -162,28 +175,57 @@ local function tryTakeViaRemote(nearest)
 		return false
 	end
 	local id = nearest:GetAttribute("NPCId") or nearest:GetAttribute("NpcId") or nearest.Name
-	-- Try common argument patterns (model, name, id)
-	local argsList = {
-		{ nearest },
-		{ nearest.Name },
-		{ id },
-		{ nearest, LocalPlayer },
-		{ id, nearest },
-	}
-	for _, args in ipairs(argsList) do
-		local ok, err = pcall(function()
-			if remote:IsA("RemoteEvent") then
-				remote:FireServer(table.unpack(args))
-			else
-				remote:InvokeServer(table.unpack(args))
-			end
-		end)
-		if ok then
-			print("[Take] Called remote:", remote:GetFullName(), "with args count:", #args)
+	local fullName = remote:GetFullName()
+	local isStateChanged = string.find(fullName, "PickupNPCStateChanged")
+
+	local function fireRemote(...)
+		local a = { ... }
+		if remote:IsA("RemoteEvent") then
+			remote:FireServer(table.unpack(a))
+		else
+			remote:InvokeServer(table.unpack(a))
+		end
+	end
+
+	-- If this is the "state changed" remote, try hold-for-2-sec: true then wait then false
+	if isStateChanged then
+		local ok1, err1 = pcall(function() fireRemote(true) end)
+		if ok1 then
+			task.wait(2)
+			pcall(function() fireRemote(false) end)
+			print("[Take] Called PickupNPCStateChanged true, waited 2s, then false")
+			return true
+		end
+		local ok2, err2 = pcall(function() fireRemote(nearest, true) end)
+		if ok2 then
+			task.wait(2)
+			pcall(function() fireRemote(nearest, false) end)
+			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s, then false")
 			return true
 		end
 	end
-	print("[Take] Remote", remote:GetFullName(), "failed all argument patterns. Try setting TAKE_REMOTE_PATH and correct args.")
+
+	-- Otherwise try common argument patterns
+	local argsList = {
+		{ true },
+		{ nearest, true },
+		{ true, nearest },
+		{ nearest },
+		{ nearest.Name },
+		{ id },
+		{ id, nearest },
+		{ nearest, LocalPlayer },
+		{ 1, nearest },
+		{ 1, id },
+	}
+	for _, args in ipairs(argsList) do
+		local ok, err = pcall(function() fireRemote(table.unpack(args)) end)
+		if ok then
+			print("[Take] Called remote:", fullName, "with args count:", #args)
+			return true
+		end
+	end
+	print("[Take] Remote", fullName, "failed all argument patterns. Try setting TAKE_REMOTE_PATH and correct args.")
 	return false
 end
 
@@ -452,7 +494,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 7"
+objectsBtn.Text = "Spawned Bubus 8"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
