@@ -276,27 +276,22 @@ local function tryTakeViaRemote(nearest)
 	-- we release after teleport + walk so the Bubu doesn’t drop in the field. Call releasePickupState(nearest) after arriving.
 	if isStateChanged then
 		local function tryStartPickup(pickTarget)
-			local ok = pcall(function() fireRemote(pickTarget, true) end)
-			if not ok then return false end
-			task.wait(2)
-			return true
+			return pcall(function() fireRemote(pickTarget, true) end)
 		end
 		if tryStartPickup(nearest) then
-			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s. Release after walk.")
+			print("[Take] Called PickupNPCStateChanged(nearest, true). Step teleport then MoveTo.")
 			return true
 		end
 		if tryStartPickup(id) then
-			print("[Take] Called PickupNPCStateChanged(id, true), waited 2s. Release after walk.")
+			print("[Take] Called PickupNPCStateChanged(id, true). Step teleport then MoveTo.")
 			return true
 		end
 		if tryStartPickup(nearest.Name) then
-			print("[Take] Called PickupNPCStateChanged(nearest.Name, true), waited 2s. Release after walk.")
+			print("[Take] Called PickupNPCStateChanged(nearest.Name, true). Step teleport then MoveTo.")
 			return true
 		end
-		local ok = pcall(function() fireRemote(true) end)
-		if ok then
-			task.wait(2)
-			print("[Take] Called PickupNPCStateChanged true, waited 2s. Release after walk.")
+		if pcall(function() fireRemote(true) end) then
+			print("[Take] Called PickupNPCStateChanged true. Step teleport then MoveTo.")
 			return true
 		end
 	end
@@ -403,11 +398,10 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Try game remote first so server registers the take
+	-- Try game remote (PickupNPCStateChanged often doesn't work from script; we still reparent so Bubu comes with us)
 	tryTakeViaRemote(nearest)
-	-- Give server time to process before we move
-	task.wait(0.5)
-	-- Reparent then teleport so NPC physically comes with us (in case server didn't move it)
+	task.wait(0.15)
+	-- Reparent so NPC moves with us; then step teleport 10 until Z = -30, then MoveTo to Z = -10
 	if nearest.Parent ~= character then
 		nearest.Parent = character
 	end
@@ -648,7 +642,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 6"
+objectsBtn.Text = "Spawned Bubus 7"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
