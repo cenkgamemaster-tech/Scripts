@@ -235,7 +235,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 1"
+objectsBtn.Text = "Spawned Bubus 2"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -401,21 +401,10 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
-		local function nameMatchesAny(nameLower)
-			for _, filter in ipairs(OBJECTS_LIST_NAME_FILTERS) do
-				if string.find(nameLower, string.lower(filter), 1, true) then
-					return true
-				end
-			end
-			return false
-		end
+		-- No filter: list all workspace descendants so you can investigate
 		local objects = workspace:GetDescendants()
-		local order = 0
-		for _, obj in ipairs(objects) do
-			if nameMatchesAny(string.lower(obj.Name)) then
-				order = order + 1
-				addRow(obj.Name, obj.ClassName, order)
-			end
+		for i, obj in ipairs(objects) do
+			addRow(obj.Name, obj.ClassName, i)
 		end
 	end
 
