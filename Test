@@ -336,9 +336,9 @@ local function takeNearestBubuAndTeleportOutside()
 			nearest = model
 		end
 	end
-	-- Alternate: hold NPC, then teleport step (Z by -10); repeat until Z = -31, then MoveTo to -10.
-	local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
-	local z = root.Position.Z
+	-- Mark starting point (at top NPC); step teleport only Z (step -10) until -31, then MoveTo to -10.
+	local startPos = root.Position
+	local x, y, z = startPos.X, startPos.Y, startPos.Z
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		local r = char and char:FindFirstChild("HumanoidRootPart")
@@ -350,7 +350,7 @@ local function takeNearestBubuAndTeleportOutside()
 			r.CFrame = CFrame.new(x, y, z)
 			task.wait(0.15)
 		end
-		-- At -31: hold NPC again, then MoveTo to -10
+		-- At -31: hold NPC again, then MoveTo to (same X, same Y, -10)
 		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
@@ -575,7 +575,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 4"
+objectsBtn.Text = "Spawned Bubus 5"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
