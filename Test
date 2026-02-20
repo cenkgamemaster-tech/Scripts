@@ -413,8 +413,7 @@ local function takeNearestBubuAndTeleportOutside()
 			nearest = model
 		end
 	end
-	if not nearest then return end
-	-- (Hold E is done in goToTopThenTakeAndTeleportOutside right when we arrive at top Bubu.)
+	-- After hold E the Bubu may be picked up and no longer in field list (nearest can be nil). Still move to outside.
 	-- Teleport to first exit, then MoveTo until Z = -10
 	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
 	task.spawn(function()
@@ -424,7 +423,7 @@ local function takeNearestBubuAndTeleportOutside()
 		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
-		releasePickupState(nearest)
+		if nearest then releasePickupState(nearest) end
 	end)
 end
 
@@ -645,7 +644,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 1"
+objectsBtn.Text = "Spawned Bubus 2"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
