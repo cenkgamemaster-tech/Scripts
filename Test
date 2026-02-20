@@ -112,11 +112,13 @@ local function getBubuModels()
 			if parentMatch then
 				local mutation = obj:GetAttribute("Mutation")
 				if mutation ~= nil then
-					if mutation ~= "Normal" then
-						table.insert(collected, obj)
-					else
-						local rarity = getCharacterInfoLabelTopLevel(obj, "Rarity")
-						if rarity == "Secret" or rarity == "Exclusive" then
+					local rarity = getCharacterInfoLabelTopLevel(obj, "Rarity")
+					local includeByMutation = (mutation ~= "Normal")
+						or (mutation == "Normal" and (rarity == "Secret" or rarity == "Exclusive"))
+					if includeByMutation then
+						local excludeGoldDiamondLowRarity = (mutation == "Gold" or mutation == "Diamond")
+							and (rarity == "Common" or rarity == "Uncommon" or rarity == "Rare")
+						if not excludeGoldDiamondLowRarity then
 							table.insert(collected, obj)
 						end
 					end
@@ -576,7 +578,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 1"
+objectsBtn.Text = "Spawned Bubus"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
