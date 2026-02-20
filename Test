@@ -433,9 +433,9 @@ local function openObjectsWindow()
 		add("Children: " .. #model:GetChildren())
 		add("Descendants: " .. #model:GetDescendants())
 
-		-- Attributes (metadata: gold, mutation type, etc.)
+		-- All attributes on the model (every key; check for Rarity, NPCId, Mutation, etc.)
 		add("")
-		add("=== Attributes (metadata) ===")
+		add("=== All attributes (on this Model) ===")
 		local attrs = model:GetAttributes()
 		if next(attrs) then
 			local keys = {}
@@ -444,9 +444,33 @@ local function openObjectsWindow()
 			for _, k in ipairs(keys) do
 				local v = attrs[k]
 				local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
-				add(k .. " = " .. vStr)
+				add("  " .. k .. " = " .. vStr)
 			end
+			add("(total " .. #keys .. " attribute(s) on model)")
 		else
+			add("(none)")
+		end
+
+		-- All attributes on every descendant (so you see Rarity etc. if on a child)
+		add("")
+		add("=== All attributes (on descendants) ===")
+		local anyDescAttr = false
+		for _, desc in ipairs(model:GetDescendants()) do
+			local dAttrs = desc:GetAttributes()
+			if next(dAttrs) then
+				anyDescAttr = true
+				add("  [" .. desc.Name .. " (" .. desc.ClassName .. ")]")
+				local keys = {}
+				for k in pairs(dAttrs) do table.insert(keys, k) end
+				table.sort(keys)
+				for _, k in ipairs(keys) do
+					local v = dAttrs[k]
+					local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
+					add("    " .. k .. " = " .. vStr)
+				end
+			end
+		end
+		if not anyDescAttr then
 			add("(none)")
 		end
 
@@ -475,11 +499,6 @@ local function openObjectsWindow()
 			add("WalkSpeed: " .. tostring(humanoid.WalkSpeed))
 			add("JumpPower: " .. tostring(humanoid.JumpPower or humanoid.JumpHeight))
 			add("RigType: " .. tostring(humanoid.RigType))
-			-- Humanoid attributes (e.g. custom NPC data)
-			local hAttrs = humanoid:GetAttributes()
-			if next(hAttrs) then
-				for k, v in pairs(hAttrs) do add("Humanoid." .. k .. " = " .. tostring(v)) end
-			end
 		else
 			add("(none)")
 		end
@@ -518,6 +537,16 @@ local function openObjectsWindow()
 		detailsLabel.Text = text
 	end
 
+	-- Display label for list: "NPCId - Mutation" from attributes, else model name
+	local function getNPCDisplayLabel(model)
+		local npcId = model:GetAttribute("NPCId")
+		local mutation = model:GetAttribute("Mutation")
+		if npcId ~= nil or mutation ~= nil then
+			return tostring(npcId or "?") .. " - " .. tostring(mutation or "?")
+		end
+		return model.Name
+	end
+
 	local function addRow(model, layoutOrder)
 		local row = Instance.new("TextButton")
 		row.Name = model.Name
@@ -535,7 +564,7 @@ local function openObjectsWindow()
 		lbl.Size = UDim2.new(1, -8, 1, -4)
 		lbl.Position = UDim2.new(0, 6, 0, 2)
 		lbl.BackgroundTransparency = 1
-		lbl.Text = model.Name .. "  [Model]"
+		lbl.Text = getNPCDisplayLabel(model)
 		lbl.TextColor3 = Color3.fromRGB(200, 220, 255)
 		lbl.TextSize = 11
 		lbl.Font = Enum.Font.Gotham
@@ -555,18 +584,21 @@ local function openObjectsWindow()
 			end
 		end
 		setDetailsText("Click a model to see details.")
-		-- List only Model instances under OBJECTS_LIST_PARENT_FILTER (path prefix; include all starting with it)
+		-- List only Model instances under path filter and with Mutation ~= "Normal"
 		local objects = workspace:GetDescendants()
 		local order = 0
+		local prefix = OBJECTS_LIST_PARENT_FILTER
 		for _, obj in ipairs(objects) do
 			if obj.ClassName == "Model" then
 				local fullName = obj:GetFullName()
-				local prefix = OBJECTS_LIST_PARENT_FILTER
 				local parentMatch = not prefix or prefix == ""
 					or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
 				if parentMatch then
-					order = order + 1
-					addRow(obj, order)
+					local mutation = obj:GetAttribute("Mutation")
+					if mutation ~= nil and mutation ~= "Normal" then
+						order = order + 1
+						addRow(obj, order)
+					end
 				end
 			end
 		end
