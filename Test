@@ -35,7 +35,7 @@ local DEFAULT_WALK_SPEED = 16
 -- Objects list: only show instances whose Name contains any of these (case-insensitive)
 local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
 -- Objects list: only show models under this parent (use exact FullName; set to nil to skip parent filter)
-local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.Guards"
+local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field"
 
 local workspace = game:GetService("Workspace")
 
@@ -45,6 +45,7 @@ main.Size = UDim2.new(0, 220, 0, 168)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
+main.Active = true  -- allow dragging from window background
 main.Parent = screen
 
 local corner = Instance.new("UICorner")
@@ -78,6 +79,7 @@ bar.Size = UDim2.new(1, 0, 0, 4)
 bar.Position = UDim2.new(0, 0, 0, 28)
 bar.BackgroundColor3 = Color3.fromRGB(90, 170, 255)
 bar.BorderSizePixel = 0
+bar.Active = true  -- drag handle
 bar.Parent = main
 
 local barCorner = Instance.new("UICorner")
@@ -127,9 +129,11 @@ local function startDrag(inp)
 	end
 end
 
--- Connect drag to both top frame and title (title covers most of the bar, so we need both)
+-- Connect drag to top bar, title, bar, and main window background
 top.InputBegan:Connect(startDrag)
 title.InputBegan:Connect(startDrag)
+bar.InputBegan:Connect(startDrag)
+main.InputBegan:Connect(startDrag)
 
 inputChangedConnection = UserInputService.InputChanged:Connect(function(inp)
 	if dragInput and inp == dragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
@@ -237,7 +241,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 4"
+objectsBtn.Text = "Spawned Bubus 5"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -266,6 +270,7 @@ local function openObjectsWindow()
 	objMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	objMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	objMain.BorderSizePixel = 0
+	objMain.Active = true  -- allow dragging from window background
 	objMain.Parent = objScreen
 
 	local objCorner = Instance.new("UICorner")
@@ -324,6 +329,7 @@ local function openObjectsWindow()
 	end
 	objTop.InputBegan:Connect(onObjDragStart)
 	objTitle.InputBegan:Connect(onObjDragStart)
+	objMain.InputBegan:Connect(onObjDragStart)
 	objInputChangedConn = UserInputService.InputChanged:Connect(function(inp)
 		if objDragInput and inp == objDragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
 			local delta = inp.Position - objDragStart
