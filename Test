@@ -53,6 +53,56 @@ local TAKE_REMOTE_CANDIDATES = {
 
 local workspace = game:GetService("Workspace")
 
+-- Spy: log all RemoteEvent/RemoteFunction calls (hold E and watch Output to see which events fire)
+local remoteSpyActive = false
+local remoteSpyHooked = {}
+
+local function serializeArg(v)
+	if v == nil then return "nil" end
+	local t = type(v)
+	if t == "string" then return string.format("%q", v) end
+	if t == "number" or t == "boolean" then return tostring(v) end
+	if t == "userdata" and (v.ClassName or v.GetFullName) then
+		local ok, name = pcall(function() return v:GetFullName() end)
+		return ok and name or (v.Name or v.ClassName or tostring(v))
+	end
+	return tostring(v)
+end
+
+local function hookRemote(remote, isInvoke)
+	local method = isInvoke and "InvokeServer" or "FireServer"
+	if remoteSpyHooked[remote] then return end
+	local original = remote[method]
+	remote[method] = function(...)
+		local args = { ... }
+		local parts = {}
+		for i = 1, #args do parts[i] = serializeArg(args[i]) end
+		print(string.format("[Spy] %s %s(%s)", remote:GetFullName(), method, table.concat(parts, ", ")))
+		return original(remote, table.unpack(args))
+	end
+	remoteSpyHooked[remote] = true
+end
+
+local function startRemoteSpy(durationSeconds)
+	if remoteSpyActive then
+		print("[Spy] Already active")
+		return
+	end
+	remoteSpyActive = true
+	for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
+		if child:IsA("RemoteEvent") then hookRemote(child, false) end
+		if child:IsA("RemoteFunction") then hookRemote(child, true) end
+	end
+	local dur = type(durationSeconds) == "number" and durationSeconds or 0
+	print("[Spy] Logging all remote calls for " .. tostring(dur) .. "s. Hold E near a Bubu and watch Output.")
+	if dur > 0 then
+		task.delay(dur, function()
+			remoteSpyActive = false
+			print("[Spy] Duration ended. Hooks stay active until game restarts.")
+		end)
+	end
+end
+
 -- Get all Bubu models (same filter as list: path + Mutation ~= Normal)
 local function getBubuModels()
 	local collected = {}
@@ -311,7 +361,7 @@ end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 198)
+main.Size = UDim2.new(0, 220, 0, 234)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -510,7 +560,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 9"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -537,11 +587,28 @@ local collectCashBtnCorner = Instance.new("UICorner")
 collectCashBtnCorner.CornerRadius = UDim.new(0, 6)
 collectCashBtnCorner.Parent = collectCashBtn
 
+-- Spy remotes button (log all remote calls for 30s – hold E and watch Output)
+local spyRemotesBtn = Instance.new("TextButton")
+spyRemotesBtn.Name = "SpyRemotes"
+spyRemotesBtn.Size = UDim2.new(1, -16, 0, 28)
+spyRemotesBtn.Position = UDim2.new(0, 8, 0, 174)
+spyRemotesBtn.BackgroundColor3 = Color3.fromRGB(70, 50, 90)
+spyRemotesBtn.BorderSizePixel = 0
+spyRemotesBtn.Text = "Spy E (30s)"
+spyRemotesBtn.TextColor3 = Color3.fromRGB(220, 200, 255)
+spyRemotesBtn.TextSize = 12
+spyRemotesBtn.Font = Enum.Font.Gotham
+spyRemotesBtn.Parent = main
+
+local spyRemotesBtnCorner = Instance.new("UICorner")
+spyRemotesBtnCorner.CornerRadius = UDim.new(0, 6)
+spyRemotesBtnCorner.Parent = spyRemotesBtn
+
 -- Player position display
 local positionLabel = Instance.new("TextLabel")
 positionLabel.Name = "Position"
 positionLabel.Size = UDim2.new(1, -16, 0, 20)
-positionLabel.Position = UDim2.new(0, 8, 0, 174)
+positionLabel.Position = UDim2.new(0, 8, 0, 208)
 positionLabel.BackgroundTransparency = 1
 positionLabel.Text = "Position: --, --, --"
 positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -897,6 +964,10 @@ collectCashBtn.MouseButton1Click:Connect(function()
 	if not ok then
 		warn("[CollectAllCash] Error:", err)
 	end
+end)
+
+spyRemotesBtn.MouseButton1Click:Connect(function()
+	startRemoteSpy(30)
 end)
 
 -- Current speed value (0–1)
