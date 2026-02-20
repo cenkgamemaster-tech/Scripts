@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 4"
+objectsBtn.Text = "Spawned Bubus 5"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -504,14 +504,38 @@ local function openObjectsWindow()
 	-- Initial canvas size for placeholder text
 	task.defer(updateDetailsCanvasSize)
 
-	-- Display label for list: "NPCId - Mutation" from attributes, else model name
-	local function getNPCDisplayLabel(model)
-		local npcId = model:GetAttribute("NPCId")
-		local mutation = model:GetAttribute("Mutation")
-		if npcId ~= nil or mutation ~= nil then
-			return tostring(npcId or "?") .. " - " .. tostring(mutation or "?")
+	-- Get text from CharacterInfo BillboardGui label by name (e.g. "Rarity", "Income", "CharTime")
+	local function getCharacterInfoLabel(model, labelName)
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("BillboardGui") and desc.Name == "CharacterInfo" then
+				local lbl = desc:FindFirstChild(labelName, true)
+				if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text then
+					return lbl.Text
+				end
+				break
+			end
 		end
-		return model.Name
+		local charInfo = model:FindFirstChild("CharacterInfo", true)
+		if charInfo then
+			local gui = charInfo:IsA("BillboardGui") and charInfo or charInfo:FindFirstChildOfClass("BillboardGui")
+			if gui then
+				local lbl = gui:FindFirstChild(labelName, true)
+				if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text then
+					return lbl.Text
+				end
+			end
+		end
+		return nil
+	end
+
+	-- List row: NPCId - Mutation - Rarity - Income - CharTime (no click needed to see info)
+	local function getNPCDisplayLabel(model)
+		local npcId = tostring(model:GetAttribute("NPCId") or "?")
+		local mutation = tostring(model:GetAttribute("Mutation") or "?")
+		local rarity = getCharacterInfoLabel(model, "Rarity") or "?"
+		local income = getCharacterInfoLabel(model, "Income") or "?"
+		local charTime = getCharacterInfoLabel(model, "CharTime") or "?"
+		return npcId .. " - " .. mutation .. " - " .. rarity .. " - " .. income .. " - " .. charTime
 	end
 
 	local function addRow(model, layoutOrder)
@@ -574,6 +598,15 @@ local function openObjectsWindow()
 	refreshList()
 
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
+
+	-- Auto-refresh list every 5 seconds while window is open
+	task.spawn(function()
+		while objScreen.Parent do
+			task.wait(5)
+			if not objScreen.Parent then break end
+			refreshList()
+		end
+	end)
 end
 
 objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
