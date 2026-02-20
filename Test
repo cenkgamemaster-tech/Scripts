@@ -27,9 +27,14 @@ screen.Name = "PlayerNameTest"
 screen.ResetOnSpawn = false
 screen.Parent = PlayerGui
 
+-- Speed slider range (Roblox default WalkSpeed is 16)
+local MIN_WALK_SPEED = 8
+local MAX_WALK_SPEED = 48
+local DEFAULT_WALK_SPEED = 16
+
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 90)
+main.Size = UDim2.new(0, 220, 0, 138)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -136,8 +141,8 @@ end)
 
 local nameLabel = Instance.new("TextLabel")
 nameLabel.Name = "PlayerName"
-nameLabel.Size = UDim2.new(1, -16, 0, 28)
-nameLabel.Position = UDim2.new(0, 8, 0, 44)
+nameLabel.Size = UDim2.new(1, -16, 0, 24)
+nameLabel.Position = UDim2.new(0, 8, 0, 36)
 nameLabel.BackgroundTransparency = 1
 nameLabel.Text = getPlayerName()
 nameLabel.TextColor3 = Color3.new(1, 1, 1)
@@ -151,5 +156,160 @@ nameLabel.Parent = main
 LocalPlayer:GetPropertyChangedSignal("Name"):Connect(function()
 	nameLabel.Text = getPlayerName()
 end)
+
+-- Speed slider
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Name = "SpeedLabel"
+speedLabel.Size = UDim2.new(0, 60, 0, 20)
+speedLabel.Position = UDim2.new(0, 8, 0, 64)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Speed"
+speedLabel.TextColor3 = Color3.fromRGB(200, 230, 255)
+speedLabel.TextSize = 12
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = main
+
+local speedValueLabel = Instance.new("TextLabel")
+speedValueLabel.Name = "SpeedValue"
+speedValueLabel.Size = UDim2.new(0, 36, 0, 20)
+speedValueLabel.Position = UDim2.new(1, -44, 0, 64)
+speedValueLabel.BackgroundTransparency = 1
+speedValueLabel.Text = tostring(DEFAULT_WALK_SPEED)
+speedValueLabel.TextColor3 = Color3.fromRGB(200, 230, 255)
+speedValueLabel.TextSize = 12
+speedValueLabel.Font = Enum.Font.Gotham
+speedValueLabel.TextXAlignment = Enum.TextXAlignment.Right
+speedValueLabel.Parent = main
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Name = "SliderTrack"
+sliderTrack.Size = UDim2.new(1, -16, 0, 12)
+sliderTrack.Position = UDim2.new(0, 8, 0, 88)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Active = true
+sliderTrack.Parent = main
+
+local sliderTrackCorner = Instance.new("UICorner")
+sliderTrackCorner.CornerRadius = UDim.new(0, 6)
+sliderTrackCorner.Parent = sliderTrack
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Name = "Fill"
+sliderFill.Size = UDim2.new(0, 0, 1, 0)
+sliderFill.Position = UDim2.new(0, 0, 0, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(90, 170, 255)
+sliderFill.BorderSizePixel = 0
+sliderFill.ZIndex = 0
+sliderFill.Parent = sliderTrack
+
+local sliderFillCorner = Instance.new("UICorner")
+sliderFillCorner.CornerRadius = UDim.new(0, 6)
+sliderFillCorner.Parent = sliderFill
+
+local sliderThumb = Instance.new("Frame")
+sliderThumb.Name = "Thumb"
+sliderThumb.Size = UDim2.new(0, 14, 0, 14)
+sliderThumb.Position = UDim2.new(0, -7, 0.5, -7)
+sliderThumb.AnchorPoint = Vector2.new(0.5, 0.5)
+sliderThumb.BackgroundColor3 = Color3.fromRGB(200, 230, 255)
+sliderThumb.BorderSizePixel = 0
+sliderThumb.ZIndex = 1
+sliderThumb.Active = true
+sliderThumb.Parent = sliderTrack
+
+local sliderThumbCorner = Instance.new("UICorner")
+sliderThumbCorner.CornerRadius = UDim.new(1, 0)
+sliderThumbCorner.Parent = sliderThumb
+
+-- Current speed value (0–1)
+local speedNorm = (DEFAULT_WALK_SPEED - MIN_WALK_SPEED) / (MAX_WALK_SPEED - MIN_WALK_SPEED)
+
+local function speedFromNorm(norm)
+	norm = math.clamp(norm, 0, 1)
+	return math.floor(MIN_WALK_SPEED + (MAX_WALK_SPEED - MIN_WALK_SPEED) * norm + 0.5)
+end
+
+local function normFromSpeed(speed)
+	return (math.clamp(speed, MIN_WALK_SPEED, MAX_WALK_SPEED) - MIN_WALK_SPEED) / (MAX_WALK_SPEED - MIN_WALK_SPEED)
+end
+
+local function applySpeedToCharacter(speed)
+	local character = LocalPlayer.Character
+	if character then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.WalkSpeed = speed
+		end
+	end
+end
+
+local function setSpeedFromNorm(norm)
+	norm = math.clamp(norm, 0, 1)
+	speedNorm = norm
+	local speed = speedFromNorm(norm)
+	speedValueLabel.Text = tostring(speed)
+	sliderFill.Size = UDim2.new(norm, 0, 1, 0)
+	sliderThumb.Position = UDim2.new(norm, -7, 0.5, -7)
+	applySpeedToCharacter(speed)
+end
+
+local function updateSliderFromMouse(x)
+	local trackAbs = sliderTrack.AbsolutePosition.X
+	local trackSize = sliderTrack.AbsoluteSize.X
+	local rel = (x - trackAbs) / math.max(trackSize, 1)
+	setSpeedFromNorm(rel)
+end
+
+-- Slider drag state
+local sliderDragging = false
+local sliderInputConnection
+
+local function beginSliderDrag()
+	sliderDragging = true
+	sliderInputConnection = UserInputService.InputChanged:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseMovement then
+			updateSliderFromMouse(inp.Position.X)
+		end
+	end)
+	local endConn
+	endConn = UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			sliderDragging = false
+			if sliderInputConnection then sliderInputConnection:Disconnect() end
+			endConn:Disconnect()
+		end
+	end)
+end
+
+sliderTrack.InputBegan:Connect(function(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+		updateSliderFromMouse(inp.Position.X)
+		beginSliderDrag()
+	end
+end)
+
+sliderThumb.InputBegan:Connect(function(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+		beginSliderDrag()
+	end
+end)
+
+-- Initialize slider position and apply default speed
+setSpeedFromNorm(speedNorm)
+
+-- Apply speed when character spawns/respawns
+LocalPlayer.CharacterAdded:Connect(function(character)
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if humanoid then
+		humanoid.WalkSpeed = speedFromNorm(speedNorm)
+	end
+end)
+
+-- If character already exists, set WalkSpeed once
+if LocalPlayer.Character then
+	applySpeedToCharacter(speedFromNorm(speedNorm))
+end
 
 print("Player name:", getPlayerName())
