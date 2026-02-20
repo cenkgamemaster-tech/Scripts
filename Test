@@ -157,7 +157,10 @@ end
 -- Try to take the Bubu via the game's remote (FireServer/InvokeServer). Returns true if we called a remote.
 local function tryTakeViaRemote(nearest)
 	local remote = findTakeRemote()
-	if not remote then return false end
+	if not remote then
+		print("[Take] No take remote found. Set TAKE_REMOTE_PATH at top of script if you know the path.")
+		return false
+	end
 	local id = nearest:GetAttribute("NPCId") or nearest:GetAttribute("NpcId") or nearest.Name
 	-- Try common argument patterns (model, name, id)
 	local argsList = {
@@ -165,6 +168,7 @@ local function tryTakeViaRemote(nearest)
 		{ nearest.Name },
 		{ id },
 		{ nearest, LocalPlayer },
+		{ id, nearest },
 	}
 	for _, args in ipairs(argsList) do
 		local ok, err = pcall(function()
@@ -174,9 +178,30 @@ local function tryTakeViaRemote(nearest)
 				remote:InvokeServer(table.unpack(args))
 			end
 		end)
-		if ok then return true end
+		if ok then
+			print("[Take] Called remote:", remote:GetFullName(), "with args count:", #args)
+			return true
+		end
 	end
+	print("[Take] Remote", remote:GetFullName(), "failed all argument patterns. Try setting TAKE_REMOTE_PATH and correct args.")
 	return false
+end
+
+-- Print all RemoteEvents/RemoteFunctions under ReplicatedStorage to Output (use "List remotes" button or call once).
+local function listAllRemotes()
+	local list = {}
+	for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
+		if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+			table.insert(list, child:GetFullName())
+		end
+	end
+	table.sort(list)
+	print("---- ReplicatedStorage remotes (set TAKE_REMOTE_PATH to one of these if you find the take/capture one) ----")
+	for _, path in ipairs(list) do
+		print("  ", path)
+	end
+	print("---- Total:", #list, "remotes ----")
+	return list
 end
 
 -- Take nearest Bubu and teleport (player + Bubu) to outside the field. Uses game remote if found, else reparent.
@@ -203,11 +228,12 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Prefer game's take remote so server registers the take; fallback to reparent
-	local usedRemote = tryTakeViaRemote(nearest)
-	if not usedRemote then
-		nearest.Parent = character
-	end
+	-- Try game remote first; always reparent so Bubu comes with us (server may or may not accept remote)
+	tryTakeViaRemote(nearest)
+	-- Give server a moment to process if we fired a remote
+	task.wait(0.2)
+	-- Take Bubu with us: reparent then teleport (ensures NPC moves with character)
+	nearest.Parent = character
 	root.CFrame = CFrame.new(OUTSIDE_FIELD_POSITION)
 end
 
@@ -426,7 +452,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 6"
+objectsBtn.Text = "Spawned Bubus 7"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -563,11 +589,23 @@ local function openObjectsWindow()
 		objScreen:Destroy()
 	end)
 
+	-- List remotes button (prints to Output so you can set TAKE_REMOTE_PATH)
+	local objRemotesBtn = Instance.new("TextButton")
+	objRemotesBtn.Name = "Remotes"
+	objRemotesBtn.Size = UDim2.new(0, 58, 0, 28)
+	objRemotesBtn.Position = UDim2.new(1, -250, 0, 0)
+	objRemotesBtn.BackgroundTransparency = 1
+	objRemotesBtn.Text = "Remotes"
+	objRemotesBtn.TextColor3 = Color3.fromRGB(180, 200, 255)
+	objRemotesBtn.TextSize = 11
+	objRemotesBtn.Font = Enum.Font.Gotham
+	objRemotesBtn.Parent = objTop
+
 	-- Refresh button (manual refresh only)
 	local objRefreshBtn = Instance.new("TextButton")
 	objRefreshBtn.Name = "Refresh"
 	objRefreshBtn.Size = UDim2.new(0, 56, 0, 28)
-	objRefreshBtn.Position = UDim2.new(1, -84, 0, 0)
+	objRefreshBtn.Position = UDim2.new(1, -168, 0, 0)
 	objRefreshBtn.BackgroundTransparency = 1
 	objRefreshBtn.Text = "Refresh"
 	objRefreshBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
@@ -579,7 +617,7 @@ local function openObjectsWindow()
 	local objTeleportBtn = Instance.new("TextButton")
 	objTeleportBtn.Name = "Teleport"
 	objTeleportBtn.Size = UDim2.new(0, 70, 0, 28)
-	objTeleportBtn.Position = UDim2.new(1, -148, 0, 0)
+	objTeleportBtn.Position = UDim2.new(1, -106, 0, 0)
 	objTeleportBtn.BackgroundTransparency = 1
 	objTeleportBtn.Text = "Go to top"
 	objTeleportBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
@@ -744,6 +782,9 @@ local function openObjectsWindow()
 
 	refreshList()
 
+	objRemotesBtn.MouseButton1Click:Connect(function()
+		listAllRemotes()
+	end)
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
 	-- Go to top: script handles teleport to top Bubu + 2 sec wait + take Bubu + teleport outside (no E key)
 	objTeleportBtn.MouseButton1Click:Connect(function()
