@@ -111,21 +111,15 @@ closeBtn.Font = Enum.Font.GothamBold
 closeBtn.Parent = top
 
 -- Drag state and connection (so we can disconnect when UI closes)
-local dragInput, dragStart, startPos
-local inputChangedConnection
+local mainDragging = false
+local dragStart, startPos
+local inputChangedConnection, inputEndedConnection
 
 local function startDrag(inp)
 	if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-		dragInput = inp
+		mainDragging = true
 		dragStart = inp.Position
 		startPos = main.Position
-		local conn
-		conn = inp.Changed:Connect(function()
-			if inp.UserInputState == Enum.UserInputState.End then
-				dragInput = nil
-				if conn then conn:Disconnect() end
-			end
-		end)
 	end
 end
 
@@ -136,17 +130,21 @@ bar.InputBegan:Connect(startDrag)
 main.InputBegan:Connect(startDrag)
 
 inputChangedConnection = UserInputService.InputChanged:Connect(function(inp)
-	if dragInput and inp == dragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
+	if mainDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
 		local delta = inp.Position - dragStart
 		main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 	end
 end)
 
-closeBtn.MouseButton1Click:Connect(function()
-	if inputChangedConnection then
-		inputChangedConnection:Disconnect()
-		inputChangedConnection = nil
+inputEndedConnection = UserInputService.InputEnded:Connect(function(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+		mainDragging = false
 	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	if inputChangedConnection then inputChangedConnection:Disconnect() inputChangedConnection = nil end
+	if inputEndedConnection then inputEndedConnection:Disconnect() inputEndedConnection = nil end
 	screen:Destroy()
 end)
 
@@ -241,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 9"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -315,30 +313,34 @@ local function openObjectsWindow()
 	objCloseBtn.Parent = objTop
 
 	-- Drag for objects window
-	local objDragInput, objDragStart, objStartPos
-	local objInputChangedConn
+	local objDragging = false
+	local objDragStart, objStartPos
+	local objInputChangedConn, objInputEndedConn
 	local function onObjDragStart(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-			objDragInput = inp
+			objDragging = true
 			objDragStart = inp.Position
 			objStartPos = objMain.Position
-			inp.Changed:Connect(function()
-				if inp.UserInputState == Enum.UserInputState.End then objDragInput = nil end
-			end)
 		end
 	end
 	objTop.InputBegan:Connect(onObjDragStart)
 	objTitle.InputBegan:Connect(onObjDragStart)
 	objMain.InputBegan:Connect(onObjDragStart)
 	objInputChangedConn = UserInputService.InputChanged:Connect(function(inp)
-		if objDragInput and inp == objDragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
+		if objDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
 			local delta = inp.Position - objDragStart
 			objMain.Position = UDim2.new(objStartPos.X.Scale, objStartPos.X.Offset + delta.X, objStartPos.Y.Scale, objStartPos.Y.Offset + delta.Y)
+		end
+	end)
+	objInputEndedConn = UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			objDragging = false
 		end
 	end)
 
 	objCloseBtn.MouseButton1Click:Connect(function()
 		if objInputChangedConn then objInputChangedConn:Disconnect() end
+		if objInputEndedConn then objInputEndedConn:Disconnect() end
 		objScreen:Destroy()
 	end)
 
@@ -395,16 +397,18 @@ local function openObjectsWindow()
 	detailsScroll.Position = UDim2.new(0, 6, 0, 6)
 	detailsScroll.BackgroundTransparency = 1
 	detailsScroll.BorderSizePixel = 0
-	detailsScroll.ScrollBarThickness = 4
+	detailsScroll.ScrollBarThickness = 8
 	detailsScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	detailsScroll.ScrollBarImageTransparency = 0
 	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	detailsScroll.ScrollingEnabled = true
 	detailsScroll.Parent = detailsFrame
 
 	local detailsLabel = Instance.new("TextLabel")
 	detailsLabel.Name = "DetailsLabel"
-	detailsLabel.Size = UDim2.new(1, -8, 0, 0)
-	detailsLabel.Position = UDim2.new(0, 0, 0, 0)
+	detailsLabel.Size = UDim2.new(1, -16, 0, 0)
+	detailsLabel.Position = UDim2.new(0, 4, 0, 4)
 	detailsLabel.AutomaticSize = Enum.AutomaticSize.Y
 	detailsLabel.BackgroundTransparency = 1
 	detailsLabel.Text = "Click a model to see details."
@@ -579,6 +583,29 @@ local function openObjectsWindow()
 		for _, child in ipairs(model:GetChildren()) do
 			add("  " .. child.Name .. " [" .. child.ClassName .. "]")
 		end
+
+		-- All descendants and their attributes (full tree)
+		add("")
+		add("=== All descendants and their attributes ===")
+		local descendants = model:GetDescendants()
+		for _, d in ipairs(descendants) do
+			add("  " .. d.Name .. " [" .. d.ClassName .. "]")
+			add("    FullName: " .. d:GetFullName())
+			local dAttrs = d:GetAttributes()
+			if next(dAttrs) then
+				local keys = {}
+				for k in pairs(dAttrs) do table.insert(keys, k) end
+				table.sort(keys)
+				for _, k in ipairs(keys) do
+					local v = dAttrs[k]
+					local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
+					add("    " .. k .. " = " .. vStr)
+				end
+			else
+				add("    (no attributes)")
+			end
+		end
+		add("(total " .. #descendants .. " descendant(s))")
 
 		return table.concat(lines, "\n")
 	end
