@@ -51,6 +51,8 @@ local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) and distance (studs) to consider "arrived"
 local WALK_TO_OUTSIDE_TIMEOUT = 20
 local WALK_ARRIVED_DISTANCE = 4
+-- Simulate hold E for pickup: duration in seconds (then we MoveTo to Z)
+local HOLD_E_DURATION = 2
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
 -- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
@@ -60,6 +62,20 @@ local TAKE_REMOTE_CANDIDATES = {
 }
 
 local workspace = game:GetService("Workspace")
+
+-- Simulate press and hold E for a duration (for pickup). Uses VirtualInputManager if available.
+local function holdEKey(durationSeconds)
+	durationSeconds = durationSeconds or HOLD_E_DURATION
+	local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
+	if ok and vim and vim.SendKeyEvent then
+		vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+		task.wait(durationSeconds)
+		vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		return true
+	end
+	task.wait(durationSeconds)
+	return false
+end
 
 -- Spy: log all RemoteEvent/RemoteFunction calls (hold E and watch Output to see which events fire)
 local remoteSpyActive = false
@@ -398,34 +414,16 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Reparent first so Bubu is ours (game remote often doesn't work; this is the only reliable way client-side)
-	pcall(function() nearest.Parent = character end)
-	tryTakeViaRemote(nearest)
-	task.wait(0.1)
-	pcall(function() nearest.Parent = character end)
-	-- Teleport to first exit; step teleport (Z only) until Z = -30; then MoveTo to (x, y, -10)
+	-- Teleport to first exit; then simulate press and hold E, then MoveTo until we reach Z = -10 (no step teleports)
 	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
 	task.spawn(function()
 		local char = LocalPlayer.Character
-		local r = char and char:FindFirstChild("HumanoidRootPart")
-		if not r then releasePickupState(nearest) return end
+		if not char then return end
 		task.wait(0.2)
+		-- Simulate press and hold E to pick up NPC (game may require real E input)
+		holdEKey(HOLD_E_DURATION)
+		-- MoveTo to (same X, same Y, -10) – only change Z until we arrive
 		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
-		local z = TELEPORT_FIRST_EXIT.Z
-		-- Re-parent before each move so Bubu stays with us (server may keep reverting)
-		local function attachBubu()
-			local c = LocalPlayer.Character
-			if nearest and nearest.Parent and c then pcall(function() nearest.Parent = c end) end
-		end
-		-- Step teleport: change only Z until Z = -30 (do not change X and Y)
-		while z < TELEPORT_BACK_Z_END do
-			attachBubu()
-			z = math.min(z + TELEPORT_BACK_Z_STEP, TELEPORT_BACK_Z_END)
-			r.CFrame = CFrame.new(x, y, z)
-			task.wait(0.1)
-		end
-		attachBubu()
-		-- From (x, y, -30) MoveTo to (x, y, -10)
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		releasePickupState(nearest)
@@ -647,7 +645,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 8"
+objectsBtn.Text = "Spawned Bubus 9"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
