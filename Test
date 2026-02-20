@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 7"
+objectsBtn.Text = "Spawned Bubus 8"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -381,20 +381,15 @@ local function openObjectsWindow()
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
 
-	-- Parse Income string (e.g. "$12.63k/s", "$1.5M/s") to number for sorting. Higher = rarest.
-	local function parseIncomeValue(incomeStr)
-		if not incomeStr or incomeStr == "" then return 0 end
-		local s = tostring(incomeStr):gsub("%$", ""):gsub("/s", ""):gsub(",", "")
-		local numStr = s:match("^([%d%.]+)")
-		if not numStr then return 0 end
-		local num = tonumber(numStr)
-		if not num then return 0 end
-		if s:match("M") or s:lower():match("m") then
-			num = num * 1000000
-		elseif s:match("k") or s:lower():match("k") then
-			num = num * 1000
-		end
-		return num
+	-- Rarity sort order: rarest (1) to most common (9). Lower number = higher in list.
+	local RARITY_ORDER = {
+		Exclusive = 1, Secret = 2, God = 3, Mythic = 4, Legendary = 5,
+		Epic = 6, Rare = 7, Uncommon = 8, Common = 9
+	}
+	local function raritySortKey(rarityStr)
+		if not rarityStr or rarityStr == "" then return 99 end
+		local key = RARITY_ORDER[rarityStr]
+		return key or 99
 	end
 
 	-- Get text from CharacterInfo BillboardGui label by name (e.g. "Rarity", "Income", "CharTime")
@@ -480,11 +475,11 @@ local function openObjectsWindow()
 				end
 			end
 		end
-		-- Sort by Income: highest income first (most valuable / rarest at top)
+		-- Sort by Rarity: Exclusive (rarest) first, then Secret, God, Mythic, Legendary, Epic, Rare, Uncommon, Common last
 		table.sort(collected, function(a, b)
-			local incomeA = parseIncomeValue(getCharacterInfoLabel(a, "Income"))
-			local incomeB = parseIncomeValue(getCharacterInfoLabel(b, "Income"))
-			return incomeA > incomeB
+			local rarityA = getCharacterInfoLabel(a, "Rarity")
+			local rarityB = getCharacterInfoLabel(b, "Rarity")
+			return raritySortKey(rarityA) < raritySortKey(rarityB)
 		end)
 		for i, model in ipairs(collected) do
 			addRow(model, i)
