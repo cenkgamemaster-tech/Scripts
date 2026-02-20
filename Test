@@ -414,15 +414,13 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Teleport to first exit; then simulate press and hold E, then MoveTo until we reach Z = -10 (no step teleports)
+	-- (Hold E is done in goToTopThenTakeAndTeleportOutside right when we arrive at top Bubu.)
+	-- Teleport to first exit, then MoveTo until Z = -10
 	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		if not char then return end
 		task.wait(0.2)
-		-- Simulate press and hold E to pick up NPC (game may require real E input)
-		holdEKey(HOLD_E_DURATION)
-		-- MoveTo to (same X, same Y, -10) – only change Z until we arrive
 		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
@@ -438,10 +436,12 @@ local function goToTopThenTakeAndTeleportOutside()
 	if not character then return end
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if not root then return end
-	-- 1) Teleport to top Bubu
+	-- 1) Teleport to top Bubu (you are now near the best NPC)
 	root.CFrame = CFrame.new(topPos)
-	-- 2) Brief wait so we're at the Bubu, then use our take function (find nearest, reparent to character, teleport outside)
-	task.delay(2, takeNearestBubuAndTeleportOutside)
+	-- 2) At that moment hold E to pick up the NPC (no delay – hold right away)
+	holdEKey(HOLD_E_DURATION)
+	-- 3) Then teleport to first exit and MoveTo to Z = -10
+	takeNearestBubuAndTeleportOutside()
 end
 
 local main = Instance.new("Frame")
@@ -645,7 +645,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 9"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
