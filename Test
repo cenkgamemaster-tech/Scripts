@@ -259,8 +259,8 @@ local function openObjectsWindow()
 
 	local objMain = Instance.new("Frame")
 	objMain.Name = "Main"
-	objMain.Size = UDim2.new(0, 320, 0, 340)
-	objMain.Position = UDim2.new(0.5, -160, 0.5, -170)
+	objMain.Size = UDim2.new(0, 420, 0, 400)
+	objMain.Position = UDim2.new(0.5, -210, 0.5, -200)
 	objMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	objMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	objMain.BorderSizePixel = 0
@@ -346,10 +346,10 @@ local function openObjectsWindow()
 	objRefreshBtn.Font = Enum.Font.Gotham
 	objRefreshBtn.Parent = objTop
 
-	-- Scrollable list
+	-- Scrollable list (left half)
 	local scroll = Instance.new("ScrollingFrame")
 	scroll.Name = "List"
-	scroll.Size = UDim2.new(1, -16, 1, -44)
+	scroll.Size = UDim2.new(0.45, -12, 1, -44)
 	scroll.Position = UDim2.new(0, 8, 0, 36)
 	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	scroll.BorderSizePixel = 0
@@ -368,15 +368,89 @@ local function openObjectsWindow()
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	listLayout.Parent = scroll
 
+	-- Details text box (right side)
+	local detailsFrame = Instance.new("Frame")
+	detailsFrame.Name = "DetailsFrame"
+	detailsFrame.Size = UDim2.new(0.55, -12, 1, -44)
+	detailsFrame.Position = UDim2.new(0.45, 4, 0, 36)
+	detailsFrame.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	detailsFrame.BorderSizePixel = 0
+	detailsFrame.Parent = objMain
+
+	local detailsFrameCorner = Instance.new("UICorner")
+	detailsFrameCorner.CornerRadius = UDim.new(0, 6)
+	detailsFrameCorner.Parent = detailsFrame
+
+	local detailsScroll = Instance.new("ScrollingFrame")
+	detailsScroll.Name = "DetailsScroll"
+	detailsScroll.Size = UDim2.new(1, -12, 1, -12)
+	detailsScroll.Position = UDim2.new(0, 6, 0, 6)
+	detailsScroll.BackgroundTransparency = 1
+	detailsScroll.BorderSizePixel = 0
+	detailsScroll.ScrollBarThickness = 4
+	detailsScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	detailsScroll.Parent = detailsFrame
+
+	local detailsLabel = Instance.new("TextLabel")
+	detailsLabel.Name = "DetailsLabel"
+	detailsLabel.Size = UDim2.new(1, -8, 0, 0)
+	detailsLabel.Position = UDim2.new(0, 0, 0, 0)
+	detailsLabel.AutomaticSize = Enum.AutomaticSize.Y
+	detailsLabel.BackgroundTransparency = 1
+	detailsLabel.Text = "Click a model to see details."
+	detailsLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
+	detailsLabel.TextSize = 11
+	detailsLabel.Font = Enum.Font.Code
+	detailsLabel.TextXAlignment = Enum.TextXAlignment.Left
+	detailsLabel.TextYAlignment = Enum.TextYAlignment.Top
+	detailsLabel.TextWrapped = true
+	detailsLabel.Parent = detailsScroll
+
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
-	local function addRow(name, className, layoutOrder)
-		local row = Instance.new("Frame")
-		row.Name = name
+
+	local function getModelInfo(model)
+		if not model or not model:IsA("Model") then return "Not a Model." end
+		local lines = {}
+		table.insert(lines, "Name: " .. model.Name)
+		table.insert(lines, "ClassName: " .. model.ClassName)
+		table.insert(lines, "FullName: " .. model:GetFullName())
+		table.insert(lines, "Parent: " .. (model.Parent and model.Parent:GetFullName() or "nil"))
+		table.insert(lines, "Children: " .. #model:GetChildren())
+		table.insert(lines, "Descendants: " .. #model:GetDescendants())
+		if model.PrimaryPart then
+			table.insert(lines, "PrimaryPart: " .. model.PrimaryPart.Name)
+			table.insert(lines, "PrimaryPart CFrame: " .. tostring(model.PrimaryPart.CFrame))
+		else
+			table.insert(lines, "PrimaryPart: nil")
+		end
+		local ok, pivot = pcall(function() return model:GetPivot() end)
+		if ok and pivot then
+			table.insert(lines, "Pivot: " .. tostring(pivot))
+			table.insert(lines, "Position: " .. tostring(pivot.Position))
+		end
+		local ok2, bbox = pcall(function() return model:GetBoundingBox() end)
+		if ok2 and bbox then
+			table.insert(lines, "BoundingBox: " .. tostring(bbox))
+		end
+		return table.concat(lines, "\n")
+	end
+
+	local function setDetailsText(text)
+		detailsLabel.Text = text
+	end
+
+	local function addRow(model, layoutOrder)
+		local row = Instance.new("TextButton")
+		row.Name = model.Name
 		row.Size = UDim2.new(1, -8, 0, ROW_HEIGHT)
 		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
 		row.BorderSizePixel = 0
 		row.LayoutOrder = layoutOrder
+		row.Text = ""
+		row.AutoButtonColor = true
 		row.Parent = scroll
 		local rowCorner = Instance.new("UICorner")
 		rowCorner.CornerRadius = UDim.new(0, 4)
@@ -385,13 +459,16 @@ local function openObjectsWindow()
 		lbl.Size = UDim2.new(1, -8, 1, -4)
 		lbl.Position = UDim2.new(0, 6, 0, 2)
 		lbl.BackgroundTransparency = 1
-		lbl.Text = name .. "  [" .. className .. "]"
+		lbl.Text = model.Name .. "  [Model]"
 		lbl.TextColor3 = Color3.fromRGB(200, 220, 255)
 		lbl.TextSize = 11
 		lbl.Font = Enum.Font.Gotham
 		lbl.TextXAlignment = Enum.TextXAlignment.Left
 		lbl.TextTruncate = Enum.TextTruncate.AtEnd
 		lbl.Parent = row
+		row.MouseButton1Click:Connect(function()
+			setDetailsText(getModelInfo(model))
+		end)
 		return row
 	end
 
@@ -401,13 +478,14 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
+		setDetailsText("Click a model to see details.")
 		-- List only Model instances
 		local objects = workspace:GetDescendants()
 		local order = 0
 		for _, obj in ipairs(objects) do
 			if obj.ClassName == "Model" then
 				order = order + 1
-				addRow(obj.Name, obj.ClassName, order)
+				addRow(obj, order)
 			end
 		end
 	end
