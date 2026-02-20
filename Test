@@ -413,14 +413,22 @@ local function takeNearestBubuAndTeleportOutside()
 			nearest = model
 		end
 	end
-	-- After hold E the Bubu may be picked up and no longer in field list (nearest can be nil). Still move to outside.
-	-- Teleport to first exit, then MoveTo until Z = -10
-	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
+	-- Alternate: hold NPC, then teleport step (Z by -10); repeat until Z = -31, then MoveTo to -10.
+	local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
+	local z = root.Position.Z
 	task.spawn(function()
 		local char = LocalPlayer.Character
-		if not char then return end
+		local r = char and char:FindFirstChild("HumanoidRootPart")
+		if not r then return end
 		task.wait(0.2)
-		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
+		while z > -31 do
+			holdEKey(HOLD_E_DURATION)
+			z = math.max(z - 10, -31)
+			r.CFrame = CFrame.new(x, y, z)
+			task.wait(0.15)
+		end
+		-- At -31: hold NPC again, then MoveTo to -10
+		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		if nearest then releasePickupState(nearest) end
@@ -439,7 +447,7 @@ local function goToTopThenTakeAndTeleportOutside()
 	root.CFrame = CFrame.new(topPos)
 	-- 2) At that moment hold E to pick up the NPC (no delay – hold right away)
 	holdEKey(HOLD_E_DURATION)
-	-- 3) Then teleport to first exit and MoveTo to Z = -10
+	-- 3) Then step teleport (Z only, step 10) until Z = -10
 	takeNearestBubuAndTeleportOutside()
 end
 
@@ -644,7 +652,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 2"
+objectsBtn.Text = "Spawned Bubus 3"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
