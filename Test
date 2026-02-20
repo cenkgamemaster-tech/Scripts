@@ -6,6 +6,7 @@
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -41,7 +42,7 @@ local workspace = game:GetService("Workspace")
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 168)
+main.Size = UDim2.new(0, 220, 0, 198)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -145,6 +146,7 @@ end)
 closeBtn.MouseButton1Click:Connect(function()
 	if inputChangedConnection then inputChangedConnection:Disconnect() inputChangedConnection = nil end
 	if inputEndedConnection then inputEndedConnection:Disconnect() inputEndedConnection = nil end
+	if positionConnection then positionConnection:Disconnect() positionConnection = nil end
 	screen:Destroy()
 end)
 
@@ -239,7 +241,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 9"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -248,6 +250,38 @@ objectsBtn.Parent = main
 local objectsBtnCorner = Instance.new("UICorner")
 objectsBtnCorner.CornerRadius = UDim.new(0, 6)
 objectsBtnCorner.Parent = objectsBtn
+
+-- Player position display
+local positionLabel = Instance.new("TextLabel")
+positionLabel.Name = "Position"
+positionLabel.Size = UDim2.new(1, -16, 0, 20)
+positionLabel.Position = UDim2.new(0, 8, 0, 142)
+positionLabel.BackgroundTransparency = 1
+positionLabel.Text = "Position: --, --, --"
+positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
+positionLabel.TextSize = 11
+positionLabel.Font = Enum.Font.Gotham
+positionLabel.TextXAlignment = Enum.TextXAlignment.Left
+positionLabel.TextTruncate = Enum.TextTruncate.AtEnd
+positionLabel.Parent = main
+
+local positionConnection
+local function updatePositionDisplay()
+	local character = LocalPlayer.Character
+	if not character then
+		positionLabel.Text = "Position: (no character)"
+		return
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		positionLabel.Text = "Position: (no root)"
+		return
+	end
+	local p = root.Position
+	positionLabel.Text = string.format("Position: %.1f, %.1f, %.1f", p.X, p.Y, p.Z)
+end
+positionConnection = RunService.Heartbeat:Connect(updatePositionDisplay)
+updatePositionDisplay()
 
 -- Objects list window (new window when button clicked)
 local function openObjectsWindow()
