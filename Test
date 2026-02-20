@@ -71,10 +71,12 @@ end
 
 local function hookRemote(remote, isInvoke)
 	if remoteSpyHooked[remote] then return true end
-	local ok = pcall(function()
-		local method = isInvoke and "InvokeServer" or "FireServer"
-		local original = remote[method]
-		if type(original) ~= "function" then error("not a function") end
+	local method = isInvoke and "InvokeServer" or "FireServer"
+	-- Step 1: get original (may error e.g. "FireServer is not a valid member")
+	local getOk, original = pcall(function() return remote[method] end)
+	if not getOk or type(original) ~= "function" then return false end
+	-- Step 2: assign our wrapper (may fail on read-only remotes)
+	local assignOk = pcall(function()
 		remote[method] = function(...)
 			local args = { ... }
 			local parts = {}
@@ -88,7 +90,7 @@ local function hookRemote(remote, isInvoke)
 			return result
 		end
 	end)
-	if not ok then return false end
+	if not assignOk then return false end
 	remoteSpyHooked[remote] = true
 	return true
 end
@@ -578,7 +580,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 3"
+objectsBtn.Text = "Spawned Bubus 4"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
