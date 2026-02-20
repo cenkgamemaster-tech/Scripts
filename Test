@@ -35,7 +35,7 @@ local DEFAULT_WALK_SPEED = 16
 -- Objects list: only show instances whose Name contains any of these (case-insensitive)
 local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
 -- Objects list: only show models whose FullName starts with this path (e.g. Workspace.Map.Zones.Field includes Field and all descendants); set to nil or "" to skip
-local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field"
+local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.NPC"
 
 local workspace = game:GetService("Workspace")
 
@@ -241,7 +241,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 6"
+objectsBtn.Text = "Spawned Bubus 7"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -422,27 +422,95 @@ local function openObjectsWindow()
 	local function getModelInfo(model)
 		if not model or not model:IsA("Model") then return "Not a Model." end
 		local lines = {}
-		table.insert(lines, "Name: " .. model.Name)
-		table.insert(lines, "ClassName: " .. model.ClassName)
-		table.insert(lines, "FullName: " .. model:GetFullName())
-		table.insert(lines, "Parent: " .. (model.Parent and model.Parent:GetFullName() or "nil"))
-		table.insert(lines, "Children: " .. #model:GetChildren())
-		table.insert(lines, "Descendants: " .. #model:GetDescendants())
-		if model.PrimaryPart then
-			table.insert(lines, "PrimaryPart: " .. model.PrimaryPart.Name)
-			table.insert(lines, "PrimaryPart CFrame: " .. tostring(model.PrimaryPart.CFrame))
+		local function add(s) table.insert(lines, s) end
+
+		-- Basic identity
+		add("=== Identity ===")
+		add("Name: " .. model.Name)
+		add("ClassName: " .. model.ClassName)
+		add("FullName: " .. model:GetFullName())
+		add("Parent: " .. (model.Parent and model.Parent:GetFullName() or "nil"))
+		add("Children: " .. #model:GetChildren())
+		add("Descendants: " .. #model:GetDescendants())
+
+		-- Attributes (metadata: gold, mutation type, etc.)
+		add("")
+		add("=== Attributes (metadata) ===")
+		local attrs = model:GetAttributes()
+		if next(attrs) then
+			local keys = {}
+			for k in pairs(attrs) do table.insert(keys, k) end
+			table.sort(keys)
+			for _, k in ipairs(keys) do
+				local v = attrs[k]
+				local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
+				add(k .. " = " .. vStr)
+			end
 		else
-			table.insert(lines, "PrimaryPart: nil")
+			add("(none)")
+		end
+
+		-- Value objects (NumberValue, IntValue, StringValue, BoolValue, etc. - often gold, mutation, config)
+		add("")
+		add("=== Value objects ===")
+		local hasValue = false
+		for _, child in ipairs(model:GetDescendants()) do
+			local cls = child.ClassName
+			if cls == "NumberValue" or cls == "IntValue" or cls == "StringValue" or cls == "BoolValue" or cls == "ObjectValue" or cls == "Vector3Value" or cls == "Color3Value" or cls == "CFrameValue" or cls == "BrickColorValue" then
+				hasValue = true
+				local val = child.Value
+				if typeof(val) == "userdata" then val = tostring(val) end
+				add(child.Name .. " [" .. cls .. "] = " .. tostring(val))
+			end
+		end
+		if not hasValue then add("(none)") end
+
+		-- Humanoid (NPC name, health, etc.)
+		add("")
+		add("=== Humanoid ===")
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			add("DisplayName: " .. tostring(humanoid.DisplayName))
+			add("Health: " .. tostring(humanoid.Health) .. " / " .. tostring(humanoid.MaxHealth))
+			add("WalkSpeed: " .. tostring(humanoid.WalkSpeed))
+			add("JumpPower: " .. tostring(humanoid.JumpPower or humanoid.JumpHeight))
+			add("RigType: " .. tostring(humanoid.RigType))
+			-- Humanoid attributes (e.g. custom NPC data)
+			local hAttrs = humanoid:GetAttributes()
+			if next(hAttrs) then
+				for k, v in pairs(hAttrs) do add("Humanoid." .. k .. " = " .. tostring(v)) end
+			end
+		else
+			add("(none)")
+		end
+
+		-- Primary part & transform
+		add("")
+		add("=== Transform ===")
+		if model.PrimaryPart then
+			add("PrimaryPart: " .. model.PrimaryPart.Name)
+			add("PrimaryPart CFrame: " .. tostring(model.PrimaryPart.CFrame))
+			add("PrimaryPart Position: " .. tostring(model.PrimaryPart.Position))
+		else
+			add("PrimaryPart: nil")
 		end
 		local ok, pivot = pcall(function() return model:GetPivot() end)
 		if ok and pivot then
-			table.insert(lines, "Pivot: " .. tostring(pivot))
-			table.insert(lines, "Position: " .. tostring(pivot.Position))
+			add("Pivot: " .. tostring(pivot))
+			add("Position: " .. tostring(pivot.Position))
 		end
 		local ok2, bbox = pcall(function() return model:GetBoundingBox() end)
 		if ok2 and bbox then
-			table.insert(lines, "BoundingBox: " .. tostring(bbox))
+			add("BoundingBox: " .. tostring(bbox))
 		end
+
+		-- Child list (summary: what's inside the model)
+		add("")
+		add("=== Children (direct) ===")
+		for _, child in ipairs(model:GetChildren()) do
+			add("  " .. child.Name .. " [" .. child.ClassName .. "]")
+		end
+
 		return table.concat(lines, "\n")
 	end
 
