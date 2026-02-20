@@ -48,8 +48,8 @@ local TELEPORT_BACK_Z_END = -30
 local TELEPORT_BACK_Z_STEP = 10
 -- MoveTo goes to (same X, same Y, -10). "Teleport back" button uses this.
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
--- MoveTo to outside: max time (s) and distance (studs) to consider "arrived"
-local WALK_TO_OUTSIDE_TIMEOUT = 20
+-- MoveTo to outside: max time (s) and distance (studs) to consider "arrived" (long so slow movement with held NPC can finish)
+local WALK_TO_OUTSIDE_TIMEOUT = 90
 local WALK_ARRIVED_DISTANCE = 4
 -- Simulate hold E for pickup: duration in seconds (then we MoveTo to Z)
 local HOLD_E_DURATION = 2
@@ -312,10 +312,8 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	humanoid:MoveTo(targetPos)
 	local start = os.clock()
 	while (root.Position - targetPos).Magnitude > arrivedDist and (os.clock() - start) < timeoutSeconds do
+		humanoid:MoveTo(targetPos)
 		task.wait(0.2)
-		if (root.Position - targetPos).Magnitude > arrivedDist then
-			humanoid:MoveTo(targetPos)
-		end
 	end
 	-- Snap to target if close (optional)
 	if (root.Position - targetPos).Magnitude <= arrivedDist * 2 then
@@ -346,7 +344,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 			nearest = model
 		end
 	end
-	-- Use MoveTo only: hold E then walk from current position to (same X, same Y, -10). Optional onArrived() when done.
+	-- Hold E to pick up (releasing E is fine); then keep moving until outside (re-issue MoveTo so character doesn't stop).
 	local startPos = root.Position
 	local x, y = startPos.X, startPos.Y
 	task.spawn(function()
@@ -371,9 +369,9 @@ local function goToTopThenTakeAndTeleportOutside(onArrived)
 	if not root then if onArrived then onArrived() end return end
 	-- 1) Teleport to top Bubu (you are now near the best NPC)
 	root.CFrame = CFrame.new(topPos)
-	-- 2) At that moment hold E to pick up the NPC (no delay – hold right away)
+	-- 2) Hold E to pick up the NPC (releasing after 2s is fine)
 	holdEKey(HOLD_E_DURATION)
-	-- 3) Then MoveTo to (same X, same Y, -10)
+	-- 3) Walk to (same X, same Y, -10); character keeps moving until outside
 	takeNearestBubuAndTeleportOutside(onArrived)
 end
 
