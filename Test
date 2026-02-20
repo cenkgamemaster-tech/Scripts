@@ -34,7 +34,7 @@ local DEFAULT_WALK_SPEED = 16
 
 -- Objects list: only show instances whose Name contains any of these (case-insensitive)
 local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
--- Objects list: only show models under this parent (use exact FullName; set to nil to skip parent filter)
+-- Objects list: only show models whose FullName starts with this path (e.g. Workspace.Map.Zones.Field includes Field and all descendants); set to nil or "" to skip
 local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field"
 
 local workspace = game:GetService("Workspace")
@@ -241,7 +241,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 5"
+objectsBtn.Text = "Spawned Bubus 6"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -487,13 +487,15 @@ local function openObjectsWindow()
 			end
 		end
 		setDetailsText("Click a model to see details.")
-		-- List only Model instances, optionally under OBJECTS_LIST_PARENT_FILTER
+		-- List only Model instances under OBJECTS_LIST_PARENT_FILTER (path prefix; include all starting with it)
 		local objects = workspace:GetDescendants()
 		local order = 0
 		for _, obj in ipairs(objects) do
 			if obj.ClassName == "Model" then
-				local parentMatch = not OBJECTS_LIST_PARENT_FILTER
-					or (obj.Parent and obj.Parent:GetFullName() == OBJECTS_LIST_PARENT_FILTER)
+				local fullName = obj:GetFullName()
+				local prefix = OBJECTS_LIST_PARENT_FILTER
+				local parentMatch = not prefix or prefix == ""
+					or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
 				if parentMatch then
 					order = order + 1
 					addRow(obj, order)
