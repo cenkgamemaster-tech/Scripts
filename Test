@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 6"
+objectsBtn.Text = "Spawned Bubus 7"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -381,6 +381,22 @@ local function openObjectsWindow()
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
 
+	-- Parse Income string (e.g. "$12.63k/s", "$1.5M/s") to number for sorting. Higher = rarest.
+	local function parseIncomeValue(incomeStr)
+		if not incomeStr or incomeStr == "" then return 0 end
+		local s = tostring(incomeStr):gsub("%$", ""):gsub("/s", ""):gsub(",", "")
+		local numStr = s:match("^([%d%.]+)")
+		if not numStr then return 0 end
+		local num = tonumber(numStr)
+		if not num then return 0 end
+		if s:match("M") or s:lower():match("m") then
+			num = num * 1000000
+		elseif s:match("k") or s:lower():match("k") then
+			num = num * 1000
+		end
+		return num
+	end
+
 	-- Get text from CharacterInfo BillboardGui label by name (e.g. "Rarity", "Income", "CharTime")
 	local function getCharacterInfoLabel(model, labelName)
 		for _, desc in ipairs(model:GetDescendants()) do
@@ -448,11 +464,10 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
-		-- List only Model instances under path filter and with Mutation ~= "Normal"
-		local objects = workspace:GetDescendants()
-		local order = 0
+		-- Collect models under path filter with Mutation ~= "Normal"
+		local collected = {}
 		local prefix = OBJECTS_LIST_PARENT_FILTER
-		for _, obj in ipairs(objects) do
+		for _, obj in ipairs(workspace:GetDescendants()) do
 			if obj.ClassName == "Model" then
 				local fullName = obj:GetFullName()
 				local parentMatch = not prefix or prefix == ""
@@ -460,11 +475,19 @@ local function openObjectsWindow()
 				if parentMatch then
 					local mutation = obj:GetAttribute("Mutation")
 					if mutation ~= nil and mutation ~= "Normal" then
-						order = order + 1
-						addRow(obj, order)
+						table.insert(collected, obj)
 					end
 				end
 			end
+		end
+		-- Sort by Income: highest income first (most valuable / rarest at top)
+		table.sort(collected, function(a, b)
+			local incomeA = parseIncomeValue(getCharacterInfoLabel(a, "Income"))
+			local incomeB = parseIncomeValue(getCharacterInfoLabel(b, "Income"))
+			return incomeA > incomeB
+		end)
+		for i, model in ipairs(collected) do
+			addRow(model, i)
 		end
 	end
 
