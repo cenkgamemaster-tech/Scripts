@@ -187,20 +187,34 @@ local function tryTakeViaRemote(nearest)
 		end
 	end
 
-	-- If this is the "state changed" remote, try hold-for-2-sec: true then wait then false
+	-- If this is the "state changed" remote, mimic hold E 2 sec. Try (npc or id, true)/(false) so server knows which NPC.
 	if isStateChanged then
-		local ok1, err1 = pcall(function() fireRemote(true) end)
-		if ok1 then
+		local function tryStateSequence(pickTarget)
+			local ok = pcall(function() fireRemote(pickTarget, true) end)
+			if not ok then return false end
+			task.wait(2)
+			pcall(function() fireRemote(pickTarget, false) end)
+			return true
+		end
+		-- Try model, then string id, then name
+		if tryStateSequence(nearest) then
+			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s, then (nearest, false)")
+			return true
+		end
+		if tryStateSequence(id) then
+			print("[Take] Called PickupNPCStateChanged(id, true), waited 2s, then (id, false)")
+			return true
+		end
+		if tryStateSequence(nearest.Name) then
+			print("[Take] Called PickupNPCStateChanged(nearest.Name, true), waited 2s, then false")
+			return true
+		end
+		-- Fallback: (true) then (false) – server may use proximity
+		local ok = pcall(function() fireRemote(true) end)
+		if ok then
 			task.wait(2)
 			pcall(function() fireRemote(false) end)
 			print("[Take] Called PickupNPCStateChanged true, waited 2s, then false")
-			return true
-		end
-		local ok2, err2 = pcall(function() fireRemote(nearest, true) end)
-		if ok2 then
-			task.wait(2)
-			pcall(function() fireRemote(nearest, false) end)
-			print("[Take] Called PickupNPCStateChanged(nearest, true), waited 2s, then false")
 			return true
 		end
 	end
@@ -270,12 +284,14 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Try game remote first; always reparent so Bubu comes with us (server may or may not accept remote)
+	-- Try game remote first so server registers the take
 	tryTakeViaRemote(nearest)
-	-- Give server a moment to process if we fired a remote
-	task.wait(0.2)
-	-- Take Bubu with us: reparent then teleport (ensures NPC moves with character)
-	nearest.Parent = character
+	-- Give server time to process before we move
+	task.wait(0.5)
+	-- Reparent then teleport so NPC physically comes with us (in case server didn't move it)
+	if nearest.Parent ~= character then
+		nearest.Parent = character
+	end
 	root.CFrame = CFrame.new(OUTSIDE_FIELD_POSITION)
 end
 
@@ -494,7 +510,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 8"
+objectsBtn.Text = "Spawned Bubus 9"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -504,11 +520,28 @@ local objectsBtnCorner = Instance.new("UICorner")
 objectsBtnCorner.CornerRadius = UDim.new(0, 6)
 objectsBtnCorner.Parent = objectsBtn
 
+-- Collect All Cash button (calls ReplicatedStorage.CollectAllCash)
+local collectCashBtn = Instance.new("TextButton")
+collectCashBtn.Name = "CollectCash"
+collectCashBtn.Size = UDim2.new(1, -16, 0, 28)
+collectCashBtn.Position = UDim2.new(0, 8, 0, 140)
+collectCashBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+collectCashBtn.BorderSizePixel = 0
+collectCashBtn.Text = "Collect All Cash"
+collectCashBtn.TextColor3 = Color3.fromRGB(200, 255, 220)
+collectCashBtn.TextSize = 12
+collectCashBtn.Font = Enum.Font.Gotham
+collectCashBtn.Parent = main
+
+local collectCashBtnCorner = Instance.new("UICorner")
+collectCashBtnCorner.CornerRadius = UDim.new(0, 6)
+collectCashBtnCorner.Parent = collectCashBtn
+
 -- Player position display
 local positionLabel = Instance.new("TextLabel")
 positionLabel.Name = "Position"
 positionLabel.Size = UDim2.new(1, -16, 0, 20)
-positionLabel.Position = UDim2.new(0, 8, 0, 142)
+positionLabel.Position = UDim2.new(0, 8, 0, 174)
 positionLabel.BackgroundTransparency = 1
 positionLabel.Text = "Position: --, --, --"
 positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -844,6 +877,27 @@ local function openObjectsWindow()
 end
 
 objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
+
+-- Collect All Cash: call ReplicatedStorage.CollectAllCash (RemoteEvent or RemoteFunction)
+collectCashBtn.MouseButton1Click:Connect(function()
+	local collectAllCash = ReplicatedStorage:FindFirstChild("CollectAllCash")
+	if not collectAllCash then
+		warn("[CollectAllCash] ReplicatedStorage.CollectAllCash not found")
+		return
+	end
+	local ok, err = pcall(function()
+		if collectAllCash:IsA("RemoteEvent") then
+			collectAllCash:FireServer()
+		elseif collectAllCash:IsA("RemoteFunction") then
+			collectAllCash:InvokeServer()
+		else
+			warn("[CollectAllCash] CollectAllCash is not a RemoteEvent or RemoteFunction")
+		end
+	end)
+	if not ok then
+		warn("[CollectAllCash] Error:", err)
+	end
+end)
 
 -- Current speed value (0–1)
 local speedNorm = (DEFAULT_WALK_SPEED - MIN_WALK_SPEED) / (MAX_WALK_SPEED - MIN_WALK_SPEED)
