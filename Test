@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 5"
+objectsBtn.Text = "Spawned Bubus 6"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -263,8 +263,8 @@ local function openObjectsWindow()
 
 	local objMain = Instance.new("Frame")
 	objMain.Name = "Main"
-	objMain.Size = UDim2.new(0, 420, 0, 400)
-	objMain.Position = UDim2.new(0.5, -210, 0.5, -200)
+	objMain.Size = UDim2.new(0, 320, 0, 400)
+	objMain.Position = UDim2.new(0.5, -160, 0.5, -200)
 	objMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	objMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	objMain.BorderSizePixel = 0
@@ -356,10 +356,10 @@ local function openObjectsWindow()
 	objRefreshBtn.Font = Enum.Font.Gotham
 	objRefreshBtn.Parent = objTop
 
-	-- Scrollable list (left half)
+	-- Scrollable list (full width)
 	local scroll = Instance.new("ScrollingFrame")
 	scroll.Name = "List"
-	scroll.Size = UDim2.new(0.45, -12, 1, -44)
+	scroll.Size = UDim2.new(1, -16, 1, -44)
 	scroll.Position = UDim2.new(0, 8, 0, 36)
 	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	scroll.BorderSizePixel = 0
@@ -378,131 +378,8 @@ local function openObjectsWindow()
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	listLayout.Parent = scroll
 
-	-- Details text box (right side)
-	local detailsFrame = Instance.new("Frame")
-	detailsFrame.Name = "DetailsFrame"
-	detailsFrame.Size = UDim2.new(0.55, -12, 1, -44)
-	detailsFrame.Position = UDim2.new(0.45, 4, 0, 36)
-	detailsFrame.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
-	detailsFrame.BorderSizePixel = 0
-	detailsFrame.Parent = objMain
-
-	local detailsFrameCorner = Instance.new("UICorner")
-	detailsFrameCorner.CornerRadius = UDim.new(0, 6)
-	detailsFrameCorner.Parent = detailsFrame
-
-	local detailsScroll = Instance.new("ScrollingFrame")
-	detailsScroll.Name = "DetailsScroll"
-	detailsScroll.Size = UDim2.new(1, -12, 1, -12)
-	detailsScroll.Position = UDim2.new(0, 6, 0, 6)
-	detailsScroll.BackgroundTransparency = 1
-	detailsScroll.BorderSizePixel = 0
-	detailsScroll.ScrollBarThickness = 8
-	detailsScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-	detailsScroll.ScrollBarImageTransparency = 0
-	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.None
-	detailsScroll.ScrollingEnabled = true
-	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-	detailsScroll.Parent = detailsFrame
-
-	-- Content wrapper and label
-	local detailsCanvas = Instance.new("Frame")
-	detailsCanvas.Name = "DetailsCanvas"
-	detailsCanvas.Size = UDim2.new(1, 0, 0, 0)
-	detailsCanvas.Position = UDim2.new(0, 0, 0, 0)
-	detailsCanvas.BackgroundTransparency = 1
-	detailsCanvas.Parent = detailsScroll
-
-	local detailsPadding = Instance.new("UIPadding")
-	detailsPadding.PaddingLeft = UDim.new(0, 4)
-	detailsPadding.PaddingTop = UDim.new(0, 4)
-	detailsPadding.PaddingRight = UDim.new(0, 4)
-	detailsPadding.PaddingBottom = UDim.new(0, 4)
-	detailsPadding.Parent = detailsCanvas
-
-	local detailsLabel = Instance.new("TextLabel")
-	detailsLabel.Name = "DetailsLabel"
-	detailsLabel.Size = UDim2.new(1, -8, 0, 0)
-	detailsLabel.Position = UDim2.new(0, 0, 0, 0)
-	detailsLabel.AutomaticSize = Enum.AutomaticSize.Y
-	detailsLabel.BackgroundTransparency = 1
-	detailsLabel.Text = "Click a model to see details."
-	detailsLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
-	detailsLabel.TextSize = 11
-	detailsLabel.Font = Enum.Font.Code
-	detailsLabel.TextXAlignment = Enum.TextXAlignment.Left
-	detailsLabel.TextYAlignment = Enum.TextYAlignment.Top
-	detailsLabel.TextWrapped = true
-	detailsLabel.Parent = detailsCanvas
-
-	local TextService = game:GetService("TextService")
-	local function updateDetailsCanvasSize()
-		local wrapWidth = math.max(detailsScroll.AbsoluteSize.X - 24, 180)
-		local bounds = TextService:GetTextSize(detailsLabel.Text, detailsLabel.TextSize, detailsLabel.Font, Vector2.new(wrapWidth, 100000))
-		detailsCanvas.Size = UDim2.new(1, 0, 0, bounds.Y + 24)
-		detailsScroll.CanvasSize = UDim2.new(0, 0, 0, bounds.Y + 32)
-	end
-
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
-
-	local function getModelInfo(model)
-		if not model or not model:IsA("Model") then return "Not a Model." end
-		local lines = {}
-		local function add(s) table.insert(lines, s) end
-
-		local function collectGuiLabels(gui)
-			local out = {}
-			for _, desc in ipairs(gui:GetDescendants()) do
-				if desc:IsA("TextLabel") or desc:IsA("TextButton") then
-					local t = desc.Text
-					local text = (t and #tostring(t) <= 60) and t or (t and "..." or "")
-					table.insert(out, desc.Name .. " = \"" .. text .. "\"")
-				elseif desc:IsA("ImageLabel") or desc:IsA("ImageButton") then
-					table.insert(out, desc.Name .. " [Image]")
-				end
-			end
-			return out
-		end
-
-		-- Only show CharacterInfo (BillboardGui named CharacterInfo or containing CharacterInfo)
-		add("=== CharacterInfo ===")
-		local found = false
-		for _, desc in ipairs(model:GetDescendants()) do
-			if desc:IsA("BillboardGui") and desc.Name == "CharacterInfo" then
-				found = true
-				local labels = collectGuiLabels(desc)
-				for _, s in ipairs(labels) do add(s) end
-				if #labels == 0 then add("(no labels)") end
-				break
-			end
-		end
-		if not found then
-			-- Fallback: any BillboardGui under something named CharacterInfo
-			local charInfo = model:FindFirstChild("CharacterInfo", true)
-			if charInfo then
-				local gui = charInfo:IsA("BillboardGui") and charInfo or charInfo:FindFirstChildOfClass("BillboardGui")
-				if gui then
-					found = true
-					local labels = collectGuiLabels(gui)
-					for _, s in ipairs(labels) do add(s) end
-					if #labels == 0 then add("(no labels)") end
-				end
-			end
-		end
-		if not found then
-			add("(no CharacterInfo found)")
-		end
-
-		return table.concat(lines, "\n")
-	end
-
-	local function setDetailsText(text)
-		detailsLabel.Text = text
-		task.defer(updateDetailsCanvasSize)
-	end
-	-- Initial canvas size for placeholder text
-	task.defer(updateDetailsCanvasSize)
 
 	-- Get text from CharacterInfo BillboardGui label by name (e.g. "Rarity", "Income", "CharTime")
 	local function getCharacterInfoLabel(model, labelName)
@@ -562,9 +439,6 @@ local function openObjectsWindow()
 		lbl.TextXAlignment = Enum.TextXAlignment.Left
 		lbl.TextTruncate = Enum.TextTruncate.AtEnd
 		lbl.Parent = row
-		row.MouseButton1Click:Connect(function()
-			setDetailsText(getModelInfo(model))
-		end)
 		return row
 	end
 
@@ -574,7 +448,6 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
-		setDetailsText("Click a model to see details.")
 		-- List only Model instances under path filter and with Mutation ~= "Normal"
 		local objects = workspace:GetDescendants()
 		local order = 0
