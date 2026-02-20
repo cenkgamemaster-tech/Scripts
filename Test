@@ -401,10 +401,14 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
-		-- No filter: list all workspace descendants so you can investigate
+		-- List only Model instances
 		local objects = workspace:GetDescendants()
-		for i, obj in ipairs(objects) do
-			addRow(obj.Name, obj.ClassName, i)
+		local order = 0
+		for _, obj in ipairs(objects) do
+			if obj.ClassName == "Model" then
+				order = order + 1
+				addRow(obj.Name, obj.ClassName, order)
+			end
 		end
 	end
 
