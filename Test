@@ -29,7 +29,7 @@ screen.Parent = PlayerGui
 
 -- Speed slider range (Roblox default WalkSpeed is 16)
 local MIN_WALK_SPEED = 8
-local MAX_WALK_SPEED = 48
+local MAX_WALK_SPEED = 300
 local DEFAULT_WALK_SPEED = 16
 
 local main = Instance.new("Frame")
