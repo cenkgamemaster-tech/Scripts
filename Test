@@ -879,17 +879,6 @@ local function openObjectsWindow()
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
 
-	-- Rarity sort order: rarest (1) to most common (9). Lower number = higher in list.
-	local RARITY_ORDER = {
-		Exclusive = 1, Secret = 2, God = 3, Mythic = 4, Legendary = 5,
-		Epic = 6, Rare = 7, Uncommon = 8, Common = 9
-	}
-	local function raritySortKey(rarityStr)
-		if not rarityStr or rarityStr == "" then return 99 end
-		local key = RARITY_ORDER[rarityStr]
-		return key or 99
-	end
-
 	-- Get text from CharacterInfo BillboardGui label by name (e.g. "Rarity", "Income", "CharTime")
 	local function getCharacterInfoLabel(model, labelName)
 		for _, desc in ipairs(model:GetDescendants()) do
@@ -951,29 +940,9 @@ local function openObjectsWindow()
 		return row
 	end
 
-	-- Returns sorted list of Bubus (same order as list: rarest first)
+	-- Use same filtered list as collection (excludes Gold/Diamond when rarity is Common/Uncommon/Rare, etc.)
 	local function getSortedBubuList()
-		local collected = {}
-		local prefix = OBJECTS_LIST_PARENT_FILTER
-		for _, obj in ipairs(workspace:GetDescendants()) do
-			if obj.ClassName == "Model" then
-				local fullName = obj:GetFullName()
-				local parentMatch = not prefix or prefix == ""
-					or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
-				if parentMatch then
-					local mutation = obj:GetAttribute("Mutation")
-					if mutation ~= nil and mutation ~= "Normal" then
-						table.insert(collected, obj)
-					end
-				end
-			end
-		end
-		table.sort(collected, function(a, b)
-			local rarityA = getCharacterInfoLabel(a, "Rarity")
-			local rarityB = getCharacterInfoLabel(b, "Rarity")
-			return raritySortKey(rarityA) < raritySortKey(rarityB)
-		end)
-		return collected
+		return getSortedBubuListTopLevel()
 	end
 
 	local function teleportToTopBubu()
