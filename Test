@@ -32,6 +32,10 @@ local MIN_WALK_SPEED = 8
 local MAX_WALK_SPEED = 300
 local DEFAULT_WALK_SPEED = 16
 
+-- Objects list: only show instances whose Name contains any of these (case-insensitive), refresh interval in seconds
+local OBJECTS_LIST_REFRESH_SECONDS = 10
+local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
+
 local main = Instance.new("Frame")
 main.Name = "Main"
 main.Size = UDim2.new(0, 220, 0, 168)
@@ -384,18 +388,30 @@ local function openObjectsWindow()
 				child:Destroy()
 			end
 		end
+		local function nameMatchesAny(nameLower)
+			for _, filter in ipairs(OBJECTS_LIST_NAME_FILTERS) do
+				if string.find(nameLower, string.lower(filter), 1, true) then
+					return true
+				end
+			end
+			return false
+		end
 		local objects = workspace:GetDescendants()
-		for i, obj in ipairs(objects) do
-			addRow(obj.Name, obj.ClassName, i)
+		local order = 0
+		for _, obj in ipairs(objects) do
+			if nameMatchesAny(string.lower(obj.Name)) then
+				order = order + 1
+				addRow(obj.Name, obj.ClassName, order)
+			end
 		end
 	end
 
 	refreshList()
 
-	-- Refresh list every 3 seconds while window is open
+	-- Refresh list every OBJECTS_LIST_REFRESH_SECONDS while window is open
 	task.spawn(function()
 		while objScreen.Parent do
-			task.wait(3)
+			task.wait(OBJECTS_LIST_REFRESH_SECONDS)
 			if not objScreen.Parent then break end
 			refreshList()
 		end
