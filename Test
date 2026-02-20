@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 2"
+objectsBtn.Text = "Spawned Bubus 3"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -400,18 +400,17 @@ local function openObjectsWindow()
 	detailsScroll.ScrollBarThickness = 8
 	detailsScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
 	detailsScroll.ScrollBarImageTransparency = 0
-	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.None
 	detailsScroll.ScrollingEnabled = true
 	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailsScroll.Parent = detailsFrame
 
-	-- Wrapper frame so ScrollingFrame canvas size updates correctly with long text
+	-- Content wrapper and label
 	local detailsCanvas = Instance.new("Frame")
 	detailsCanvas.Name = "DetailsCanvas"
-	detailsCanvas.Size = UDim2.new(1, -8, 0, 0)
+	detailsCanvas.Size = UDim2.new(1, 0, 0, 0)
 	detailsCanvas.Position = UDim2.new(0, 0, 0, 0)
 	detailsCanvas.BackgroundTransparency = 1
-	detailsCanvas.AutomaticSize = Enum.AutomaticSize.Y
 	detailsCanvas.Parent = detailsScroll
 
 	local detailsPadding = Instance.new("UIPadding")
@@ -423,7 +422,7 @@ local function openObjectsWindow()
 
 	local detailsLabel = Instance.new("TextLabel")
 	detailsLabel.Name = "DetailsLabel"
-	detailsLabel.Size = UDim2.new(1, 0, 0, 0)
+	detailsLabel.Size = UDim2.new(1, -8, 0, 0)
 	detailsLabel.Position = UDim2.new(0, 0, 0, 0)
 	detailsLabel.AutomaticSize = Enum.AutomaticSize.Y
 	detailsLabel.BackgroundTransparency = 1
@@ -435,6 +434,14 @@ local function openObjectsWindow()
 	detailsLabel.TextYAlignment = Enum.TextYAlignment.Top
 	detailsLabel.TextWrapped = true
 	detailsLabel.Parent = detailsCanvas
+
+	local TextService = game:GetService("TextService")
+	local function updateDetailsCanvasSize()
+		local wrapWidth = math.max(detailsScroll.AbsoluteSize.X - 24, 180)
+		local bounds = TextService:GetTextSize(detailsLabel.Text, detailsLabel.TextSize, detailsLabel.Font, Vector2.new(wrapWidth, 100000))
+		detailsCanvas.Size = UDim2.new(1, 0, 0, bounds.Y + 24)
+		detailsScroll.CanvasSize = UDim2.new(0, 0, 0, bounds.Y + 32)
+	end
 
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
@@ -628,7 +635,10 @@ local function openObjectsWindow()
 
 	local function setDetailsText(text)
 		detailsLabel.Text = text
+		task.defer(updateDetailsCanvasSize)
 	end
+	-- Initial canvas size for placeholder text
+	task.defer(updateDetailsCanvasSize)
 
 	-- Display label for list: "NPCId - Mutation" from attributes, else model name
 	local function getNPCDisplayLabel(model)
