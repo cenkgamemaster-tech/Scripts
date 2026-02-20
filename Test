@@ -70,24 +70,25 @@ local function serializeArg(v)
 end
 
 local function hookRemote(remote, isInvoke)
-	local method = isInvoke and "InvokeServer" or "FireServer"
 	if remoteSpyHooked[remote] then return true end
-	local ok, original = pcall(function() return remote[method] end)
-	if not ok or type(original) ~= "function" then
-		return false
-	end
-	remote[method] = function(...)
-		local args = { ... }
-		local parts = {}
-		for i = 1, #args do parts[i] = serializeArg(args[i]) end
-		print(string.format("[Spy] %s %s(%s)", remote:GetFullName(), method, table.concat(parts, ", ")))
-		local callOk, result = pcall(function() return original(remote, table.unpack(args)) end)
-		if not callOk then
-			warn("[Spy] Call failed for", remote:GetFullName(), method, result)
-			return
+	local ok = pcall(function()
+		local method = isInvoke and "InvokeServer" or "FireServer"
+		local original = remote[method]
+		if type(original) ~= "function" then error("not a function") end
+		remote[method] = function(...)
+			local args = { ... }
+			local parts = {}
+			for i = 1, #args do parts[i] = serializeArg(args[i]) end
+			print(string.format("[Spy] %s %s(%s)", remote:GetFullName(), method, table.concat(parts, ", ")))
+			local callOk, result = pcall(function() return original(remote, table.unpack(args)) end)
+			if not callOk then
+				warn("[Spy] Call failed for", remote:GetFullName(), method, result)
+				return
+			end
+			return result
 		end
-		return result
-	end
+	end)
+	if not ok then return false end
 	remoteSpyHooked[remote] = true
 	return true
 end
@@ -102,8 +103,7 @@ local function startRemoteSpy(durationSeconds)
 	for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
 		if child:IsA("RemoteEvent") then
 			if hookRemote(child, false) then hooked = hooked + 1 else skipped = skipped + 1 end
-		end
-		if child:IsA("RemoteFunction") then
+		elseif child:IsA("RemoteFunction") then
 			if hookRemote(child, true) then hooked = hooked + 1 else skipped = skipped + 1 end
 		end
 	end
@@ -578,7 +578,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 2"
+objectsBtn.Text = "Spawned Bubus 3"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
