@@ -379,7 +379,7 @@ end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 234)
+main.Size = UDim2.new(0, 220, 0, 268)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -622,11 +622,45 @@ local spyRemotesBtnCorner = Instance.new("UICorner")
 spyRemotesBtnCorner.CornerRadius = UDim.new(0, 6)
 spyRemotesBtnCorner.Parent = spyRemotesBtn
 
+-- Go to top button (main screen) – same as in Spawned Bubus: teleport to top Bubu, then take + teleport outside after 2s
+local goToTopBtn = Instance.new("TextButton")
+goToTopBtn.Name = "GoToTop"
+goToTopBtn.Size = UDim2.new(0.5, -10, 0, 28)
+goToTopBtn.Position = UDim2.new(0, 8, 0, 208)
+goToTopBtn.BackgroundColor3 = Color3.fromRGB(50, 80, 120)
+goToTopBtn.BorderSizePixel = 0
+goToTopBtn.Text = "Go to top"
+goToTopBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+goToTopBtn.TextSize = 12
+goToTopBtn.Font = Enum.Font.Gotham
+goToTopBtn.Parent = main
+
+local goToTopBtnCorner = Instance.new("UICorner")
+goToTopBtnCorner.CornerRadius = UDim.new(0, 6)
+goToTopBtnCorner.Parent = goToTopBtn
+
+-- Teleport back button (main screen) – teleport to outside field position
+local teleportBackBtn = Instance.new("TextButton")
+teleportBackBtn.Name = "TeleportBack"
+teleportBackBtn.Size = UDim2.new(0.5, -10, 0, 28)
+teleportBackBtn.Position = UDim2.new(0.5, 2, 0, 208)
+teleportBackBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 90)
+teleportBackBtn.BorderSizePixel = 0
+teleportBackBtn.Text = "Teleport back"
+teleportBackBtn.TextColor3 = Color3.fromRGB(230, 200, 255)
+teleportBackBtn.TextSize = 11
+teleportBackBtn.Font = Enum.Font.Gotham
+teleportBackBtn.Parent = main
+
+local teleportBackBtnCorner = Instance.new("UICorner")
+teleportBackBtnCorner.CornerRadius = UDim.new(0, 6)
+teleportBackBtnCorner.Parent = teleportBackBtn
+
 -- Player position display
 local positionLabel = Instance.new("TextLabel")
 positionLabel.Name = "Position"
 positionLabel.Size = UDim2.new(1, -16, 0, 20)
-positionLabel.Position = UDim2.new(0, 8, 0, 208)
+positionLabel.Position = UDim2.new(0, 8, 0, 242)
 positionLabel.BackgroundTransparency = 1
 positionLabel.Text = "Position: --, --, --"
 positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -986,6 +1020,19 @@ end)
 
 spyRemotesBtn.MouseButton1Click:Connect(function()
 	startRemoteSpy(30)
+end)
+
+goToTopBtn.MouseButton1Click:Connect(function()
+	goToTopThenTakeAndTeleportOutside()
+end)
+
+teleportBackBtn.MouseButton1Click:Connect(function()
+	local character = LocalPlayer.Character
+	if not character then return end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.CFrame = CFrame.new(OUTSIDE_FIELD_POSITION)
+	end
 end)
 
 -- Current speed value (0–1)
