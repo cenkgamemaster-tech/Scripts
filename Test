@@ -241,7 +241,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 8"
+objectsBtn.Text = "Spawned Bubus 9"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -521,6 +521,56 @@ local function openObjectsWindow()
 		local ok2, bbox = pcall(function() return model:GetBoundingBox() end)
 		if ok2 and bbox then
 			add("BoundingBox: " .. tostring(bbox))
+		end
+
+		-- Linked UI / labels (name, Rarity, money) – parts or guis that display text above NPC
+		add("")
+		add("=== Linked UI / labels (name, Rarity, money) ===")
+		local function collectGuiLabels(gui)
+			local out = {}
+			for _, desc in ipairs(gui:GetDescendants()) do
+				if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+					local t = desc.Text
+					local text = (t and #tostring(t) <= 60) and t or (t and "..." or "")
+					table.insert(out, desc.Name .. " = \"" .. text .. "\"")
+				elseif desc:IsA("ImageLabel") or desc:IsA("ImageButton") then
+					table.insert(out, desc.Name .. " [Image]")
+				end
+			end
+			return out
+		end
+		local hasLinked = false
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("BillboardGui") then
+				hasLinked = true
+				add("  BillboardGui: " .. desc:GetFullName())
+				local labels = collectGuiLabels(desc)
+				for _, s in ipairs(labels) do add("    " .. s) end
+				if #labels == 0 then add("    (no TextLabel/TextButton)") end
+			elseif desc:IsA("SurfaceGui") then
+				hasLinked = true
+				add("  SurfaceGui: " .. desc:GetFullName())
+				local labels = collectGuiLabels(desc)
+				for _, s in ipairs(labels) do add("    " .. s) end
+				if #labels == 0 then add("    (no TextLabel/TextButton)") end
+			end
+		end
+		-- Parts/Models that hold these Guis (the "label" part on top of NPC)
+		for _, desc in ipairs(model:GetDescendants()) do
+			if (desc:IsA("BasePart") or desc:IsA("Model")) and (desc:FindFirstChildOfClass("BillboardGui") or desc:FindFirstChildOfClass("SurfaceGui")) then
+				hasLinked = true
+				add("  Part/Model with Gui: " .. desc.Name .. " [" .. desc.ClassName .. "] @ " .. desc:GetFullName())
+			end
+		end
+		-- ObjectValue references (links to another instance)
+		for _, child in ipairs(model:GetDescendants()) do
+			if child:IsA("ObjectValue") and child.Value then
+				hasLinked = true
+				add("  ObjectValue: " .. child.Name .. " -> " .. child.Value:GetFullName() .. " [" .. child.Value.ClassName .. "]")
+			end
+		end
+		if not hasLinked then
+			add("  (no BillboardGui/SurfaceGui or ObjectValue found)")
 		end
 
 		-- Child list (summary: what's inside the model)
