@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 1"
+objectsBtn.Text = "Spawned Bubus 2"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -400,15 +400,31 @@ local function openObjectsWindow()
 	detailsScroll.ScrollBarThickness = 8
 	detailsScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
 	detailsScroll.ScrollBarImageTransparency = 0
-	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	detailsScroll.ScrollingEnabled = true
+	detailsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailsScroll.Parent = detailsFrame
+
+	-- Wrapper frame so ScrollingFrame canvas size updates correctly with long text
+	local detailsCanvas = Instance.new("Frame")
+	detailsCanvas.Name = "DetailsCanvas"
+	detailsCanvas.Size = UDim2.new(1, -8, 0, 0)
+	detailsCanvas.Position = UDim2.new(0, 0, 0, 0)
+	detailsCanvas.BackgroundTransparency = 1
+	detailsCanvas.AutomaticSize = Enum.AutomaticSize.Y
+	detailsCanvas.Parent = detailsScroll
+
+	local detailsPadding = Instance.new("UIPadding")
+	detailsPadding.PaddingLeft = UDim.new(0, 4)
+	detailsPadding.PaddingTop = UDim.new(0, 4)
+	detailsPadding.PaddingRight = UDim.new(0, 4)
+	detailsPadding.PaddingBottom = UDim.new(0, 4)
+	detailsPadding.Parent = detailsCanvas
 
 	local detailsLabel = Instance.new("TextLabel")
 	detailsLabel.Name = "DetailsLabel"
-	detailsLabel.Size = UDim2.new(1, -16, 0, 0)
-	detailsLabel.Position = UDim2.new(0, 4, 0, 4)
+	detailsLabel.Size = UDim2.new(1, 0, 0, 0)
+	detailsLabel.Position = UDim2.new(0, 0, 0, 0)
 	detailsLabel.AutomaticSize = Enum.AutomaticSize.Y
 	detailsLabel.BackgroundTransparency = 1
 	detailsLabel.Text = "Click a model to see details."
@@ -418,7 +434,7 @@ local function openObjectsWindow()
 	detailsLabel.TextXAlignment = Enum.TextXAlignment.Left
 	detailsLabel.TextYAlignment = Enum.TextYAlignment.Top
 	detailsLabel.TextWrapped = true
-	detailsLabel.Parent = detailsScroll
+	detailsLabel.Parent = detailsCanvas
 
 	local workspace = game:GetService("Workspace")
 	local ROW_HEIGHT = 22
@@ -735,7 +751,13 @@ local function beginSliderDrag()
 	sliderDragging = true
 	sliderInputConnection = UserInputService.InputChanged:Connect(function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseMovement then
-			updateSliderFromMouse(inp.Position.X)
+			-- Only update slider when mouse is over the track
+			local trackPos = sliderTrack.AbsolutePosition
+			local trackSize = sliderTrack.AbsoluteSize
+			local x, y = inp.Position.X, inp.Position.Y
+			if x >= trackPos.X and x <= trackPos.X + trackSize.X and y >= trackPos.Y and y <= trackPos.Y + trackSize.Y then
+				updateSliderFromMouse(x)
+			end
 		end
 	end)
 	local endConn
