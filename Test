@@ -321,8 +321,8 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	end
 end
 
--- Take nearest Bubu and teleport (player + Bubu) to outside the field. Uses game remote if found, else reparent.
-local function takeNearestBubuAndTeleportOutside()
+-- Take nearest Bubu and teleport (player + Bubu) to outside the field. Optional onArrived() called when MoveTo finishes.
+local function takeNearestBubuAndTeleportOutside(onArrived)
 	local character = LocalPlayer.Character
 	if not character then return end
 	local root = character:FindFirstChild("HumanoidRootPart")
@@ -344,39 +344,40 @@ local function takeNearestBubuAndTeleportOutside()
 			nearest = model
 		end
 	end
-	-- Use MoveTo only: hold E then walk from current position to (same X, same Y, -10).
+	-- Use MoveTo only: hold E then walk from current position to (same X, same Y, -10). Optional onArrived() when done.
 	local startPos = root.Position
 	local x, y = startPos.X, startPos.Y
 	task.spawn(function()
 		local char = LocalPlayer.Character
-		if not char then return end
+		if not char then if onArrived then onArrived() end return end
 		task.wait(0.2)
 		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		if nearest then releasePickupState(nearest) end
+		if onArrived then onArrived() end
 	end)
 end
 
--- Full flow: teleport to top Bubu → short wait → take nearest Bubu (our function) and teleport outside (no E key).
-local function goToTopThenTakeAndTeleportOutside()
+-- Full flow: teleport to top Bubu → hold E → take nearest Bubu and MoveTo outside. Optional onArrived() when arrived.
+local function goToTopThenTakeAndTeleportOutside(onArrived)
 	local topPos = getTopBubuPosition()
-	if not topPos then return end
+	if not topPos then if onArrived then onArrived() end return end
 	local character = LocalPlayer.Character
-	if not character then return end
+	if not character then if onArrived then onArrived() end return end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root then return end
+	if not root then if onArrived then onArrived() end return end
 	-- 1) Teleport to top Bubu (you are now near the best NPC)
 	root.CFrame = CFrame.new(topPos)
 	-- 2) At that moment hold E to pick up the NPC (no delay – hold right away)
 	holdEKey(HOLD_E_DURATION)
 	-- 3) Then MoveTo to (same X, same Y, -10)
-	takeNearestBubuAndTeleportOutside()
+	takeNearestBubuAndTeleportOutside(onArrived)
 end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 234)
+main.Size = UDim2.new(0, 220, 0, 268)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -575,7 +576,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 8"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -636,11 +637,63 @@ local teleportBackBtnCorner = Instance.new("UICorner")
 teleportBackBtnCorner.CornerRadius = UDim.new(0, 6)
 teleportBackBtnCorner.Parent = teleportBackBtn
 
+-- Start collecting NPCs button (under Go to top row)
+local startCollectBtn = Instance.new("TextButton")
+startCollectBtn.Name = "StartCollect"
+startCollectBtn.Size = UDim2.new(0.5, -10, 0, 28)
+startCollectBtn.Position = UDim2.new(0, 8, 0, 208)
+startCollectBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 50)
+startCollectBtn.BorderSizePixel = 0
+startCollectBtn.Text = "Start collecting NPCs"
+startCollectBtn.TextColor3 = Color3.fromRGB(200, 255, 220)
+startCollectBtn.TextSize = 10
+startCollectBtn.Font = Enum.Font.Gotham
+startCollectBtn.Parent = main
+
+local startCollectBtnCorner = Instance.new("UICorner")
+startCollectBtnCorner.CornerRadius = UDim.new(0, 6)
+startCollectBtnCorner.Parent = startCollectBtn
+
+-- Stop collecting NPCs button
+local stopCollectBtn = Instance.new("TextButton")
+stopCollectBtn.Name = "StopCollect"
+stopCollectBtn.Size = UDim2.new(0.5, -10, 0, 28)
+stopCollectBtn.Position = UDim2.new(0.5, 2, 0, 208)
+stopCollectBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+stopCollectBtn.BorderSizePixel = 0
+stopCollectBtn.Text = "Stop collecting"
+stopCollectBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+stopCollectBtn.TextSize = 11
+stopCollectBtn.Font = Enum.Font.Gotham
+stopCollectBtn.Parent = main
+
+local stopCollectBtnCorner = Instance.new("UICorner")
+stopCollectBtnCorner.CornerRadius = UDim.new(0, 6)
+stopCollectBtnCorner.Parent = stopCollectBtn
+
+local collectingActive = false
+local function runCollectingLoop()
+	while collectingActive do
+		local list = getSortedBubuListTopLevel()
+		if #list == 0 then
+			task.wait(2)
+		else
+			local arrived = false
+			goToTopThenTakeAndTeleportOutside(function() arrived = true end)
+			while not arrived and collectingActive do
+				task.wait(0.5)
+			end
+			if not collectingActive then break end
+			task.wait(1)
+		end
+	end
+end
+
 -- Player position display
 local positionLabel = Instance.new("TextLabel")
 positionLabel.Name = "Position"
 positionLabel.Size = UDim2.new(1, -16, 0, 20)
-positionLabel.Position = UDim2.new(0, 8, 0, 208)
+positionLabel.Position = UDim2.new(0, 8, 0, 242)
 positionLabel.BackgroundTransparency = 1
 positionLabel.Text = "Position: --, --, --"
 positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -1000,6 +1053,16 @@ end)
 
 goToTopBtn.MouseButton1Click:Connect(function()
 	goToTopThenTakeAndTeleportOutside()
+end)
+
+startCollectBtn.MouseButton1Click:Connect(function()
+	if collectingActive then return end
+	collectingActive = true
+	task.spawn(runCollectingLoop)
+end)
+
+stopCollectBtn.MouseButton1Click:Connect(function()
+	collectingActive = false
 end)
 
 teleportBackBtn.MouseButton1Click:Connect(function()
