@@ -35,14 +35,7 @@ local DEFAULT_WALK_SPEED = 16
 -- Objects list: only show instances whose Name contains any of these (case-insensitive)
 local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
 
--- Snapshot of workspace objects that existed when script loaded (static); we only list objects spawned after this
 local workspace = game:GetService("Workspace")
-local initialWorkspaceObjects = {}
-do
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		initialWorkspaceObjects[obj] = true
-	end
-end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
@@ -242,7 +235,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus"
+objectsBtn.Text = "Spawned Bubus 1"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -419,8 +412,7 @@ local function openObjectsWindow()
 		local objects = workspace:GetDescendants()
 		local order = 0
 		for _, obj in ipairs(objects) do
-			-- Only list objects spawned after script load (exclude static/initial objects)
-			if not initialWorkspaceObjects[obj] and nameMatchesAny(string.lower(obj.Name)) then
+			if nameMatchesAny(string.lower(obj.Name)) then
 				order = order + 1
 				addRow(obj.Name, obj.ClassName, order)
 			end
