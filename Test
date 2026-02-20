@@ -398,29 +398,34 @@ local function takeNearestBubuAndTeleportOutside()
 		end
 	end
 	if not nearest then return end
-	-- Try game remote (PickupNPCStateChanged often doesn't work from script; we still reparent so Bubu comes with us)
+	-- Reparent first so Bubu is ours (game remote often doesn't work; this is the only reliable way client-side)
+	pcall(function() nearest.Parent = character end)
 	tryTakeViaRemote(nearest)
-	task.wait(0.15)
-	-- Reparent so NPC moves with us; then step teleport 10 until Z = -30, then MoveTo to Z = -10
-	if nearest.Parent ~= character then
-		nearest.Parent = character
-	end
-	-- Teleport to first exit; step teleport (Z only, X Y unchanged) until Z = -30; then MoveTo to (x, y, -10)
+	task.wait(0.1)
+	pcall(function() nearest.Parent = character end)
+	-- Teleport to first exit; step teleport (Z only) until Z = -30; then MoveTo to (x, y, -10)
 	root.CFrame = CFrame.new(TELEPORT_FIRST_EXIT)
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		local r = char and char:FindFirstChild("HumanoidRootPart")
 		if not r then releasePickupState(nearest) return end
-		task.wait(0.3)
+		task.wait(0.2)
 		local x, y = TELEPORT_FIRST_EXIT.X, TELEPORT_FIRST_EXIT.Y
 		local z = TELEPORT_FIRST_EXIT.Z
+		-- Re-parent before each move so Bubu stays with us (server may keep reverting)
+		local function attachBubu()
+			local c = LocalPlayer.Character
+			if nearest and nearest.Parent and c then pcall(function() nearest.Parent = c end) end
+		end
 		-- Step teleport: change only Z until Z = -30 (do not change X and Y)
 		while z < TELEPORT_BACK_Z_END do
+			attachBubu()
 			z = math.min(z + TELEPORT_BACK_Z_STEP, TELEPORT_BACK_Z_END)
 			r.CFrame = CFrame.new(x, y, z)
 			task.wait(0.1)
 		end
-		-- From (x, y, -30) MoveTo to (x, y, -10) – do not change X and Y
+		attachBubu()
+		-- From (x, y, -30) MoveTo to (x, y, -10)
 		local moveToTarget = Vector3.new(x, y, -10)
 		walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		releasePickupState(nearest)
@@ -642,7 +647,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 7"
+objectsBtn.Text = "Spawned Bubus 8"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
