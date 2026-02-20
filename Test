@@ -34,6 +34,8 @@ local DEFAULT_WALK_SPEED = 16
 
 -- Objects list: only show instances whose Name contains any of these (case-insensitive)
 local OBJECTS_LIST_NAME_FILTERS = { "Bubu", "Toffee", "Noob" }
+-- Objects list: only show models under this parent (use exact FullName; set to nil to skip parent filter)
+local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.Guards"
 
 local workspace = game:GetService("Workspace")
 
@@ -235,7 +237,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 3"
+objectsBtn.Text = "Spawned Bubus 4"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -479,13 +481,17 @@ local function openObjectsWindow()
 			end
 		end
 		setDetailsText("Click a model to see details.")
-		-- List only Model instances
+		-- List only Model instances, optionally under OBJECTS_LIST_PARENT_FILTER
 		local objects = workspace:GetDescendants()
 		local order = 0
 		for _, obj in ipairs(objects) do
 			if obj.ClassName == "Model" then
-				order = order + 1
-				addRow(obj, order)
+				local parentMatch = not OBJECTS_LIST_PARENT_FILTER
+					or (obj.Parent and obj.Parent:GetFullName() == OBJECTS_LIST_PARENT_FILTER)
+				if parentMatch then
+					order = order + 1
+					addRow(obj, order)
+				end
 			end
 		end
 	end
