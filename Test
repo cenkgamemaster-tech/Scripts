@@ -77,35 +77,7 @@ local function holdEKey(durationSeconds)
 	return false
 end
 
--- Get all Bubu models (same filter as list: path + Mutation ~= Normal)
-local function getBubuModels()
-	local collected = {}
-	local prefix = OBJECTS_LIST_PARENT_FILTER
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj.ClassName == "Model" then
-			local fullName = obj:GetFullName()
-			local parentMatch = not prefix or prefix == ""
-				or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
-			if parentMatch then
-				local mutation = obj:GetAttribute("Mutation")
-				if mutation ~= nil and mutation ~= "Normal" then
-					table.insert(collected, obj)
-				end
-			end
-		end
-	end
-	return collected
-end
-
--- Rarity sort (same as list: rarest first). Used for "Go to top" and E-hold teleport.
-local RARITY_ORDER = {
-	Exclusive = 1, Secret = 2, God = 3, Mythic = 4, Legendary = 5,
-	Epic = 6, Rare = 7, Uncommon = 8, Common = 9
-}
-local function raritySortKey(rarityStr)
-	if not rarityStr or rarityStr == "" then return 99 end
-	return RARITY_ORDER[rarityStr] or 99
-end
+-- Get all Bubu models (path match; include if Mutation ~= Normal, or if Mutation is Normal but Rarity is Secret/Exclusive)
 local function getCharacterInfoLabelTopLevel(model, labelName)
 	for _, desc in ipairs(model:GetDescendants()) do
 		if desc:IsA("BillboardGui") and desc.Name == "CharacterInfo" then
@@ -127,6 +99,42 @@ local function getCharacterInfoLabelTopLevel(model, labelName)
 		end
 	end
 	return nil
+end
+
+local function getBubuModels()
+	local collected = {}
+	local prefix = OBJECTS_LIST_PARENT_FILTER
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj.ClassName == "Model" then
+			local fullName = obj:GetFullName()
+			local parentMatch = not prefix or prefix == ""
+				or (fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. ".")
+			if parentMatch then
+				local mutation = obj:GetAttribute("Mutation")
+				if mutation ~= nil then
+					if mutation ~= "Normal" then
+						table.insert(collected, obj)
+					else
+						local rarity = getCharacterInfoLabelTopLevel(obj, "Rarity")
+						if rarity == "Secret" or rarity == "Exclusive" then
+							table.insert(collected, obj)
+						end
+					end
+				end
+			end
+		end
+	end
+	return collected
+end
+
+-- Rarity sort (same as list: rarest first). Used for "Go to top" and E-hold teleport.
+local RARITY_ORDER = {
+	Exclusive = 1, Secret = 2, God = 3, Mythic = 4, Legendary = 5,
+	Epic = 6, Rare = 7, Uncommon = 8, Common = 9
+}
+local function raritySortKey(rarityStr)
+	if not rarityStr or rarityStr == "" then return 99 end
+	return RARITY_ORDER[rarityStr] or 99
 end
 local function getSortedBubuListTopLevel()
 	local collected = getBubuModels()
@@ -567,7 +575,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 7"
+objectsBtn.Text = "Spawned Bubus 8"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
