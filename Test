@@ -345,10 +345,15 @@ local function takeNearestBubuAndTeleportOutside()
 		if not r then return end
 		task.wait(0.2)
 		while z > -31 do
-			holdEKey(HOLD_E_DURATION)
+			-- Teleport first so we're at the new Z, then hold NPC there (re-apply CFrame so it sticks)
 			z = math.max(z - 10, -31)
-			r.CFrame = CFrame.new(x, y, z)
-			task.wait(0.15)
+			local targetCf = CFrame.new(x, y, z)
+			r.CFrame = targetCf
+			for _ = 1, 10 do
+				task.wait(0.03)
+				if r then r.CFrame = targetCf end
+			end
+			holdEKey(HOLD_E_DURATION)
 		end
 		-- At -31: hold NPC again, then MoveTo to (same X, same Y, -10)
 		holdEKey(HOLD_E_DURATION)
@@ -575,7 +580,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 5"
+objectsBtn.Text = "Spawned Bubus 6"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
