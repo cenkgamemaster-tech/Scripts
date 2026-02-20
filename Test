@@ -41,7 +41,7 @@ local OBJECTS_LIST_PARENT_FILTER = "Workspace.Map.Zones.Field.NPC"
 -- Take Bubu with E: max distance to consider "near" the player (studs)
 local TAKE_BUBU_MAX_RANGE = 30
 -- When holding E to take Bubu: teleport destination (player + Bubu) outside the field
-local OUTSIDE_FIELD_POSITION = Vector3.new(0, 50, 500)  -- change to your desired "outside field" location
+local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)  -- change to your desired "outside field" location
 
 local workspace = game:GetService("Workspace")
 
@@ -147,28 +147,19 @@ local function takeNearestBubuAndTeleportOutside()
 	nearest.Parent = character
 end
 
--- E must be held for 2 seconds to take Bubu and teleport
-local eKeyHeld = false
-local eHoldWaiting = false
-UserInputService.InputBegan:Connect(function(inp)
-	if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == Enum.KeyCode.E then
-		if not eHoldWaiting then
-			eHoldWaiting = true
-			eKeyHeld = true
-			task.delay(2, function()
-				if eKeyHeld then
-					takeNearestBubuAndTeleportOutside()
-				end
-				eHoldWaiting = false
-			end)
-		end
-	end
-end)
-UserInputService.InputEnded:Connect(function(inp)
-	if inp.UserInputType == Enum.UserInputType.Keyboard and inp.KeyCode == Enum.KeyCode.E then
-		eKeyHeld = false
-	end
-end)
+-- Full flow: teleport to top Bubu → short wait → take nearest Bubu (our function) and teleport outside (no E key).
+local function goToTopThenTakeAndTeleportOutside()
+	local topPos = getTopBubuPosition()
+	if not topPos then return end
+	local character = LocalPlayer.Character
+	if not character then return end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	-- 1) Teleport to top Bubu
+	root.CFrame = CFrame.new(topPos)
+	-- 2) Brief wait so we're at the Bubu, then use our take function (find nearest, reparent to character, teleport outside)
+	task.delay(2, takeNearestBubuAndTeleportOutside)
+end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
@@ -371,7 +362,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 4"
+objectsBtn.Text = "Spawned Bubus 5"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -690,10 +681,9 @@ local function openObjectsWindow()
 	refreshList()
 
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
-	-- Go to top: teleport to top Bubu, then automatically after 2 seconds take Bubu and teleport outside (no need to hold E)
+	-- Go to top: script handles teleport to top Bubu + 2 sec wait + take Bubu + teleport outside (no E key)
 	objTeleportBtn.MouseButton1Click:Connect(function()
-		teleportToTopBubu()
-		task.delay(2, takeNearestBubuAndTeleportOutside)
+		goToTopThenTakeAndTeleportOutside()
 	end)
 
 	-- Auto-refresh list every 5 seconds while window is open
