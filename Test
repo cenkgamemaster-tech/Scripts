@@ -34,7 +34,7 @@ local DEFAULT_WALK_SPEED = 16
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 138)
+main.Size = UDim2.new(0, 220, 0, 168)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -172,8 +172,8 @@ speedLabel.Parent = main
 
 local speedValueLabel = Instance.new("TextLabel")
 speedValueLabel.Name = "SpeedValue"
-speedValueLabel.Size = UDim2.new(0, 36, 0, 20)
-speedValueLabel.Position = UDim2.new(1, -44, 0, 64)
+speedValueLabel.Size = UDim2.new(0, 44, 0, 20)
+speedValueLabel.Position = UDim2.new(1, -52, 0, 64)
 speedValueLabel.BackgroundTransparency = 1
 speedValueLabel.Text = tostring(DEFAULT_WALK_SPEED)
 speedValueLabel.TextColor3 = Color3.fromRGB(200, 230, 255)
@@ -222,6 +222,187 @@ sliderThumb.Parent = sliderTrack
 local sliderThumbCorner = Instance.new("UICorner")
 sliderThumbCorner.CornerRadius = UDim.new(1, 0)
 sliderThumbCorner.Parent = sliderThumb
+
+-- Objects list button
+local objectsBtn = Instance.new("TextButton")
+objectsBtn.Name = "Objects"
+objectsBtn.Size = UDim2.new(1, -16, 0, 28)
+objectsBtn.Position = UDim2.new(0, 8, 0, 108)
+objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
+objectsBtn.BorderSizePixel = 0
+objectsBtn.Text = "Spawned Objects"
+objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+objectsBtn.TextSize = 12
+objectsBtn.Font = Enum.Font.Gotham
+objectsBtn.Parent = main
+
+local objectsBtnCorner = Instance.new("UICorner")
+objectsBtnCorner.CornerRadius = UDim.new(0, 6)
+objectsBtnCorner.Parent = objectsBtn
+
+-- Objects list window (new window when button clicked)
+local function openObjectsWindow()
+	local existingObjGui = PlayerGui:FindFirstChild("PlayerNameTest_ObjectsList")
+	if existingObjGui then
+		existingObjGui:Destroy()
+	end
+
+	local objScreen = Instance.new("ScreenGui")
+	objScreen.Name = "PlayerNameTest_ObjectsList"
+	objScreen.ResetOnSpawn = false
+	objScreen.Parent = PlayerGui
+
+	local objMain = Instance.new("Frame")
+	objMain.Name = "Main"
+	objMain.Size = UDim2.new(0, 320, 0, 340)
+	objMain.Position = UDim2.new(0.5, -160, 0.5, -170)
+	objMain.AnchorPoint = Vector2.new(0.5, 0.5)
+	objMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+	objMain.BorderSizePixel = 0
+	objMain.Parent = objScreen
+
+	local objCorner = Instance.new("UICorner")
+	objCorner.CornerRadius = UDim.new(0, 10)
+	objCorner.Parent = objMain
+
+	local objTop = Instance.new("Frame")
+	objTop.Name = "Top"
+	objTop.Size = UDim2.new(1, 0, 0, 28)
+	objTop.Position = UDim2.new(0, 0, 0, 0)
+	objTop.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+	objTop.BorderSizePixel = 0
+	objTop.Active = true
+	objTop.Parent = objMain
+
+	local objTopCorner = Instance.new("UICorner")
+	objTopCorner.CornerRadius = UDim.new(0, 10)
+	objTopCorner.Parent = objTop
+
+	local objTitle = Instance.new("TextLabel")
+	objTitle.Name = "Title"
+	objTitle.Size = UDim2.new(1, -44, 0, 28)
+	objTitle.Position = UDim2.new(0, 8, 0, 0)
+	objTitle.BackgroundTransparency = 1
+	objTitle.Active = true
+	objTitle.Text = "Spawned Objects"
+	objTitle.TextColor3 = Color3.fromRGB(200, 230, 255)
+	objTitle.TextSize = 14
+	objTitle.Font = Enum.Font.GothamBold
+	objTitle.TextXAlignment = Enum.TextXAlignment.Left
+	objTitle.Parent = objTop
+
+	local objCloseBtn = Instance.new("TextButton")
+	objCloseBtn.Name = "Close"
+	objCloseBtn.Size = UDim2.new(0, 28, 0, 28)
+	objCloseBtn.Position = UDim2.new(1, -28, 0, 0)
+	objCloseBtn.BackgroundTransparency = 1
+	objCloseBtn.Text = "×"
+	objCloseBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	objCloseBtn.TextSize = 20
+	objCloseBtn.Font = Enum.Font.GothamBold
+	objCloseBtn.Parent = objTop
+
+	-- Drag for objects window
+	local objDragInput, objDragStart, objStartPos
+	local objInputChangedConn
+	local function onObjDragStart(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			objDragInput = inp
+			objDragStart = inp.Position
+			objStartPos = objMain.Position
+			inp.Changed:Connect(function()
+				if inp.UserInputState == Enum.UserInputState.End then objDragInput = nil end
+			end)
+		end
+	end
+	objTop.InputBegan:Connect(onObjDragStart)
+	objTitle.InputBegan:Connect(onObjDragStart)
+	objInputChangedConn = UserInputService.InputChanged:Connect(function(inp)
+		if objDragInput and inp == objDragInput and inp.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = inp.Position - objDragStart
+			objMain.Position = UDim2.new(objStartPos.X.Scale, objStartPos.X.Offset + delta.X, objStartPos.Y.Scale, objStartPos.Y.Offset + delta.Y)
+		end
+	end)
+
+	objCloseBtn.MouseButton1Click:Connect(function()
+		if objInputChangedConn then objInputChangedConn:Disconnect() end
+		objScreen:Destroy()
+	end)
+
+	-- Scrollable list
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Name = "List"
+	scroll.Size = UDim2.new(1, -16, 1, -44)
+	scroll.Position = UDim2.new(0, 8, 0, 36)
+	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 6
+	scroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scroll.Parent = objMain
+
+	local scrollCorner = Instance.new("UICorner")
+	scrollCorner.CornerRadius = UDim.new(0, 6)
+	scrollCorner.Parent = scroll
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 2)
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Parent = scroll
+
+	local workspace = game:GetService("Workspace")
+	local ROW_HEIGHT = 22
+	local function addRow(name, className, layoutOrder)
+		local row = Instance.new("Frame")
+		row.Name = name
+		row.Size = UDim2.new(1, -8, 0, ROW_HEIGHT)
+		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
+		row.BorderSizePixel = 0
+		row.LayoutOrder = layoutOrder
+		row.Parent = scroll
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 4)
+		rowCorner.Parent = row
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.new(1, -8, 1, -4)
+		lbl.Position = UDim2.new(0, 6, 0, 2)
+		lbl.BackgroundTransparency = 1
+		lbl.Text = name .. "  [" .. className .. "]"
+		lbl.TextColor3 = Color3.fromRGB(200, 220, 255)
+		lbl.TextSize = 11
+		lbl.Font = Enum.Font.Gotham
+		lbl.TextXAlignment = Enum.TextXAlignment.Left
+		lbl.TextTruncate = Enum.TextTruncate.AtEnd
+		lbl.Parent = row
+		return row
+	end
+
+	local function refreshList()
+		for _, child in ipairs(scroll:GetChildren()) do
+			if child ~= listLayout then
+				child:Destroy()
+			end
+		end
+		local objects = workspace:GetDescendants()
+		for i, obj in ipairs(objects) do
+			addRow(obj.Name, obj.ClassName, i)
+		end
+	end
+
+	refreshList()
+
+	-- Refresh list every 3 seconds while window is open
+	task.spawn(function()
+		while objScreen.Parent do
+			task.wait(3)
+			if not objScreen.Parent then break end
+			refreshList()
+		end
+	end)
+end
+
+objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
 
 -- Current speed value (0–1)
 local speedNorm = (DEFAULT_WALK_SPEED - MIN_WALK_SPEED) / (MAX_WALK_SPEED - MIN_WALK_SPEED)
