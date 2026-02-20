@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 8"
+objectsBtn.Text = "Spawned Bubus 9"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -290,7 +290,7 @@ local function openObjectsWindow()
 
 	local objTitle = Instance.new("TextLabel")
 	objTitle.Name = "Title"
-	objTitle.Size = UDim2.new(1, -84, 0, 28)
+	objTitle.Size = UDim2.new(1, -148, 0, 28)
 	objTitle.Position = UDim2.new(0, 8, 0, 0)
 	objTitle.BackgroundTransparency = 1
 	objTitle.Active = true
@@ -355,6 +355,18 @@ local function openObjectsWindow()
 	objRefreshBtn.TextSize = 12
 	objRefreshBtn.Font = Enum.Font.Gotham
 	objRefreshBtn.Parent = objTop
+
+	-- Teleport to top Bubu button
+	local objTeleportBtn = Instance.new("TextButton")
+	objTeleportBtn.Name = "Teleport"
+	objTeleportBtn.Size = UDim2.new(0, 70, 0, 28)
+	objTeleportBtn.Position = UDim2.new(1, -148, 0, 0)
+	objTeleportBtn.BackgroundTransparency = 1
+	objTeleportBtn.Text = "Go to top"
+	objTeleportBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	objTeleportBtn.TextSize = 11
+	objTeleportBtn.Font = Enum.Font.Gotham
+	objTeleportBtn.Parent = objTop
 
 	-- Scrollable list (full width)
 	local scroll = Instance.new("ScrollingFrame")
@@ -453,13 +465,8 @@ local function openObjectsWindow()
 		return row
 	end
 
-	local function refreshList()
-		for _, child in ipairs(scroll:GetChildren()) do
-			if child ~= listLayout then
-				child:Destroy()
-			end
-		end
-		-- Collect models under path filter with Mutation ~= "Normal"
+	-- Returns sorted list of Bubus (same order as list: rarest first)
+	local function getSortedBubuList()
 		local collected = {}
 		local prefix = OBJECTS_LIST_PARENT_FILTER
 		for _, obj in ipairs(workspace:GetDescendants()) do
@@ -475,12 +482,42 @@ local function openObjectsWindow()
 				end
 			end
 		end
-		-- Sort by Rarity: Exclusive (rarest) first, then Secret, God, Mythic, Legendary, Epic, Rare, Uncommon, Common last
 		table.sort(collected, function(a, b)
 			local rarityA = getCharacterInfoLabel(a, "Rarity")
 			local rarityB = getCharacterInfoLabel(b, "Rarity")
 			return raritySortKey(rarityA) < raritySortKey(rarityB)
 		end)
+		return collected
+	end
+
+	local function teleportToTopBubu()
+		local character = LocalPlayer.Character
+		if not character then return end
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+		local sorted = getSortedBubuList()
+		if #sorted == 0 then return end
+		local topModel = sorted[1]
+		local pos
+		local ok, pivot = pcall(function() return topModel:GetPivot() end)
+		if ok and pivot then
+			pos = pivot.Position
+		elseif topModel.PrimaryPart then
+			pos = topModel.PrimaryPart.Position
+		else
+			return
+		end
+		-- Teleport 4 studs in front of the Bubu so player doesn't spawn inside it
+		root.CFrame = CFrame.new(pos + Vector3.new(0, 0, 4))
+	end
+
+	local function refreshList()
+		for _, child in ipairs(scroll:GetChildren()) do
+			if child ~= listLayout then
+				child:Destroy()
+			end
+		end
+		local collected = getSortedBubuList()
 		for i, model in ipairs(collected) do
 			addRow(model, i)
 		end
@@ -489,6 +526,7 @@ local function openObjectsWindow()
 	refreshList()
 
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
+	objTeleportBtn.MouseButton1Click:Connect(teleportToTopBubu)
 
 	-- Auto-refresh list every 5 seconds while window is open
 	task.spawn(function()
