@@ -239,7 +239,7 @@ objectsBtn.Size = UDim2.new(1, -16, 0, 28)
 objectsBtn.Position = UDim2.new(0, 8, 0, 108)
 objectsBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 120)
 objectsBtn.BorderSizePixel = 0
-objectsBtn.Text = "Spawned Bubus 3"
+objectsBtn.Text = "Spawned Bubus 4"
 objectsBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 objectsBtn.TextSize = 12
 objectsBtn.Font = Enum.Font.Gotham
@@ -451,108 +451,6 @@ local function openObjectsWindow()
 		local lines = {}
 		local function add(s) table.insert(lines, s) end
 
-		-- Basic identity
-		add("=== Identity ===")
-		add("Name: " .. model.Name)
-		add("ClassName: " .. model.ClassName)
-		add("FullName: " .. model:GetFullName())
-		add("Parent: " .. (model.Parent and model.Parent:GetFullName() or "nil"))
-		add("Children: " .. #model:GetChildren())
-		add("Descendants: " .. #model:GetDescendants())
-
-		-- All attributes on the model (every key; check for Rarity, NPCId, Mutation, etc.)
-		add("")
-		add("=== All attributes (on this Model) ===")
-		local attrs = model:GetAttributes()
-		if next(attrs) then
-			local keys = {}
-			for k in pairs(attrs) do table.insert(keys, k) end
-			table.sort(keys)
-			for _, k in ipairs(keys) do
-				local v = attrs[k]
-				local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
-				add("  " .. k .. " = " .. vStr)
-			end
-			add("(total " .. #keys .. " attribute(s) on model)")
-		else
-			add("(none)")
-		end
-
-		-- All attributes on every descendant (so you see Rarity etc. if on a child)
-		add("")
-		add("=== All attributes (on descendants) ===")
-		local anyDescAttr = false
-		for _, desc in ipairs(model:GetDescendants()) do
-			local dAttrs = desc:GetAttributes()
-			if next(dAttrs) then
-				anyDescAttr = true
-				add("  [" .. desc.Name .. " (" .. desc.ClassName .. ")]")
-				local keys = {}
-				for k in pairs(dAttrs) do table.insert(keys, k) end
-				table.sort(keys)
-				for _, k in ipairs(keys) do
-					local v = dAttrs[k]
-					local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
-					add("    " .. k .. " = " .. vStr)
-				end
-			end
-		end
-		if not anyDescAttr then
-			add("(none)")
-		end
-
-		-- Value objects (NumberValue, IntValue, StringValue, BoolValue, etc. - often gold, mutation, config)
-		add("")
-		add("=== Value objects ===")
-		local hasValue = false
-		for _, child in ipairs(model:GetDescendants()) do
-			local cls = child.ClassName
-			if cls == "NumberValue" or cls == "IntValue" or cls == "StringValue" or cls == "BoolValue" or cls == "ObjectValue" or cls == "Vector3Value" or cls == "Color3Value" or cls == "CFrameValue" or cls == "BrickColorValue" then
-				hasValue = true
-				local val = child.Value
-				if typeof(val) == "userdata" then val = tostring(val) end
-				add(child.Name .. " [" .. cls .. "] = " .. tostring(val))
-			end
-		end
-		if not hasValue then add("(none)") end
-
-		-- Humanoid (NPC name, health, etc.)
-		add("")
-		add("=== Humanoid ===")
-		local humanoid = model:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			add("DisplayName: " .. tostring(humanoid.DisplayName))
-			add("Health: " .. tostring(humanoid.Health) .. " / " .. tostring(humanoid.MaxHealth))
-			add("WalkSpeed: " .. tostring(humanoid.WalkSpeed))
-			add("JumpPower: " .. tostring(humanoid.JumpPower or humanoid.JumpHeight))
-			add("RigType: " .. tostring(humanoid.RigType))
-		else
-			add("(none)")
-		end
-
-		-- Primary part & transform
-		add("")
-		add("=== Transform ===")
-		if model.PrimaryPart then
-			add("PrimaryPart: " .. model.PrimaryPart.Name)
-			add("PrimaryPart CFrame: " .. tostring(model.PrimaryPart.CFrame))
-			add("PrimaryPart Position: " .. tostring(model.PrimaryPart.Position))
-		else
-			add("PrimaryPart: nil")
-		end
-		local ok, pivot = pcall(function() return model:GetPivot() end)
-		if ok and pivot then
-			add("Pivot: " .. tostring(pivot))
-			add("Position: " .. tostring(pivot.Position))
-		end
-		local ok2, bbox = pcall(function() return model:GetBoundingBox() end)
-		if ok2 and bbox then
-			add("BoundingBox: " .. tostring(bbox))
-		end
-
-		-- Linked UI / labels (name, Rarity, money) – parts or guis that display text above NPC
-		add("")
-		add("=== Linked UI / labels (name, Rarity, money) ===")
 		local function collectGuiLabels(gui)
 			local out = {}
 			for _, desc in ipairs(gui:GetDescendants()) do
@@ -566,69 +464,35 @@ local function openObjectsWindow()
 			end
 			return out
 		end
-		local hasLinked = false
-		for _, desc in ipairs(model:GetDescendants()) do
-			if desc:IsA("BillboardGui") then
-				hasLinked = true
-				add("  BillboardGui: " .. desc:GetFullName())
-				local labels = collectGuiLabels(desc)
-				for _, s in ipairs(labels) do add("    " .. s) end
-				if #labels == 0 then add("    (no TextLabel/TextButton)") end
-			elseif desc:IsA("SurfaceGui") then
-				hasLinked = true
-				add("  SurfaceGui: " .. desc:GetFullName())
-				local labels = collectGuiLabels(desc)
-				for _, s in ipairs(labels) do add("    " .. s) end
-				if #labels == 0 then add("    (no TextLabel/TextButton)") end
-			end
-		end
-		-- Parts/Models that hold these Guis (the "label" part on top of NPC)
-		for _, desc in ipairs(model:GetDescendants()) do
-			if (desc:IsA("BasePart") or desc:IsA("Model")) and (desc:FindFirstChildOfClass("BillboardGui") or desc:FindFirstChildOfClass("SurfaceGui")) then
-				hasLinked = true
-				add("  Part/Model with Gui: " .. desc.Name .. " [" .. desc.ClassName .. "] @ " .. desc:GetFullName())
-			end
-		end
-		-- ObjectValue references (links to another instance)
-		for _, child in ipairs(model:GetDescendants()) do
-			if child:IsA("ObjectValue") and child.Value then
-				hasLinked = true
-				add("  ObjectValue: " .. child.Name .. " -> " .. child.Value:GetFullName() .. " [" .. child.Value.ClassName .. "]")
-			end
-		end
-		if not hasLinked then
-			add("  (no BillboardGui/SurfaceGui or ObjectValue found)")
-		end
 
-		-- Child list (summary: what's inside the model)
-		add("")
-		add("=== Children (direct) ===")
-		for _, child in ipairs(model:GetChildren()) do
-			add("  " .. child.Name .. " [" .. child.ClassName .. "]")
+		-- Only show CharacterInfo (BillboardGui named CharacterInfo or containing CharacterInfo)
+		add("=== CharacterInfo ===")
+		local found = false
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("BillboardGui") and desc.Name == "CharacterInfo" then
+				found = true
+				local labels = collectGuiLabels(desc)
+				for _, s in ipairs(labels) do add(s) end
+				if #labels == 0 then add("(no labels)") end
+				break
+			end
 		end
-
-		-- All descendants and their attributes (full tree)
-		add("")
-		add("=== All descendants and their attributes ===")
-		local descendants = model:GetDescendants()
-		for _, d in ipairs(descendants) do
-			add("  " .. d.Name .. " [" .. d.ClassName .. "]")
-			add("    FullName: " .. d:GetFullName())
-			local dAttrs = d:GetAttributes()
-			if next(dAttrs) then
-				local keys = {}
-				for k in pairs(dAttrs) do table.insert(keys, k) end
-				table.sort(keys)
-				for _, k in ipairs(keys) do
-					local v = dAttrs[k]
-					local vStr = typeof(v) == "table" and ("table " .. tostring(v)) or tostring(v)
-					add("    " .. k .. " = " .. vStr)
+		if not found then
+			-- Fallback: any BillboardGui under something named CharacterInfo
+			local charInfo = model:FindFirstChild("CharacterInfo", true)
+			if charInfo then
+				local gui = charInfo:IsA("BillboardGui") and charInfo or charInfo:FindFirstChildOfClass("BillboardGui")
+				if gui then
+					found = true
+					local labels = collectGuiLabels(gui)
+					for _, s in ipairs(labels) do add(s) end
+					if #labels == 0 then add("(no labels)") end
 				end
-			else
-				add("    (no attributes)")
 			end
 		end
-		add("(total " .. #descendants .. " descendant(s))")
+		if not found then
+			add("(no CharacterInfo found)")
+		end
 
 		return table.concat(lines, "\n")
 	end
