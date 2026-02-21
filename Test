@@ -645,7 +645,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 				lastZ = currentZ
 				lastZTime = now
 			end
-			humanoid:MoveTo(moveToTarget)
+			-- Do NOT call MoveTo every tick: the game may treat repeated MoveTo as release and drop the NPC. Only move once at start and when stuck.
 			task.wait(0.2)
 		end
 		-- Only release when we actually arrived; never fire release on timeout (would drop NPC in bad spot)
@@ -723,7 +723,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Rota"
+title.Text = "Player Name Dota"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
