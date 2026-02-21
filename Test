@@ -54,8 +54,8 @@ local WALK_ARRIVED_DISTANCE = 4
 -- When carrying NPC: if character Z hasn't changed by this much for Z_STUCK_TIME, re-trigger MoveTo(destination)
 local Z_STUCK_THRESHOLD = 0.5
 local Z_STUCK_TIME = 1.5
--- Simulate hold E for pickup: duration in seconds (short = less delay before moving)
-local HOLD_E_DURATION = 0.6
+-- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
+local HOLD_E_DURATION = 0.35
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
 -- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
@@ -606,9 +606,10 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local humanoid = char:FindFirstChildOfClass("Humanoid")
 		local r = char:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not r then if onArrived then onArrived() end return end
-		task.wait(0.2)
+		task.wait(0.05)
 		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
+		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
 		local lastZ = r.Position.Z
 		local lastZTime = start
@@ -713,7 +714,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Tota"
+title.Text = "Player Name Kota"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
