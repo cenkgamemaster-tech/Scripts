@@ -516,7 +516,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Loly"
+title.Text = "Player Name Fusy"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -1213,7 +1213,7 @@ local function openScanFuseWindow()
 		fuseScreen:Destroy()
 	end)
 
-	-- Scrollable text area
+	-- Scrollable text area (manual CanvasSize so scroll bar works with TextLabel)
 	local fuseScroll = Instance.new("ScrollingFrame")
 	fuseScroll.Name = "Scroll"
 	fuseScroll.Size = UDim2.new(1, -16, 1, -44)
@@ -1222,8 +1222,8 @@ local function openScanFuseWindow()
 	fuseScroll.BorderSizePixel = 0
 	fuseScroll.ScrollBarThickness = 8
 	fuseScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	fuseScroll.ScrollingDirection = Enum.ScrollingDirection.Y
 	fuseScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-	fuseScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	fuseScroll.Parent = fuseMain
 
 	local fuseScrollCorner = Instance.new("UICorner")
@@ -1245,10 +1245,19 @@ local function openScanFuseWindow()
 	fuseContent.AutomaticSize = Enum.AutomaticSize.Y
 	fuseContent.Parent = fuseScroll
 
+	local function updateFuseCanvasSize()
+		local contentY = fuseContent.AbsoluteSize.Y
+		local scrollY = fuseScroll.AbsoluteWindowSize.Y
+		fuseScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+	end
+
+	fuseContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateFuseCanvasSize)
+
 	-- Run scan and fill text
 	local list = listObjectsInGame("Fuse")
 	local text = #list > 0 and table.concat(list, "\n") or "(no objects containing \"Fuse\" found)"
 	fuseContent.Text = text
+	task.defer(updateFuseCanvasSize)
 end
 
 objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
