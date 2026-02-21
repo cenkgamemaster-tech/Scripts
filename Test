@@ -49,13 +49,12 @@ local TELEPORT_BACK_Z_STEP = 10
 -- MoveTo goes to (same X, same Y, -10). "Teleport back" button uses this.
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
-local WALK_TO_OUTSIDE_TIMEOUT = 30
+local WALK_TO_OUTSIDE_TIMEOUT = 75
 local WALK_ARRIVED_DISTANCE = 4
--- When carrying: after first stuck, press and hold S until destination (no MoveTo re-trigger)
-local Z_STUCK_THRESHOLD = 0.5
-local Z_STUCK_TIME = 2
+-- When carrying any NPC: wait this long after MoveTo then hold S until destination
+local S_HOLD_DELAY = 2.5
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
-local HOLD_E_DURATION = 0.6
+local HOLD_E_DURATION = 0.7
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
 -- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
@@ -629,8 +628,6 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local moveToTarget = Vector3.new(x, y, -10)
 		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
-		local lastZ = r.Position.Z
-		local lastZTime = start
 		local arrived = false
 		local sKeyHeld = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
@@ -643,19 +640,11 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 				end
 				break
 			end
-			local now = os.clock()
-			local currentZ = r.Position.Z
-			if math.abs(currentZ - lastZ) <= Z_STUCK_THRESHOLD then
-				if (now - lastZTime) >= Z_STUCK_TIME and not sKeyHeld then
-					local dir = (moveToTarget - r.Position).Unit
-					r.CFrame = CFrame.lookAt(r.Position, r.Position + Vector3.new(dir.X, 0, dir.Z))
-					pressSDown()
-					sKeyHeld = true
-					lastZTime = now
-				end
-			else
-				lastZ = currentZ
-				lastZTime = now
+			if not sKeyHeld and (os.clock() - start) >= S_HOLD_DELAY then
+				local dir = (moveToTarget - r.Position).Unit
+				r.CFrame = CFrame.lookAt(r.Position, r.Position + Vector3.new(dir.X, 0, dir.Z))
+				pressSDown()
+				sKeyHeld = true
 			end
 			task.wait(0.2)
 		end
@@ -734,7 +723,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Yoda"
+title.Text = "Player Name Yodax"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
