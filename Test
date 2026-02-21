@@ -360,6 +360,83 @@ local function listObjectsInGame(nameFilter)
 	return list
 end
 
+-- Read content from MainUI.Menus.FuseFrame: PossibleFrame (possible NPCs) and BringFrame (selected NPCs to fuse).
+-- Path: PlayerGui.MainUI.Menus.FuseFrame.Frame.PossibleFrame (FrameTemplate: NpcName, Mutation, Rarity, Chance)
+--       PlayerGui.MainUI.Menus.FuseFrame.Frame.BringFrame (ButtonTemplate clones: NpcName, Mutation, Rarity)
+local function readFuseFrameContent()
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then return "PlayerGui not found." end
+	local mainUI = gui:FindFirstChild("MainUI")
+	if not mainUI then return "MainUI not found." end
+	local menus = mainUI:FindFirstChild("Menus")
+	if not menus then return "MainUI.Menus not found." end
+	local fuseFrame = menus:FindFirstChild("FuseFrame")
+	if not fuseFrame then return "MainUI.Menus.FuseFrame not found. Open the Fuse menu in-game first." end
+	local frame = fuseFrame:FindFirstChild("Frame")
+	if not frame then return "FuseFrame.Frame not found." end
+
+	local function readRow(parent, labelNames)
+		local labels = {}
+		for _, name in ipairs(labelNames) do
+			local el = parent:FindFirstChild(name)
+			labels[name] = (el and el:IsA("GuiObject") and el.Text) and el.Text or ""
+		end
+		return labels
+	end
+
+	local function formatRow(labels, order)
+		order = order or { "NpcName", "Mutation", "Rarity", "Chance" }
+		local parts = {}
+		for _, k in ipairs(order) do
+			if labels[k] and labels[k] ~= "" then
+				table.insert(parts, labels[k])
+			end
+		end
+		return table.concat(parts, " | ")
+	end
+
+	local out = {}
+
+	-- PossibleFrame = possible NPCs (e.g. 3 options)
+	local possibleFrame = frame:FindFirstChild("PossibleFrame")
+	if possibleFrame then
+		table.insert(out, "=== Possible NPCs (PossibleFrame) ===")
+		local count = 0
+		for _, child in ipairs(possibleFrame:GetChildren()) do
+			local npcName = child:FindFirstChild("NpcName")
+			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
+				count = count + 1
+				local labels = readRow(child, { "NpcName", "Mutation", "Rarity", "Chance" })
+				table.insert(out, ("  %d. %s"):format(count, formatRow(labels)))
+			end
+		end
+		if count == 0 then
+			table.insert(out, "  (no FrameTemplate rows with NpcName found)")
+		end
+		table.insert(out, "")
+	end
+
+	-- BringFrame = NPCs you're bringing to fuse (e.g. 4 slots)
+	local bringFrame = frame:FindFirstChild("BringFrame")
+	if bringFrame then
+		table.insert(out, "=== Bring (selected for fuse) ===")
+		local count = 0
+		for _, child in ipairs(bringFrame:GetChildren()) do
+			local npcName = child:FindFirstChild("NpcName")
+			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
+				count = count + 1
+				local labels = readRow(child, { "NpcName", "Mutation", "Rarity" })
+				table.insert(out, ("  %d. %s"):format(count, formatRow(labels, { "NpcName", "Mutation", "Rarity" })))
+			end
+		end
+		if count == 0 then
+			table.insert(out, "  (no button rows with NpcName found)")
+		end
+	end
+
+	return table.concat(out, "\n")
+end
+
 -- Walk character to target position (Humanoid:MoveTo). Returns true if arrived within distance, false if timed out or no character.
 local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -1198,10 +1275,10 @@ local function openScanFuseWindow()
 		fuseScreen:Destroy()
 	end)
 
-	-- Scrollable text area (manual CanvasSize so scroll bar works with TextLabel)
+	-- Scrollable text area (manual CanvasSize so scroll bar works)
 	local fuseScroll = Instance.new("ScrollingFrame")
 	fuseScroll.Name = "Scroll"
-	fuseScroll.Size = UDim2.new(1, -16, 1, -44)
+	fuseScroll.Size = UDim2.new(1, -16, 1, -88)
 	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
 	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	fuseScroll.BorderSizePixel = 0
@@ -1248,13 +1325,33 @@ local function openScanFuseWindow()
 	fuseContent.Text = text
 	task.defer(updateFuseCanvasSize)
 
-	-- Hint for copying (Roblox doesn't allow scripts to write to clipboard in-game)
+	-- Read Fuse UI button: dump PossibleFrame + BringFrame content (open Fuse menu first)
+	local fuseReadBtn = Instance.new("TextButton")
+	fuseReadBtn.Name = "ReadFuseUI"
+	fuseReadBtn.Size = UDim2.new(1, -16, 0, 26)
+	fuseReadBtn.Position = UDim2.new(0, 8, 1, -52)
+	fuseReadBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
+	fuseReadBtn.BorderSizePixel = 0
+	fuseReadBtn.Text = "Read Fuse UI (open Fuse menu first)"
+	fuseReadBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+	fuseReadBtn.TextSize = 11
+	fuseReadBtn.Font = Enum.Font.Gotham
+	fuseReadBtn.Parent = fuseMain
+	local fuseReadBtnCorner = Instance.new("UICorner")
+	fuseReadBtnCorner.CornerRadius = UDim.new(0, 6)
+	fuseReadBtnCorner.Parent = fuseReadBtn
+	fuseReadBtn.MouseButton1Click:Connect(function()
+		fuseContent.Text = readFuseFrameContent()
+		task.defer(updateFuseCanvasSize)
+	end)
+
+	-- Hint for copying
 	local fuseTip = Instance.new("TextLabel")
 	fuseTip.Name = "Tip"
-	fuseTip.Size = UDim2.new(1, -16, 0, 16)
-	fuseTip.Position = UDim2.new(0, 8, 1, -20)
+	fuseTip.Size = UDim2.new(1, -16, 0, 14)
+	fuseTip.Position = UDim2.new(0, 8, 1, -22)
 	fuseTip.BackgroundTransparency = 1
-	fuseTip.Text = "Click in the box, then Ctrl+A and Ctrl+C (Cmd on Mac) to copy all."
+	fuseTip.Text = "Ctrl+A then Ctrl+C (Cmd on Mac) to copy all."
 	fuseTip.TextColor3 = Color3.fromRGB(140, 160, 180)
 	fuseTip.TextSize = 10
 	fuseTip.Font = Enum.Font.Gotham
