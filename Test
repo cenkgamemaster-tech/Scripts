@@ -322,6 +322,44 @@ local function listAllRemotes()
 	return list
 end
 
+-- Traverse game at runtime and list objects; optional nameFilter (e.g. "Fuse") to only include instances whose Name or FullName contains it (case-insensitive).
+-- Prints to Output so you can copy the list when running remotely.
+local function listObjectsInGame(nameFilter)
+	local filter = (type(nameFilter) == "string" and nameFilter ~= "") and nameFilter:lower() or nil
+	local function matches(inst)
+		if not filter then return true end
+		local name = (inst.Name or ""):lower()
+		local full = (inst:GetFullName() or ""):lower()
+		return name:find(filter, 1, true) or full:find(filter, 1, true)
+	end
+	local list = {}
+	local function scan(parent)
+		for _, child in ipairs(parent:GetChildren()) do
+			if matches(child) then
+				table.insert(list, child:GetFullName())
+			end
+			scan(child)
+		end
+	end
+	local services = { Workspace, PlayerGui, ReplicatedStorage }
+	for _, service in ipairs(services) do
+		pcall(function()
+			if matches(service) then
+				table.insert(list, service:GetFullName())
+			end
+			scan(service)
+		end)
+	end
+	table.sort(list)
+	local title = filter and ("---- Objects containing \"" .. nameFilter .. "\" ----") or "---- All objects (Workspace, PlayerGui, ReplicatedStorage) ----"
+	print(title)
+	for _, path in ipairs(list) do
+		print("  ", path)
+	end
+	print("---- Total:", #list, "entries ----")
+	return list
+end
+
 -- Walk character to target position (Humanoid:MoveTo). Returns true if arrived within distance, false if timed out or no character.
 local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -427,7 +465,7 @@ end
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 268)
+main.Size = UDim2.new(0, 220, 0, 300)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -653,11 +691,28 @@ local collectCashBtnCorner = Instance.new("UICorner")
 collectCashBtnCorner.CornerRadius = UDim.new(0, 6)
 collectCashBtnCorner.Parent = collectCashBtn
 
+-- Scan Fuse button (main screen) – opens a draggable window with scrollable list of Fuse-related objects
+local scanFuseBtn = Instance.new("TextButton")
+scanFuseBtn.Name = "ScanFuse"
+scanFuseBtn.Size = UDim2.new(1, -16, 0, 28)
+scanFuseBtn.Position = UDim2.new(0, 8, 0, 172)
+scanFuseBtn.BackgroundColor3 = Color3.fromRGB(90, 70, 40)
+scanFuseBtn.BorderSizePixel = 0
+scanFuseBtn.Text = "Scan Fuse"
+scanFuseBtn.TextColor3 = Color3.fromRGB(255, 230, 180)
+scanFuseBtn.TextSize = 12
+scanFuseBtn.Font = Enum.Font.Gotham
+scanFuseBtn.Parent = main
+
+local scanFuseBtnCorner = Instance.new("UICorner")
+scanFuseBtnCorner.CornerRadius = UDim.new(0, 6)
+scanFuseBtnCorner.Parent = scanFuseBtn
+
 -- Go to top button (main screen) – same as in Spawned Bubus: teleport to top Bubu, then take + teleport outside after 2s
 local goToTopBtn = Instance.new("TextButton")
 goToTopBtn.Name = "GoToTop"
 goToTopBtn.Size = UDim2.new(0.5, -10, 0, 28)
-goToTopBtn.Position = UDim2.new(0, 8, 0, 174)
+goToTopBtn.Position = UDim2.new(0, 8, 0, 206)
 goToTopBtn.BackgroundColor3 = Color3.fromRGB(50, 80, 120)
 goToTopBtn.BorderSizePixel = 0
 goToTopBtn.Text = "Go to top"
@@ -674,7 +729,7 @@ goToTopBtnCorner.Parent = goToTopBtn
 local teleportBackBtn = Instance.new("TextButton")
 teleportBackBtn.Name = "TeleportBack"
 teleportBackBtn.Size = UDim2.new(0.5, -10, 0, 28)
-teleportBackBtn.Position = UDim2.new(0.5, 2, 0, 174)
+teleportBackBtn.Position = UDim2.new(0.5, 2, 0, 206)
 teleportBackBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 90)
 teleportBackBtn.BorderSizePixel = 0
 teleportBackBtn.Text = "Teleport back"
@@ -691,7 +746,7 @@ teleportBackBtnCorner.Parent = teleportBackBtn
 local startCollectBtn = Instance.new("TextButton")
 startCollectBtn.Name = "StartCollect"
 startCollectBtn.Size = UDim2.new(0.5, -10, 0, 28)
-startCollectBtn.Position = UDim2.new(0, 8, 0, 208)
+startCollectBtn.Position = UDim2.new(0, 8, 0, 240)
 startCollectBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 50)
 startCollectBtn.BorderSizePixel = 0
 startCollectBtn.Text = "Start collecting NPCs"
@@ -708,7 +763,7 @@ startCollectBtnCorner.Parent = startCollectBtn
 local stopCollectBtn = Instance.new("TextButton")
 stopCollectBtn.Name = "StopCollect"
 stopCollectBtn.Size = UDim2.new(0.5, -10, 0, 28)
-stopCollectBtn.Position = UDim2.new(0.5, 2, 0, 208)
+stopCollectBtn.Position = UDim2.new(0.5, 2, 0, 240)
 stopCollectBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
 stopCollectBtn.BorderSizePixel = 0
 stopCollectBtn.Text = "Stop collecting"
@@ -743,7 +798,7 @@ end
 local positionLabel = Instance.new("TextLabel")
 positionLabel.Name = "Position"
 positionLabel.Size = UDim2.new(1, -16, 0, 20)
-positionLabel.Position = UDim2.new(0, 8, 0, 242)
+positionLabel.Position = UDim2.new(0, 8, 0, 274)
 positionLabel.BackgroundTransparency = 1
 positionLabel.Text = "Position: --, --, --"
 positionLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -877,6 +932,18 @@ local function openObjectsWindow()
 	objRemotesBtn.TextSize = 11
 	objRemotesBtn.Font = Enum.Font.Gotham
 	objRemotesBtn.Parent = objTop
+
+	-- Scan Fuse: list objects whose name/path contains "Fuse" (run in game, check Output)
+	local objFuseBtn = Instance.new("TextButton")
+	objFuseBtn.Name = "Fuse"
+	objFuseBtn.Size = UDim2.new(0, 70, 0, 28)
+	objFuseBtn.Position = UDim2.new(1, -328, 0, 0)
+	objFuseBtn.BackgroundTransparency = 1
+	objFuseBtn.Text = "Scan Fuse"
+	objFuseBtn.TextColor3 = Color3.fromRGB(255, 220, 120)
+	objFuseBtn.TextSize = 11
+	objFuseBtn.Font = Enum.Font.Gotham
+	objFuseBtn.Parent = objTop
 
 	-- Refresh button (manual refresh only)
 	local objRefreshBtn = Instance.new("TextButton")
@@ -1031,6 +1098,10 @@ local function openObjectsWindow()
 	objRemotesBtn.MouseButton1Click:Connect(function()
 		listAllRemotes()
 	end)
+
+	objFuseBtn.MouseButton1Click:Connect(function()
+		listObjectsInGame("Fuse")
+	end)
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
 	-- Go to top: script handles teleport to top Bubu + 2 sec wait + take Bubu + teleport outside (no E key)
 	objTeleportBtn.MouseButton1Click:Connect(function()
@@ -1047,7 +1118,141 @@ local function openObjectsWindow()
 	end)
 end
 
+-- Scan Fuse window: draggable, scrollable textbox with all Fuse-related object paths
+local function openScanFuseWindow()
+	local existing = PlayerGui:FindFirstChild("PlayerNameTest_ScanFuse")
+	if existing then
+		existing:Destroy()
+	end
+
+	local fuseScreen = Instance.new("ScreenGui")
+	fuseScreen.Name = "PlayerNameTest_ScanFuse"
+	fuseScreen.ResetOnSpawn = false
+	fuseScreen.Parent = PlayerGui
+
+	local fuseMain = Instance.new("Frame")
+	fuseMain.Name = "Main"
+	fuseMain.Size = UDim2.new(0, 360, 0, 380)
+	fuseMain.Position = UDim2.new(0.5, -180, 0.5, -190)
+	fuseMain.AnchorPoint = Vector2.new(0.5, 0.5)
+	fuseMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+	fuseMain.BorderSizePixel = 0
+	fuseMain.Active = true
+	fuseMain.Parent = fuseScreen
+
+	local fuseCorner = Instance.new("UICorner")
+	fuseCorner.CornerRadius = UDim.new(0, 10)
+	fuseCorner.Parent = fuseMain
+
+	local fuseTop = Instance.new("Frame")
+	fuseTop.Name = "Top"
+	fuseTop.Size = UDim2.new(1, 0, 0, 28)
+	fuseTop.Position = UDim2.new(0, 0, 0, 0)
+	fuseTop.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+	fuseTop.BorderSizePixel = 0
+	fuseTop.Active = true
+	fuseTop.Parent = fuseMain
+
+	local fuseTopCorner = Instance.new("UICorner")
+	fuseTopCorner.CornerRadius = UDim.new(0, 10)
+	fuseTopCorner.Parent = fuseTop
+
+	local fuseTitle = Instance.new("TextLabel")
+	fuseTitle.Name = "Title"
+	fuseTitle.Size = UDim2.new(1, -44, 0, 28)
+	fuseTitle.Position = UDim2.new(0, 8, 0, 0)
+	fuseTitle.BackgroundTransparency = 1
+	fuseTitle.Active = true
+	fuseTitle.Text = "Scan Fuse – objects"
+	fuseTitle.TextColor3 = Color3.fromRGB(255, 230, 180)
+	fuseTitle.TextSize = 14
+	fuseTitle.Font = Enum.Font.GothamBold
+	fuseTitle.TextXAlignment = Enum.TextXAlignment.Left
+	fuseTitle.Parent = fuseTop
+
+	local fuseCloseBtn = Instance.new("TextButton")
+	fuseCloseBtn.Name = "Close"
+	fuseCloseBtn.Size = UDim2.new(0, 28, 0, 28)
+	fuseCloseBtn.Position = UDim2.new(1, -28, 0, 0)
+	fuseCloseBtn.BackgroundTransparency = 1
+	fuseCloseBtn.Text = "×"
+	fuseCloseBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	fuseCloseBtn.TextSize = 20
+	fuseCloseBtn.Font = Enum.Font.GothamBold
+	fuseCloseBtn.Parent = fuseTop
+
+	-- Draggable
+	local fuseDragging = false
+	local fuseDragStart, fuseStartPos
+	local fuseInputChangedConn, fuseInputEndedConn
+	local function onFuseDragStart(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			fuseDragging = true
+			fuseDragStart = inp.Position
+			fuseStartPos = fuseMain.Position
+		end
+	end
+	fuseTop.InputBegan:Connect(onFuseDragStart)
+	fuseTitle.InputBegan:Connect(onFuseDragStart)
+	fuseMain.InputBegan:Connect(onFuseDragStart)
+	fuseInputChangedConn = UserInputService.InputChanged:Connect(function(inp)
+		if fuseDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = inp.Position - fuseDragStart
+			fuseMain.Position = UDim2.new(fuseStartPos.X.Scale, fuseStartPos.X.Offset + delta.X, fuseStartPos.Y.Scale, fuseStartPos.Y.Offset + delta.Y)
+		end
+	end)
+	fuseInputEndedConn = UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			fuseDragging = false
+		end
+	end)
+
+	fuseCloseBtn.MouseButton1Click:Connect(function()
+		if fuseInputChangedConn then fuseInputChangedConn:Disconnect() end
+		if fuseInputEndedConn then fuseInputEndedConn:Disconnect() end
+		fuseScreen:Destroy()
+	end)
+
+	-- Scrollable text area
+	local fuseScroll = Instance.new("ScrollingFrame")
+	fuseScroll.Name = "Scroll"
+	fuseScroll.Size = UDim2.new(1, -16, 1, -44)
+	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
+	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	fuseScroll.BorderSizePixel = 0
+	fuseScroll.ScrollBarThickness = 8
+	fuseScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	fuseScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	fuseScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	fuseScroll.Parent = fuseMain
+
+	local fuseScrollCorner = Instance.new("UICorner")
+	fuseScrollCorner.CornerRadius = UDim.new(0, 6)
+	fuseScrollCorner.Parent = fuseScroll
+
+	local fuseContent = Instance.new("TextLabel")
+	fuseContent.Name = "Content"
+	fuseContent.Size = UDim2.new(1, -8, 0, 0)
+	fuseContent.Position = UDim2.new(0, 4, 0, 4)
+	fuseContent.BackgroundTransparency = 1
+	fuseContent.Text = ""
+	fuseContent.TextColor3 = Color3.fromRGB(200, 220, 255)
+	fuseContent.TextSize = 11
+	fuseContent.Font = Enum.Font.Code
+	fuseContent.TextXAlignment = Enum.TextXAlignment.Left
+	fuseContent.TextYAlignment = Enum.TextYAlignment.Top
+	fuseContent.TextWrapped = true
+	fuseContent.AutomaticSize = Enum.AutomaticSize.Y
+	fuseContent.Parent = fuseScroll
+
+	-- Run scan and fill text
+	local list = listObjectsInGame("Fuse")
+	local text = #list > 0 and table.concat(list, "\n") or "(no objects containing \"Fuse\" found)"
+	fuseContent.Text = text
+end
+
 objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
+scanFuseBtn.MouseButton1Click:Connect(openScanFuseWindow)
 
 -- Collect All Cash: call ReplicatedStorage.CollectAllCash (RemoteEvent or RemoteFunction)
 collectCashBtn.MouseButton1Click:Connect(function()
