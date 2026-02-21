@@ -51,12 +51,6 @@ local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
 local WALK_TO_OUTSIDE_TIMEOUT = 30
 local WALK_ARRIVED_DISTANCE = 4
--- When carrying NPC: if character Z hasn't changed by this much for Z_STUCK_TIME, re-trigger MoveTo(destination)
-local Z_STUCK_THRESHOLD = 0.5
-local Z_STUCK_TIME = 1.5
--- Re-hold E after this many seconds while walking (game may force drop at ~30s; re-hold once to try to stay carrying)
-local REHOLD_E_AFTER_SEC = 24
-local REHOLD_E_DURATION = 0.4
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
 local HOLD_E_DURATION = 0.6
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
@@ -614,17 +608,8 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local moveToTarget = Vector3.new(x, y, -10)
 		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
-		local lastZ = r.Position.Z
-		local lastZTime = start
 		local arrived = false
-		local didRehold = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
-			local elapsed = os.clock() - start
-			if not didRehold and elapsed >= REHOLD_E_AFTER_SEC then
-				holdEKey(REHOLD_E_DURATION)
-				humanoid:MoveTo(moveToTarget)
-				didRehold = true
-			end
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
 				arrived = true
@@ -633,19 +618,6 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 				end
 				break
 			end
-			local now = os.clock()
-			local currentZ = r.Position.Z
-			if math.abs(currentZ - lastZ) <= Z_STUCK_THRESHOLD then
-				if (now - lastZTime) >= Z_STUCK_TIME then
-					humanoid:MoveTo(moveToTarget)
-					lastZ = r.Position.Z
-					lastZTime = now
-				end
-			else
-				lastZ = currentZ
-				lastZTime = now
-			end
-			-- Do NOT call MoveTo every tick: the game may treat repeated MoveTo as release and drop the NPC. Only move once at start and when stuck.
 			task.wait(0.2)
 		end
 		-- Only release when we actually arrived; never fire release on timeout (would drop NPC in bad spot)
@@ -723,7 +695,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Dota"
+title.Text = "Player Name Panda"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
