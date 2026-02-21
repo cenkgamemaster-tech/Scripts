@@ -65,6 +65,7 @@ local TAKE_REMOTE_CANDIDATES = {
 }
 -- Drop NPC remote (used on 30s timeout: drop then grab again instead of teleporting)
 local DROP_NPC_REMOTE_PATH = "ReplicatedStorage.Remotes.Field.DropNPC"
+local FUSE_REMOTE_PATH = "ReplicatedStorage.Remotes.Fuse"
 
 local workspace = game:GetService("Workspace")
 
@@ -173,6 +174,19 @@ local function resolveRemotePath(pathString)
 	end
 	if node:IsA("RemoteEvent") or node:IsA("RemoteFunction") then return node end
 	return nil
+end
+
+-- Hook Fuse remote to log what the server sends (Output when you select NPCs or fuse)
+do
+	local fuseRemote = resolveRemotePath(FUSE_REMOTE_PATH)
+	if fuseRemote and fuseRemote:IsA("RemoteEvent") then
+		fuseRemote.OnClientEvent:Connect(function(...)
+			local args = { ... }
+			local parts = {}
+			for i, v in ipairs(args) do table.insert(parts, tostring(v)) end
+			print("[Fuse] OnClientEvent args:", table.concat(parts, ", "))
+		end)
+	end
 end
 
 -- Find a remote that might be the game's "take/capture" API. Tries TAKE_REMOTE_PATH, then TAKE_REMOTE_CANDIDATES, then name scan.
@@ -434,6 +448,190 @@ local function readFuseFrameContent()
 		end
 	end
 
+	return table.concat(out, "\n")
+end
+
+-- Same as readFuseFrameContent but returns structured data for recording: { bring = { "Name | Mutation | Rarity", ... }, possible = { "Name | Mutation | Rarity | Chance", ... } }
+local function getFuseFrameData()
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then return nil end
+	local mainUI = gui:FindFirstChild("MainUI")
+	if not mainUI then return nil end
+	local menus = mainUI:FindFirstChild("Menus")
+	if not menus then return nil end
+	local fuseFrame = menus:FindFirstChild("FuseFrame")
+	if not fuseFrame then return nil end
+	local frame = fuseFrame:FindFirstChild("Frame")
+	if not frame then return nil end
+
+	local function readRow(parent, labelNames)
+		local labels = {}
+		for _, name in ipairs(labelNames) do
+			local el = parent:FindFirstChild(name)
+			labels[name] = (el and el:IsA("GuiObject") and el.Text) and el.Text or ""
+		end
+		return labels
+	end
+	local function formatRow(labels, order)
+		local parts = {}
+		for _, k in ipairs(order) do
+			if labels[k] and labels[k] ~= "" then table.insert(parts, labels[k]) end
+		end
+		return table.concat(parts, " | ")
+	end
+
+	local bring = {}
+	local bringFrame = frame:FindFirstChild("BringFrame")
+	if bringFrame then
+		for _, child in ipairs(bringFrame:GetChildren()) do
+			local npcName = child:FindFirstChild("NpcName")
+			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
+				local labels = readRow(child, { "NpcName", "Mutation", "Rarity" })
+				local row = formatRow(labels, { "NpcName", "Mutation", "Rarity" })
+				if row ~= "NpcName | Mutation | Rarity" and row ~= "" then
+					table.insert(bring, row)
+				end
+			end
+		end
+	end
+
+	local possible = {}
+	local possibleFrame = frame:FindFirstChild("PossibleFrame")
+	if possibleFrame then
+		for _, child in ipairs(possibleFrame:GetChildren()) do
+			local npcName = child:FindFirstChild("NpcName")
+			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
+				local labels = readRow(child, { "NpcName", "Mutation", "Rarity", "Chance" })
+				local row = formatRow(labels, { "NpcName", "Mutation", "Rarity", "Chance" })
+				if row ~= "NpcName | Mutation | Rarity | %0" and row ~= "" then
+					table.insert(possible, row)
+				end
+			end
+		end
+	end
+
+	return { bring = bring, possible = possible }
+end
+
+-- Accumulated fuse combinations (Bring → Possible) when recording. Format each entry: "Bring: [A, B, C, D] → Possible: X | Y | Z"
+local fuseRecordedCombos = {}
+
+local function formatRecordedCombos()
+	if #fuseRecordedCombos == 0 then
+		return "(No combinations recorded yet. Turn on Record, then change the 4 Bring NPCs and click Read Fuse UI for each combo.)"
+	end
+	local lines = { ("=== Recorded combinations (%d) ==="):format(#fuseRecordedCombos), "" }
+	for i, rec in ipairs(fuseRecordedCombos) do
+		local bringStr = table.concat(rec.bring, " ; ")
+		local possStr = table.concat(rec.possible, " ; ")
+		table.insert(lines, ("--- Combo %d ---"):format(i))
+		table.insert(lines, ("Bring: %s"):format(bringStr))
+		table.insert(lines, ("Possible: %s"):format(possStr))
+		table.insert(lines, "")
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Serialize a table to a readable string (depth-limited). For reading fuse data from ModuleScripts.
+local function tableToString(t, depth, maxDepth)
+	depth = depth or 0
+	maxDepth = maxDepth or 4
+	if depth > maxDepth then return "(max depth)" end
+	if type(t) ~= "table" then return tostring(t) end
+	local lines = {}
+	for k, v in pairs(t) do
+		local keyStr = type(k) == "string" and k or "[" .. tostring(k) .. "]"
+		if type(v) == "table" then
+			table.insert(lines, ("%s%s = { %s }"):format(string.rep("  ", depth), keyStr, tableToString(v, depth + 1, maxDepth)))
+		else
+			table.insert(lines, ("%s%s = %s"):format(string.rep("  ", depth), keyStr, tostring(v)))
+		end
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Search the client for a fuse list / possible-options data (ModuleScripts, ReplicatedStorage, FuseFrame attributes).
+local function findFuseDataOnClient()
+	local out = {}
+
+	-- 1) ReplicatedStorage: ModuleScripts with "Fuse" in name; require and dump if they return a table
+	table.insert(out, "=== ReplicatedStorage ModuleScripts (name contains Fuse) ===")
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc:IsA("ModuleScript") and string.find(desc.Name:lower(), "fuse") then
+			local ok, result = pcall(function() return require(desc) end)
+			if ok and type(result) == "table" then
+				local keyCount = 0
+				for _ in pairs(result) do keyCount = keyCount + 1 end
+				table.insert(out, "")
+				table.insert(out, ("[%s] (table, %d keys):"):format(desc:GetFullName(), keyCount))
+				local preview = tableToString(result, 0, 3)
+				if #preview > 4000 then preview = preview:sub(1, 4000) .. "\n... (truncated)" end
+				table.insert(out, preview)
+			elseif ok then
+				table.insert(out, ("[%s] => %s"):format(desc:GetFullName(), tostring(result)))
+			else
+				table.insert(out, ("[%s] require error: %s"):format(desc:GetFullName(), tostring(result)))
+			end
+		end
+	end
+	table.insert(out, "")
+
+	-- 2) Look for likely data container names under ReplicatedStorage and PlayerGui
+	local dataNames = { "FuseData", "FuseRecipes", "FuseTable", "Combinations", "PossibleOptions", "FuseOptions", "Recipes", "Fuse" }
+	table.insert(out, "=== Instances named like FuseData / Combinations (paths and children) ===")
+	for _, parent in ipairs({ ReplicatedStorage, PlayerGui }) do
+		for _, name in ipairs(dataNames) do
+			local node = parent:FindFirstChild(name)
+			if node then
+				table.insert(out, ("%s (ClassName=%s)"):format(node:GetFullName(), node.ClassName))
+				for _, child in ipairs(node:GetChildren()) do
+					table.insert(out, ("  - %s (%s)"):format(child.Name, child.ClassName))
+					if child:IsA("ModuleScript") then
+						local ok, result = pcall(function() return require(child) end)
+						if ok and type(result) == "table" then
+							local preview = tableToString(result, 0, 2)
+							if #preview > 2000 then preview = preview:sub(1, 2000) .. "\n... (truncated)" end
+							table.insert(out, "    require() => " .. preview:gsub("\n", "\n    "))
+						end
+					end
+				end
+			end
+		end
+	end
+	table.insert(out, "")
+
+	-- 3) FuseFrame and its Frame: attributes and any Data/List child
+	table.insert(out, "=== FuseFrame / Frame (attributes and data-like children) ===")
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if gui then
+		local mainUI = gui:FindFirstChild("MainUI")
+		if mainUI then
+			local menus = mainUI:FindFirstChild("Menus")
+			if menus then
+				local fuseFrame = menus:FindFirstChild("FuseFrame")
+				if fuseFrame then
+					for _, attrName in ipairs(fuseFrame:GetAttributeNames()) do
+						table.insert(out, ("FuseFrame attribute: %s = %s"):format(attrName, tostring(fuseFrame:GetAttribute(attrName))))
+					end
+					local frame = fuseFrame:FindFirstChild("Frame")
+					if frame then
+						for _, attrName in ipairs(frame:GetAttributeNames()) do
+							table.insert(out, ("FuseFrame.Frame attribute: %s = %s"):format(attrName, tostring(frame:GetAttribute(attrName))))
+						end
+						for _, child in ipairs(frame:GetChildren()) do
+							if string.find(child.Name:lower(), "data") or string.find(child.Name:lower(), "list") or child.ClassName == "Folder" then
+								table.insert(out, ("  Child: %s (%s), %d children"):format(child.Name, child.ClassName, #child:GetChildren()))
+							end
+						end
+					end
+				else
+					table.insert(out, "FuseFrame not found (open Fuse menu first).")
+				end
+			end
+		end
+	end
+	table.insert(out, "")
+	table.insert(out, "--- End of Fuse data search ---")
 	return table.concat(out, "\n")
 end
 
@@ -1278,7 +1476,7 @@ local function openScanFuseWindow()
 	-- Scrollable text area (manual CanvasSize so scroll bar works)
 	local fuseScroll = Instance.new("ScrollingFrame")
 	fuseScroll.Name = "Scroll"
-	fuseScroll.Size = UDim2.new(1, -16, 1, -88)
+	fuseScroll.Size = UDim2.new(1, -16, 1, -128)
 	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
 	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	fuseScroll.BorderSizePixel = 0
@@ -1325,14 +1523,16 @@ local function openScanFuseWindow()
 	fuseContent.Text = text
 	task.defer(updateFuseCanvasSize)
 
-	-- Read Fuse UI button: dump PossibleFrame + BringFrame content (open Fuse menu first)
+	local recordOn = false
+
+	-- Read Fuse UI: if recording, append this combo to list and show all recorded; else show current only
 	local fuseReadBtn = Instance.new("TextButton")
 	fuseReadBtn.Name = "ReadFuseUI"
-	fuseReadBtn.Size = UDim2.new(1, -16, 0, 26)
-	fuseReadBtn.Position = UDim2.new(0, 8, 1, -52)
+	fuseReadBtn.Size = UDim2.new(0.5, -12, 0, 26)
+	fuseReadBtn.Position = UDim2.new(0, 8, 1, -118)
 	fuseReadBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
 	fuseReadBtn.BorderSizePixel = 0
-	fuseReadBtn.Text = "Read Fuse UI (open Fuse menu first)"
+	fuseReadBtn.Text = "Read Fuse UI"
 	fuseReadBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
 	fuseReadBtn.TextSize = 11
 	fuseReadBtn.Font = Enum.Font.Gotham
@@ -1341,7 +1541,84 @@ local function openScanFuseWindow()
 	fuseReadBtnCorner.CornerRadius = UDim.new(0, 6)
 	fuseReadBtnCorner.Parent = fuseReadBtn
 	fuseReadBtn.MouseButton1Click:Connect(function()
-		fuseContent.Text = readFuseFrameContent()
+		if recordOn then
+			local data = getFuseFrameData()
+			if data and (#data.bring > 0 or #data.possible > 0) then
+				table.insert(fuseRecordedCombos, data)
+				fuseContent.Text = formatRecordedCombos()
+				fuseRecordLabel.Text = ("Record: ON (%d)"):format(#fuseRecordedCombos)
+			else
+				fuseContent.Text = readFuseFrameContent() .. "\n\n(No valid Bring/Possible data to record. Open Fuse menu and select 4 NPCs.)"
+			end
+		else
+			fuseContent.Text = readFuseFrameContent()
+		end
+		task.defer(updateFuseCanvasSize)
+	end)
+
+	-- Find Fuse list: search client for fuse data (ModuleScripts, FuseData, attributes)
+	local fuseFindBtn = Instance.new("TextButton")
+	fuseFindBtn.Name = "FindFuseList"
+	fuseFindBtn.Size = UDim2.new(0.5, -12, 0, 26)
+	fuseFindBtn.Position = UDim2.new(0.5, 4, 1, -118)
+	fuseFindBtn.BackgroundColor3 = Color3.fromRGB(60, 50, 80)
+	fuseFindBtn.BorderSizePixel = 0
+	fuseFindBtn.Text = "Find Fuse list (client)"
+	fuseFindBtn.TextColor3 = Color3.fromRGB(220, 200, 255)
+	fuseFindBtn.TextSize = 10
+	fuseFindBtn.Font = Enum.Font.Gotham
+	fuseFindBtn.Parent = fuseMain
+	local fuseFindBtnCorner = Instance.new("UICorner")
+	fuseFindBtnCorner.CornerRadius = UDim.new(0, 6)
+	fuseFindBtnCorner.Parent = fuseFindBtn
+	fuseFindBtn.MouseButton1Click:Connect(function()
+		fuseContent.Text = findFuseDataOnClient()
+		task.defer(updateFuseCanvasSize)
+	end)
+
+	-- Record toggle: when ON, each "Read Fuse UI" adds current combo to the list
+	local fuseRecordBtn = Instance.new("TextButton")
+	fuseRecordBtn.Name = "Record"
+	fuseRecordBtn.Size = UDim2.new(0.5, -12, 0, 24)
+	fuseRecordBtn.Position = UDim2.new(0, 8, 1, -86)
+	fuseRecordBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 50)
+	fuseRecordBtn.BorderSizePixel = 0
+	fuseRecordBtn.Text = "Record: OFF"
+	fuseRecordBtn.TextColor3 = Color3.fromRGB(180, 255, 200)
+	fuseRecordBtn.TextSize = 10
+	fuseRecordBtn.Font = Enum.Font.Gotham
+	fuseRecordBtn.Parent = fuseMain
+	local fuseRecordBtnCorner = Instance.new("UICorner")
+	fuseRecordBtnCorner.CornerRadius = UDim.new(0, 4)
+	fuseRecordBtnCorner.Parent = fuseRecordBtn
+	local fuseRecordLabel = fuseRecordBtn  -- reuse for text updates
+	fuseRecordBtn.MouseButton1Click:Connect(function()
+		recordOn = not recordOn
+		fuseRecordBtn.Text = recordOn and ("Record: ON (%d)"):format(#fuseRecordedCombos) or "Record: OFF"
+		fuseRecordBtn.BackgroundColor3 = recordOn and Color3.fromRGB(50, 90, 60) or Color3.fromRGB(40, 60, 50)
+	end)
+
+	-- Clear recorded combinations
+	local fuseClearBtn = Instance.new("TextButton")
+	fuseClearBtn.Name = "ClearRecorded"
+	fuseClearBtn.Size = UDim2.new(0.5, -12, 0, 24)
+	fuseClearBtn.Position = UDim2.new(0.5, 4, 1, -86)
+	fuseClearBtn.BackgroundColor3 = Color3.fromRGB(70, 40, 40)
+	fuseClearBtn.BorderSizePixel = 0
+	fuseClearBtn.Text = "Clear recorded"
+	fuseClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+	fuseClearBtn.TextSize = 10
+	fuseClearBtn.Font = Enum.Font.Gotham
+	fuseClearBtn.Parent = fuseMain
+	local fuseClearBtnCorner = Instance.new("UICorner")
+	fuseClearBtnCorner.CornerRadius = UDim.new(0, 4)
+	fuseClearBtnCorner.Parent = fuseClearBtn
+	fuseClearBtn.MouseButton1Click:Connect(function()
+		fuseRecordedCombos = {}
+		fuseContent.Text = "(Cleared. Turn on Record, then for each combo: change the 4 Bring NPCs in the Fuse menu and click Read Fuse UI.)"
+		if recordOn then
+			fuseRecordBtn.Text = "Record: ON (0)"
+		end
 		task.defer(updateFuseCanvasSize)
 	end)
 
@@ -1349,9 +1626,9 @@ local function openScanFuseWindow()
 	local fuseTip = Instance.new("TextLabel")
 	fuseTip.Name = "Tip"
 	fuseTip.Size = UDim2.new(1, -16, 0, 14)
-	fuseTip.Position = UDim2.new(0, 8, 1, -22)
+	fuseTip.Position = UDim2.new(0, 8, 1, -56)
 	fuseTip.BackgroundTransparency = 1
-	fuseTip.Text = "Ctrl+A then Ctrl+C (Cmd on Mac) to copy all."
+	fuseTip.Text = "To get all combos: Record ON → change 4 Bring NPCs in game → Read Fuse UI → repeat. Ctrl+A, Ctrl+C to copy."
 	fuseTip.TextColor3 = Color3.fromRGB(140, 160, 180)
 	fuseTip.TextSize = 10
 	fuseTip.Font = Enum.Font.Gotham
