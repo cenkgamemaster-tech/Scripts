@@ -55,7 +55,7 @@ local WALK_ARRIVED_DISTANCE = 4
 local Z_STUCK_THRESHOLD = 0.5
 local Z_STUCK_TIME = 1.5
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
-local HOLD_E_DURATION = 0.35
+local HOLD_E_DURATION = 0.6
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
 -- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
@@ -714,7 +714,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Kota"
+title.Text = "Player Name Bota"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
