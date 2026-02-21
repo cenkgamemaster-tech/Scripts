@@ -60,6 +60,8 @@ local TAKE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.Field.PickupNPCStateChanged",
 	"ReplicatedStorage.Remotes.Plot.PickupSlotNPC",
 }
+-- Drop NPC remote (used on 30s timeout: drop then grab again instead of teleporting)
+local DROP_NPC_REMOTE_PATH = "ReplicatedStorage.Remotes.Field.DropNPC"
 
 local workspace = game:GetService("Workspace")
 
@@ -270,6 +272,21 @@ local function tryTakeViaRemote(nearest)
 end
 
 -- Release pickup state after we’ve teleported and walked outside (so Bubu doesn’t drop in the field).
+-- Call DropNPC remote to drop the held NPC (used when we retry: drop then hold E again).
+local function dropNPC(nearest)
+	if not nearest or not nearest.Parent then return end
+	local remote = resolveRemotePath(DROP_NPC_REMOTE_PATH)
+	if not remote then return end
+	local id = nearest:GetAttribute("NPCId") or nearest:GetAttribute("NpcId") or nearest.Name
+	local function fire(...)
+		if remote:IsA("RemoteEvent") then remote:FireServer(...) else remote:InvokeServer(...) end
+	end
+	pcall(function() fire(nearest) end)
+	pcall(function() fire(id) end)
+	pcall(function() fire(nearest.Name) end)
+end
+
+-- Release pickup state after we've teleported and walked outside (so Bubu doesn't drop in the field).
 local function releasePickupState(nearest)
 	if not nearest or not nearest.Parent then return end
 	local remote = findTakeRemote()
@@ -345,7 +362,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 			nearest = model
 		end
 	end
-	-- Hold E to pick up; walk to outside (30s). If timeout (character stops moving while carrying), teleport to outside then retry grab same NPC.
+	-- Hold E to pick up; walk to outside (30s). If timeout (character stops moving while carrying), drop NPC via DropNPC remote then hold E again and walk.
 	local startPos = root.Position
 	local x, y = startPos.X, startPos.Y
 	task.spawn(function()
@@ -356,22 +373,12 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local moveToTarget = Vector3.new(x, y, -10)
 		local arrived = walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		if not arrived and nearest and nearest.Parent then
-			if nearest then releasePickupState(nearest) end
-			local rootPart = char:FindFirstChild("HumanoidRootPart")
-			if rootPart then
-				rootPart.CFrame = CFrame.new(OUTSIDE_FIELD_POSITION)
-				task.wait(0.5)
-				local npcPos = nil
-				local ok, pivot = pcall(function() return nearest:GetPivot() end)
-				if ok and pivot then npcPos = pivot.Position elseif nearest.PrimaryPart then npcPos = nearest.PrimaryPart.Position end
-				if npcPos and rootPart then
-					rootPart.CFrame = CFrame.new(npcPos + Vector3.new(0, 0, 4))
-					task.wait(0.3)
-					holdEKey(HOLD_E_DURATION)
-					local retryTarget = Vector3.new(npcPos.X, npcPos.Y, -10)
-					walkToPosition(char, retryTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
-				end
-			end
+			dropNPC(nearest)
+			task.wait(0.5)
+			holdEKey(HOLD_E_DURATION)
+			local retryX = char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position.X or x
+			local retryY = char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position.Y or y
+			walkToPosition(char, Vector3.new(retryX, retryY, -10), WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
 		end
 		if nearest then releasePickupState(nearest) end
 		if onArrived then onArrived() end
@@ -447,7 +454,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Tasty"
+title.Text = "Player Name Dropy"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
