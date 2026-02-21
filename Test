@@ -54,8 +54,8 @@ local WALK_ARRIVED_DISTANCE = 4
 -- When carrying NPC: if character Z hasn't changed by this much for Z_STUCK_TIME, re-trigger MoveTo(destination)
 local Z_STUCK_THRESHOLD = 0.5
 local Z_STUCK_TIME = 1.5
--- Simulate hold E for pickup: duration in seconds (then we MoveTo to Z)
-local HOLD_E_DURATION = 2
+-- Simulate hold E for pickup: duration in seconds (short = less delay before moving)
+local HOLD_E_DURATION = 0.6
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
 local TAKE_REMOTE_PATH = nil
 -- Known pickup remotes (tried in order when TAKE_REMOTE_PATH is nil)
@@ -612,9 +612,11 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local start = os.clock()
 		local lastZ = r.Position.Z
 		local lastZTime = start
+		local arrived = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
+				arrived = true
 				if dist <= WALK_ARRIVED_DISTANCE * 2 then
 					r.CFrame = CFrame.new(moveToTarget)
 				end
@@ -636,7 +638,8 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 			humanoid:MoveTo(moveToTarget)
 			task.wait(0.2)
 		end
-		if nearest then releasePickupState(nearest) end
+		-- Only release pickup when we actually arrived; otherwise we would drop the NPC far away
+		if arrived and nearest then releasePickupState(nearest) end
 		if onArrived then onArrived() end
 	end)
 end
@@ -651,7 +654,7 @@ local function goToTopThenTakeAndTeleportOutside(onArrived)
 	if not root then if onArrived then onArrived() end return end
 	-- 1) Teleport to top Bubu (you are now near the best NPC)
 	root.CFrame = CFrame.new(topPos)
-	-- 2) Hold E to pick up the NPC (releasing after 2s is fine)
+	-- 2) Hold E to pick up the NPC (short hold so we start moving soon)
 	holdEKey(HOLD_E_DURATION)
 	-- 3) Walk to (same X, same Y, -10); character keeps moving until outside
 	takeNearestBubuAndTeleportOutside(onArrived)
