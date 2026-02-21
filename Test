@@ -933,18 +933,6 @@ local function openObjectsWindow()
 	objRemotesBtn.Font = Enum.Font.Gotham
 	objRemotesBtn.Parent = objTop
 
-	-- Scan Fuse: list objects whose name/path contains "Fuse" (run in game, check Output)
-	local objFuseBtn = Instance.new("TextButton")
-	objFuseBtn.Name = "Fuse"
-	objFuseBtn.Size = UDim2.new(0, 70, 0, 28)
-	objFuseBtn.Position = UDim2.new(1, -328, 0, 0)
-	objFuseBtn.BackgroundTransparency = 1
-	objFuseBtn.Text = "Scan Fuse"
-	objFuseBtn.TextColor3 = Color3.fromRGB(255, 220, 120)
-	objFuseBtn.TextSize = 11
-	objFuseBtn.Font = Enum.Font.Gotham
-	objFuseBtn.Parent = objTop
-
 	-- Refresh button (manual refresh only)
 	local objRefreshBtn = Instance.new("TextButton")
 	objRefreshBtn.Name = "Refresh"
@@ -1099,9 +1087,6 @@ local function openObjectsWindow()
 		listAllRemotes()
 	end)
 
-	objFuseBtn.MouseButton1Click:Connect(function()
-		listObjectsInGame("Fuse")
-	end)
 	objRefreshBtn.MouseButton1Click:Connect(refreshList)
 	-- Go to top: script handles teleport to top Bubu + 2 sec wait + take Bubu + teleport outside (no E key)
 	objTeleportBtn.MouseButton1Click:Connect(function()
