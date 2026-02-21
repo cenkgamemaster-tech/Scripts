@@ -1215,7 +1215,8 @@ local function openScanFuseWindow()
 	fuseScrollCorner.CornerRadius = UDim.new(0, 6)
 	fuseScrollCorner.Parent = fuseScroll
 
-	local fuseContent = Instance.new("TextLabel")
+	-- TextBox so you can select and copy (Ctrl+A, Ctrl+C). Read-only so you don't edit by accident.
+	local fuseContent = Instance.new("TextBox")
 	fuseContent.Name = "Content"
 	fuseContent.Size = UDim2.new(1, -8, 0, 0)
 	fuseContent.Position = UDim2.new(0, 4, 0, 4)
@@ -1227,6 +1228,9 @@ local function openScanFuseWindow()
 	fuseContent.TextXAlignment = Enum.TextXAlignment.Left
 	fuseContent.TextYAlignment = Enum.TextYAlignment.Top
 	fuseContent.TextWrapped = true
+	fuseContent.ClearTextOnFocus = false
+	fuseContent.MultiLine = true
+	fuseContent.TextEditable = false  -- read-only; you can still select and copy
 	fuseContent.AutomaticSize = Enum.AutomaticSize.Y
 	fuseContent.Parent = fuseScroll
 
@@ -1243,6 +1247,19 @@ local function openScanFuseWindow()
 	local text = #list > 0 and table.concat(list, "\n") or "(no objects containing \"Fuse\" found)"
 	fuseContent.Text = text
 	task.defer(updateFuseCanvasSize)
+
+	-- Hint for copying (Roblox doesn't allow scripts to write to clipboard in-game)
+	local fuseTip = Instance.new("TextLabel")
+	fuseTip.Name = "Tip"
+	fuseTip.Size = UDim2.new(1, -16, 0, 16)
+	fuseTip.Position = UDim2.new(0, 8, 1, -20)
+	fuseTip.BackgroundTransparency = 1
+	fuseTip.Text = "Click in the box, then Ctrl+A and Ctrl+C (Cmd on Mac) to copy all."
+	fuseTip.TextColor3 = Color3.fromRGB(140, 160, 180)
+	fuseTip.TextSize = 10
+	fuseTip.Font = Enum.Font.Gotham
+	fuseTip.TextXAlignment = Enum.TextXAlignment.Left
+	fuseTip.Parent = fuseMain
 end
 
 objectsBtn.MouseButton1Click:Connect(openObjectsWindow)
