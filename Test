@@ -631,6 +631,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local arrived = false
 		local sKeyHeld = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
+			if not collectingActive then break end
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
 				arrived = true
@@ -723,7 +724,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Yodax"
+title.Text = "Player Name Yodak"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
