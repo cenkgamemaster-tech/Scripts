@@ -451,87 +451,6 @@ local function readFuseFrameContent()
 	return table.concat(out, "\n")
 end
 
--- Same as readFuseFrameContent but returns structured data for recording: { bring = { "Name | Mutation | Rarity", ... }, possible = { "Name | Mutation | Rarity | Chance", ... } }
-local function getFuseFrameData()
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if not gui then return nil end
-	local mainUI = gui:FindFirstChild("MainUI")
-	if not mainUI then return nil end
-	local menus = mainUI:FindFirstChild("Menus")
-	if not menus then return nil end
-	local fuseFrame = menus:FindFirstChild("FuseFrame")
-	if not fuseFrame then return nil end
-	local frame = fuseFrame:FindFirstChild("Frame")
-	if not frame then return nil end
-
-	local function readRow(parent, labelNames)
-		local labels = {}
-		for _, name in ipairs(labelNames) do
-			local el = parent:FindFirstChild(name)
-			labels[name] = (el and el:IsA("GuiObject") and el.Text) and el.Text or ""
-		end
-		return labels
-	end
-	local function formatRow(labels, order)
-		local parts = {}
-		for _, k in ipairs(order) do
-			if labels[k] and labels[k] ~= "" then table.insert(parts, labels[k]) end
-		end
-		return table.concat(parts, " | ")
-	end
-
-	local bring = {}
-	local bringFrame = frame:FindFirstChild("BringFrame")
-	if bringFrame then
-		for _, child in ipairs(bringFrame:GetChildren()) do
-			local npcName = child:FindFirstChild("NpcName")
-			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
-				local labels = readRow(child, { "NpcName", "Mutation", "Rarity" })
-				local row = formatRow(labels, { "NpcName", "Mutation", "Rarity" })
-				if row ~= "NpcName | Mutation | Rarity" and row ~= "" then
-					table.insert(bring, row)
-				end
-			end
-		end
-	end
-
-	local possible = {}
-	local possibleFrame = frame:FindFirstChild("PossibleFrame")
-	if possibleFrame then
-		for _, child in ipairs(possibleFrame:GetChildren()) do
-			local npcName = child:FindFirstChild("NpcName")
-			if npcName and (npcName:IsA("TextLabel") or npcName:IsA("TextButton")) then
-				local labels = readRow(child, { "NpcName", "Mutation", "Rarity", "Chance" })
-				local row = formatRow(labels, { "NpcName", "Mutation", "Rarity", "Chance" })
-				if row ~= "NpcName | Mutation | Rarity | %0" and row ~= "" then
-					table.insert(possible, row)
-				end
-			end
-		end
-	end
-
-	return { bring = bring, possible = possible }
-end
-
--- Accumulated fuse combinations (Bring → Possible) when recording. Format each entry: "Bring: [A, B, C, D] → Possible: X | Y | Z"
-local fuseRecordedCombos = {}
-
-local function formatRecordedCombos()
-	if #fuseRecordedCombos == 0 then
-		return "(No combinations recorded yet. Turn on Record, then change the 4 Bring NPCs and click Read Fuse UI for each combo.)"
-	end
-	local lines = { ("=== Recorded combinations (%d) ==="):format(#fuseRecordedCombos), "" }
-	for i, rec in ipairs(fuseRecordedCombos) do
-		local bringStr = table.concat(rec.bring, " ; ")
-		local possStr = table.concat(rec.possible, " ; ")
-		table.insert(lines, ("--- Combo %d ---"):format(i))
-		table.insert(lines, ("Bring: %s"):format(bringStr))
-		table.insert(lines, ("Possible: %s"):format(possStr))
-		table.insert(lines, "")
-	end
-	return table.concat(lines, "\n")
-end
-
 -- Serialize a table to a readable string (depth-limited). For reading fuse data from ModuleScripts.
 local function tableToString(t, depth, maxDepth)
 	depth = depth or 0
@@ -1476,7 +1395,7 @@ local function openScanFuseWindow()
 	-- Scrollable text area (manual CanvasSize so scroll bar works)
 	local fuseScroll = Instance.new("ScrollingFrame")
 	fuseScroll.Name = "Scroll"
-	fuseScroll.Size = UDim2.new(1, -16, 1, -128)
+	fuseScroll.Size = UDim2.new(1, -16, 1, -88)
 	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
 	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	fuseScroll.BorderSizePixel = 0
@@ -1523,13 +1442,11 @@ local function openScanFuseWindow()
 	fuseContent.Text = text
 	task.defer(updateFuseCanvasSize)
 
-	local recordOn = false
-
-	-- Read Fuse UI: if recording, append this combo to list and show all recorded; else show current only
+	-- Read Fuse UI: show current PossibleFrame + BringFrame content (open Fuse menu first)
 	local fuseReadBtn = Instance.new("TextButton")
 	fuseReadBtn.Name = "ReadFuseUI"
 	fuseReadBtn.Size = UDim2.new(0.5, -12, 0, 26)
-	fuseReadBtn.Position = UDim2.new(0, 8, 1, -118)
+	fuseReadBtn.Position = UDim2.new(0, 8, 1, -52)
 	fuseReadBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
 	fuseReadBtn.BorderSizePixel = 0
 	fuseReadBtn.Text = "Read Fuse UI"
@@ -1541,18 +1458,7 @@ local function openScanFuseWindow()
 	fuseReadBtnCorner.CornerRadius = UDim.new(0, 6)
 	fuseReadBtnCorner.Parent = fuseReadBtn
 	fuseReadBtn.MouseButton1Click:Connect(function()
-		if recordOn then
-			local data = getFuseFrameData()
-			if data and (#data.bring > 0 or #data.possible > 0) then
-				table.insert(fuseRecordedCombos, data)
-				fuseContent.Text = formatRecordedCombos()
-				fuseRecordLabel.Text = ("Record: ON (%d)"):format(#fuseRecordedCombos)
-			else
-				fuseContent.Text = readFuseFrameContent() .. "\n\n(No valid Bring/Possible data to record. Open Fuse menu and select 4 NPCs.)"
-			end
-		else
-			fuseContent.Text = readFuseFrameContent()
-		end
+		fuseContent.Text = readFuseFrameContent()
 		task.defer(updateFuseCanvasSize)
 	end)
 
@@ -1560,7 +1466,7 @@ local function openScanFuseWindow()
 	local fuseFindBtn = Instance.new("TextButton")
 	fuseFindBtn.Name = "FindFuseList"
 	fuseFindBtn.Size = UDim2.new(0.5, -12, 0, 26)
-	fuseFindBtn.Position = UDim2.new(0.5, 4, 1, -118)
+	fuseFindBtn.Position = UDim2.new(0.5, 4, 1, -52)
 	fuseFindBtn.BackgroundColor3 = Color3.fromRGB(60, 50, 80)
 	fuseFindBtn.BorderSizePixel = 0
 	fuseFindBtn.Text = "Find Fuse list (client)"
@@ -1576,59 +1482,13 @@ local function openScanFuseWindow()
 		task.defer(updateFuseCanvasSize)
 	end)
 
-	-- Record toggle: when ON, each "Read Fuse UI" adds current combo to the list
-	local fuseRecordBtn = Instance.new("TextButton")
-	fuseRecordBtn.Name = "Record"
-	fuseRecordBtn.Size = UDim2.new(0.5, -12, 0, 24)
-	fuseRecordBtn.Position = UDim2.new(0, 8, 1, -86)
-	fuseRecordBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 50)
-	fuseRecordBtn.BorderSizePixel = 0
-	fuseRecordBtn.Text = "Record: OFF"
-	fuseRecordBtn.TextColor3 = Color3.fromRGB(180, 255, 200)
-	fuseRecordBtn.TextSize = 10
-	fuseRecordBtn.Font = Enum.Font.Gotham
-	fuseRecordBtn.Parent = fuseMain
-	local fuseRecordBtnCorner = Instance.new("UICorner")
-	fuseRecordBtnCorner.CornerRadius = UDim.new(0, 4)
-	fuseRecordBtnCorner.Parent = fuseRecordBtn
-	local fuseRecordLabel = fuseRecordBtn  -- reuse for text updates
-	fuseRecordBtn.MouseButton1Click:Connect(function()
-		recordOn = not recordOn
-		fuseRecordBtn.Text = recordOn and ("Record: ON (%d)"):format(#fuseRecordedCombos) or "Record: OFF"
-		fuseRecordBtn.BackgroundColor3 = recordOn and Color3.fromRGB(50, 90, 60) or Color3.fromRGB(40, 60, 50)
-	end)
-
-	-- Clear recorded combinations
-	local fuseClearBtn = Instance.new("TextButton")
-	fuseClearBtn.Name = "ClearRecorded"
-	fuseClearBtn.Size = UDim2.new(0.5, -12, 0, 24)
-	fuseClearBtn.Position = UDim2.new(0.5, 4, 1, -86)
-	fuseClearBtn.BackgroundColor3 = Color3.fromRGB(70, 40, 40)
-	fuseClearBtn.BorderSizePixel = 0
-	fuseClearBtn.Text = "Clear recorded"
-	fuseClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
-	fuseClearBtn.TextSize = 10
-	fuseClearBtn.Font = Enum.Font.Gotham
-	fuseClearBtn.Parent = fuseMain
-	local fuseClearBtnCorner = Instance.new("UICorner")
-	fuseClearBtnCorner.CornerRadius = UDim.new(0, 4)
-	fuseClearBtnCorner.Parent = fuseClearBtn
-	fuseClearBtn.MouseButton1Click:Connect(function()
-		fuseRecordedCombos = {}
-		fuseContent.Text = "(Cleared. Turn on Record, then for each combo: change the 4 Bring NPCs in the Fuse menu and click Read Fuse UI.)"
-		if recordOn then
-			fuseRecordBtn.Text = "Record: ON (0)"
-		end
-		task.defer(updateFuseCanvasSize)
-	end)
-
 	-- Hint for copying
 	local fuseTip = Instance.new("TextLabel")
 	fuseTip.Name = "Tip"
 	fuseTip.Size = UDim2.new(1, -16, 0, 14)
-	fuseTip.Position = UDim2.new(0, 8, 1, -56)
+	fuseTip.Position = UDim2.new(0, 8, 1, -22)
 	fuseTip.BackgroundTransparency = 1
-	fuseTip.Text = "To get all combos: Record ON → change 4 Bring NPCs in game → Read Fuse UI → repeat. Ctrl+A, Ctrl+C to copy."
+	fuseTip.Text = "Ctrl+A then Ctrl+C (Cmd on Mac) to copy."
 	fuseTip.TextColor3 = Color3.fromRGB(140, 160, 180)
 	fuseTip.TextSize = 10
 	fuseTip.Font = Enum.Font.Gotham
