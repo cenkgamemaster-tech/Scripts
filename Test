@@ -48,9 +48,12 @@ local TELEPORT_BACK_Z_END = -30
 local TELEPORT_BACK_Z_STEP = 10
 -- MoveTo goes to (same X, same Y, -10). "Teleport back" button uses this.
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
--- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying; we retry after teleport)
+-- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
 local WALK_TO_OUTSIDE_TIMEOUT = 30
 local WALK_ARRIVED_DISTANCE = 4
+-- When carrying NPC: if character Z hasn't changed by this much for Z_STUCK_TIME, re-trigger MoveTo(destination)
+local Z_STUCK_THRESHOLD = 0.5
+local Z_STUCK_TIME = 1.5
 -- Simulate hold E for pickup: duration in seconds (then we MoveTo to Z)
 local HOLD_E_DURATION = 2
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
@@ -340,6 +343,7 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 end
 
 -- Take nearest Bubu and teleport (player + Bubu) to outside the field. Optional onArrived() called when MoveTo finishes.
+-- After hold E: move to destination; if character Z stops changing (stuck), re-trigger MoveTo(destination) until we arrive.
 local function takeNearestBubuAndTeleportOutside(onArrived)
 	local character = LocalPlayer.Character
 	if not character then return end
@@ -362,23 +366,43 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 			nearest = model
 		end
 	end
-	-- Hold E to pick up; walk to outside (30s). If timeout (character stops moving while carrying), drop NPC via DropNPC remote then hold E again and walk.
 	local startPos = root.Position
 	local x, y = startPos.X, startPos.Y
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		if not char then if onArrived then onArrived() end return end
+		local humanoid = char:FindFirstChildOfClass("Humanoid")
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if not humanoid or not r then if onArrived then onArrived() end return end
 		task.wait(0.2)
 		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
-		local arrived = walkToPosition(char, moveToTarget, WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
-		if not arrived and nearest and nearest.Parent then
-			dropNPC(nearest)
-			task.wait(0.5)
-			holdEKey(HOLD_E_DURATION)
-			local retryX = char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position.X or x
-			local retryY = char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position.Y or y
-			walkToPosition(char, Vector3.new(retryX, retryY, -10), WALK_TO_OUTSIDE_TIMEOUT, WALK_ARRIVED_DISTANCE)
+		local start = os.clock()
+		local lastZ = r.Position.Z
+		local lastZTime = start
+		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
+			local dist = (r.Position - moveToTarget).Magnitude
+			if dist <= WALK_ARRIVED_DISTANCE then
+				if dist <= WALK_ARRIVED_DISTANCE * 2 then
+					r.CFrame = CFrame.new(moveToTarget)
+				end
+				break
+			end
+			local now = os.clock()
+			local currentZ = r.Position.Z
+			if math.abs(currentZ - lastZ) <= Z_STUCK_THRESHOLD then
+				if (now - lastZTime) >= Z_STUCK_TIME then
+					-- Z not changing: re-trigger MoveTo so character starts moving again
+					humanoid:MoveTo(moveToTarget)
+					lastZ = r.Position.Z
+					lastZTime = now
+				end
+			else
+				lastZ = currentZ
+				lastZTime = now
+			end
+			humanoid:MoveTo(moveToTarget)
+			task.wait(0.2)
 		end
 		if nearest then releasePickupState(nearest) end
 		if onArrived then onArrived() end
@@ -454,7 +478,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Dropy"
+title.Text = "Player Name Loly"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
