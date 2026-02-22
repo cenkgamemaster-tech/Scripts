@@ -51,6 +51,12 @@ local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
 local WALK_TO_OUTSIDE_TIMEOUT = 100
 local WALK_ARRIVED_DISTANCE = 4
+-- When carrying NPC: if character Z hasn't changed by this much for Z_STUCK_TIME, re-trigger MoveTo(destination)
+local Z_STUCK_THRESHOLD = 0.5
+local Z_STUCK_TIME = 2
+-- Re-hold E after this many seconds while walking (game may force drop at ~30s; re-hold once to try to stay carrying)
+local REHOLD_E_AFTER_SEC = 24
+local REHOLD_E_DURATION = 0.4
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
 local HOLD_E_DURATION = 0.7
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
@@ -77,34 +83,6 @@ local function holdEKey(durationSeconds)
 		return true
 	end
 	task.wait(durationSeconds)
-	return false
-end
-
--- Release E key (ensure E is up before we hold S, so game doesn't think we're still pressing E).
-local function releaseEKey()
-	local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
-	if ok and vim and vim.SendKeyEvent then
-		vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-		return true
-	end
-	return false
-end
-
--- S key: same VirtualInputManager pattern as E. Press S down for movement, release when done.
-local function pressSDown()
-	local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
-	if ok and vim and vim.SendKeyEvent then
-		vim:SendKeyEvent(true, Enum.KeyCode.S, false, game)
-		return true
-	end
-	return false
-end
-local function releaseSUp()
-	local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
-	if ok and vim and vim.SendKeyEvent then
-		vim:SendKeyEvent(false, Enum.KeyCode.S, false, game)
-		return true
-	end
 	return false
 end
 
@@ -147,9 +125,9 @@ local function getBubuModels()
 					local includeByMutation = (mutation ~= "Normal")
 						or (mutation == "Normal" and (rarity == "Secret" or rarity == "Exclusive"))
 					if includeByMutation then
-						local excludeLowRarity = (mutation == "Gold" or mutation == "Diamond" or mutation == "Volcano" or mutation == "Toxic" or mutation == "Music" or mutation == "Candy")
+						local excludeGoldDiamondLowRarity = (mutation == "Gold" or mutation == "Diamond")
 							and (rarity == "Common" or rarity == "Uncommon" or rarity == "Rare")
-						if not excludeLowRarity then
+						if not excludeGoldDiamondLowRarity then
 							table.insert(collected, obj)
 						end
 					end
@@ -599,30 +577,28 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	return arrived
 end
 
--- Carry current Bubu to outside. You move with virtual keyboard or S; script waits until you arrive, then releases.
--- If carriedModel is passed (e.g. top Bubu we just held E on), use it for releasePickupState; no nearest search.
-local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
+-- Take nearest Bubu and teleport (player + Bubu) to outside the field. Optional onArrived() called when MoveTo finishes.
+-- After hold E: move to destination; if character Z stops changing (stuck), re-trigger MoveTo(destination) until we arrive.
+local function takeNearestBubuAndTeleportOutside(onArrived)
 	local character = LocalPlayer.Character
 	if not character then return end
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if not root then return end
-	local nearest = carriedModel
-	if not nearest then
-		local playerPos = root.Position
-		local bubus = getBubuModels()
-		local nearestDist = TAKE_BUBU_MAX_RANGE
-		for _, model in ipairs(bubus) do
-			local pos = nil
-			local ok, pivot = pcall(function() return model:GetPivot() end)
-			if ok and pivot then pos = pivot.Position
-			elseif model.PrimaryPart then pos = model.PrimaryPart.Position
-			end
-			if not pos then continue end
-			local dist = (pos - playerPos).Magnitude
-			if dist < nearestDist then
-				nearestDist = dist
-				nearest = model
-			end
+	local playerPos = root.Position
+	local bubus = getBubuModels()
+	local nearest = nil
+	local nearestDist = TAKE_BUBU_MAX_RANGE
+	for _, model in ipairs(bubus) do
+		local pos = nil
+		local ok, pivot = pcall(function() return model:GetPivot() end)
+		if ok and pivot then pos = pivot.Position
+		elseif model.PrimaryPart then pos = model.PrimaryPart.Position
+		end
+		if not pos then continue end
+		local dist = (pos - playerPos).Magnitude
+		if dist < nearestDist then
+			nearestDist = dist
+			nearest = model
 		end
 	end
 	local startPos = root.Position
@@ -630,16 +606,25 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		if not char then if onArrived then onArrived() end return end
+		local humanoid = char:FindFirstChildOfClass("Humanoid")
 		local r = char:FindFirstChild("HumanoidRootPart")
-		if not r then if onArrived then onArrived() end return end
-		releaseEKey()
-		task.wait(0.3)
+		if not humanoid or not r then if onArrived then onArrived() end return end
+		task.wait(0.05)
+		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
+		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
+		local lastZ = r.Position.Z
+		local lastZTime = start
 		local arrived = false
-		pressSDown()
+		local didRehold = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
-			if not collectingActive then break end
+			local elapsed = os.clock() - start
+			if not didRehold and elapsed >= REHOLD_E_AFTER_SEC then
+				holdEKey(REHOLD_E_DURATION)
+				humanoid:MoveTo(moveToTarget)
+				didRehold = true
+			end
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
 				arrived = true
@@ -648,33 +633,41 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 				end
 				break
 			end
-			task.wait(0.1)
+			local now = os.clock()
+			local currentZ = r.Position.Z
+			if math.abs(currentZ - lastZ) <= Z_STUCK_THRESHOLD then
+				if (now - lastZTime) >= Z_STUCK_TIME then
+					humanoid:MoveTo(moveToTarget)
+					lastZ = r.Position.Z
+					lastZTime = now
+				end
+			else
+				lastZ = currentZ
+				lastZTime = now
+			end
+			-- Do NOT call MoveTo every tick: the game may treat repeated MoveTo as release and drop the NPC. Only move once at start and when stuck.
+			task.wait(0.2)
 		end
-		releaseSUp()
+		-- Only release when we actually arrived; never fire release on timeout (would drop NPC in bad spot)
 		if arrived and nearest then releasePickupState(nearest) end
 		if onArrived then onArrived() end
 	end)
 end
 
--- Full flow: teleport to top Bubu → hold E (we're now carrying that NPC) → hold S until outside.
+-- Full flow: teleport to top Bubu → hold E → take nearest Bubu and MoveTo outside. Optional onArrived() when arrived.
 local function goToTopThenTakeAndTeleportOutside(onArrived)
-	local sorted = getSortedBubuListTopLevel()
-	if #sorted == 0 then if onArrived then onArrived() end return end
-	local topModel = sorted[1]
 	local topPos = getTopBubuPosition()
 	if not topPos then if onArrived then onArrived() end return end
 	local character = LocalPlayer.Character
 	if not character then if onArrived then onArrived() end return end
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if not root then if onArrived then onArrived() end return end
-	-- 1) Teleport to top Bubu (we are now at the rarest NPC)
+	-- 1) Teleport to top Bubu (you are now near the best NPC)
 	root.CFrame = CFrame.new(topPos)
-	-- 2) Hold E to pick up that NPC, then release E and wait so game registers E release before S
+	-- 2) Hold E to pick up the NPC (short hold so we start moving soon)
 	holdEKey(HOLD_E_DURATION)
-	releaseEKey()
-	task.wait(0.6)
-	-- 3) Hold S until outside (we're already carrying top Bubu; no need to find nearest)
-	takeNearestBubuAndTeleportOutside(onArrived, topModel)
+	-- 3) Walk to (same X, same Y, -10); character keeps moving until outside
+	takeNearestBubuAndTeleportOutside(onArrived)
 end
 
 local main = Instance.new("Frame")
@@ -730,7 +723,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name yoman3"
+title.Text = "Player Name yoman4"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -1257,7 +1250,7 @@ local function openObjectsWindow()
 		return row
 	end
 
-	-- Use same filtered list as collection (excludes Gold/Diamond/Volcano/Toxic/Music/Candy when rarity is Common/Uncommon/Rare, etc.)
+	-- Use same filtered list as collection (excludes Gold/Diamond when rarity is Common/Uncommon/Rare, etc.)
 	local function getSortedBubuList()
 		return getSortedBubuListTopLevel()
 	end
