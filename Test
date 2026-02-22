@@ -139,9 +139,9 @@ local function getBubuModels()
 					local includeByMutation = (mutation ~= "Normal")
 						or (mutation == "Normal" and (rarity == "Secret" or rarity == "Exclusive"))
 					if includeByMutation then
-						local excludeGoldDiamondLowRarity = (mutation == "Gold" or mutation == "Diamond")
+						local excludeLowRarity = (mutation == "Gold" or mutation == "Diamond" or mutation == "Volcano" or mutation == "Toxic" or mutation == "Music" or mutation == "Candy")
 							and (rarity == "Common" or rarity == "Uncommon" or rarity == "Rare")
-						if not excludeGoldDiamondLowRarity then
+						if not excludeLowRarity then
 							table.insert(collected, obj)
 						end
 					end
@@ -724,7 +724,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Yodam"
+title.Text = "Player Name Yodak"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -1251,7 +1251,7 @@ local function openObjectsWindow()
 		return row
 	end
 
-	-- Use same filtered list as collection (excludes Gold/Diamond when rarity is Common/Uncommon/Rare, etc.)
+	-- Use same filtered list as collection (excludes Gold/Diamond/Volcano/Toxic/Music/Candy when rarity is Common/Uncommon/Rare, etc.)
 	local function getSortedBubuList()
 		return getSortedBubuListTopLevel()
 	end
