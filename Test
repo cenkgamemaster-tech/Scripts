@@ -636,6 +636,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 		releaseEKey()
 		task.wait(0.3)
 		local moveToTarget = Vector3.new(x, y, -10)
+		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
 		local arrived = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
@@ -732,7 +733,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name yoman"
+title.Text = "Player Name yoman2"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
