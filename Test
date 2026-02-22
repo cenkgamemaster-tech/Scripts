@@ -621,8 +621,7 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		local humanoid = char:FindFirstChildOfClass("Humanoid")
 		local r = char:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not r then if onArrived then onArrived() end return end
-		task.wait(0.05)
-		holdEKey(HOLD_E_DURATION)
+		task.wait(0.1)
 		local moveToTarget = Vector3.new(x, y, -10)
 		pressSDown()
 		local start = os.clock()
@@ -715,7 +714,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Yodaq"
+title.Text = "Player Name Yodax"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
