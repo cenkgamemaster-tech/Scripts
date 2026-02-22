@@ -49,7 +49,7 @@ local TELEPORT_BACK_Z_STEP = 10
 -- MoveTo goes to (same X, same Y, -10). "Teleport back" button uses this.
 local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
-local WALK_TO_OUTSIDE_TIMEOUT = 75
+local WALK_TO_OUTSIDE_TIMEOUT = 100
 local WALK_ARRIVED_DISTANCE = 4
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
 local HOLD_E_DURATION = 0.7
@@ -732,7 +732,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name hayde"
+title.Text = "Player Name yoman"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
