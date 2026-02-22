@@ -634,9 +634,8 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 		local r = char:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not r then if onArrived then onArrived() end return end
 		releaseEKey()
-		task.wait(0.15)
+		task.wait(0.3)
 		local moveToTarget = Vector3.new(x, y, -10)
-		pressSDown()
 		local start = os.clock()
 		local arrived = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
@@ -650,7 +649,9 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 				end
 				break
 			end
-			task.wait(0.2)
+			releaseEKey()
+			pressSDown()
+			task.wait(0.1)
 		end
 		releaseSUp()
 		if arrived and nearest then releasePickupState(nearest) end
@@ -671,10 +672,10 @@ local function goToTopThenTakeAndTeleportOutside(onArrived)
 	if not root then if onArrived then onArrived() end return end
 	-- 1) Teleport to top Bubu (we are now at the rarest NPC)
 	root.CFrame = CFrame.new(topPos)
-	-- 2) Hold E to pick up that NPC, then release E so we can move with S
+	-- 2) Hold E to pick up that NPC, then release E and wait so game registers E release before S
 	holdEKey(HOLD_E_DURATION)
 	releaseEKey()
-	task.wait(0.25)
+	task.wait(0.6)
 	-- 3) Hold S until outside (we're already carrying top Bubu; no need to find nearest)
 	takeNearestBubuAndTeleportOutside(onArrived, topModel)
 end
@@ -732,7 +733,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name hayda"
+title.Text = "Player Name haydar"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
