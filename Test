@@ -155,18 +155,27 @@ local function getSortedBubuListTopLevel()
 	return collected
 end
 -- Position of top Bubu (rarest), 4 studs in front; same as "Go to top" button. Returns nil if no Bubus.
+-- Z beyond this is outside the field; player cannot hold NPC there. Clamp teleport to this when going to top NPC.
+local FIELD_HOLD_Z_MAX = -25
+
 local function getTopBubuPosition()
 	local sorted = getSortedBubuListTopLevel()
 	if #sorted == 0 then return nil end
 	local topModel = sorted[1]
+	local pos
 	local ok, pivot = pcall(function() return topModel:GetPivot() end)
 	if ok and pivot then
-		return pivot.Position + Vector3.new(0, 0, 4)
+		pos = pivot.Position + Vector3.new(0, 0, 4)
+	elseif topModel.PrimaryPart then
+		pos = topModel.PrimaryPart.Position + Vector3.new(0, 0, 4)
+	else
+		return nil
 	end
-	if topModel.PrimaryPart then
-		return topModel.PrimaryPart.Position + Vector3.new(0, 0, 4)
+	-- If Z > -25 we're outside field and can't hold NPC; move to Z = -25
+	if pos.Z > FIELD_HOLD_Z_MAX then
+		pos = Vector3.new(pos.X, pos.Y, FIELD_HOLD_Z_MAX)
 	end
-	return nil
+	return pos
 end
 
 local function resolveRemotePath(pathString)
@@ -723,7 +732,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name yoman5"
+title.Text = "Player Name yoman7"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
@@ -1273,7 +1282,12 @@ local function openObjectsWindow()
 			return
 		end
 		-- Teleport 4 studs in front of the Bubu so player doesn't spawn inside it
-		root.CFrame = CFrame.new(pos + Vector3.new(0, 0, 4))
+		local targetPos = pos + Vector3.new(0, 0, 4)
+		-- If Z > -25 we're outside field and can't hold NPC; move to Z = -25
+		if targetPos.Z > FIELD_HOLD_Z_MAX then
+			targetPos = Vector3.new(targetPos.X, targetPos.Y, FIELD_HOLD_Z_MAX)
+		end
+		root.CFrame = CFrame.new(targetPos)
 	end
 
 	local function refreshList()
