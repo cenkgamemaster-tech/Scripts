@@ -51,8 +51,6 @@ local OUTSIDE_FIELD_POSITION = Vector3.new(-22, 4.2, -10)
 -- MoveTo to outside: max time (s) per attempt (character may stop moving after ~30s while carrying)
 local WALK_TO_OUTSIDE_TIMEOUT = 75
 local WALK_ARRIVED_DISTANCE = 4
--- When carrying any NPC: wait this long after MoveTo then hold S until destination
-local S_HOLD_DELAY = 2.5
 -- Simulate hold E for pickup: duration in seconds (short = start moving sooner; increase if pickup doesn't register)
 local HOLD_E_DURATION = 0.7
 -- Optional: set to a path string (e.g. "ReplicatedStorage.Remotes.Field.PickupNPCStateChanged") to use that remote; nil = auto-detect
@@ -591,8 +589,8 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	return arrived
 end
 
--- Take nearest Bubu and teleport (player + Bubu) to outside the field. Optional onArrived() called when MoveTo finishes.
--- After hold E: move to destination; if character Z stops changing (stuck), re-trigger MoveTo(destination) until we arrive.
+-- Take nearest Bubu and teleport (player + Bubu) to outside the field. Optional onArrived() when arrived.
+-- After hold E: face target, press and hold S until destination (no MoveTo).
 local function takeNearestBubuAndTeleportOutside(onArrived)
 	local character = LocalPlayer.Character
 	if not character then return end
@@ -626,30 +624,23 @@ local function takeNearestBubuAndTeleportOutside(onArrived)
 		task.wait(0.05)
 		holdEKey(HOLD_E_DURATION)
 		local moveToTarget = Vector3.new(x, y, -10)
-		humanoid:MoveTo(moveToTarget)
+		pressSDown()
 		local start = os.clock()
 		local arrived = false
-		local sKeyHeld = false
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
 			if not collectingActive then break end
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
 				arrived = true
-				if sKeyHeld then releaseSUp() end
+				releaseSUp()
 				if dist <= WALK_ARRIVED_DISTANCE * 2 then
 					r.CFrame = CFrame.new(moveToTarget)
 				end
 				break
 			end
-			if not sKeyHeld and (os.clock() - start) >= S_HOLD_DELAY then
-				local dir = (moveToTarget - r.Position).Unit
-				r.CFrame = CFrame.lookAt(r.Position, r.Position + Vector3.new(dir.X, 0, dir.Z))
-				pressSDown()
-				sKeyHeld = true
-			end
 			task.wait(0.2)
 		end
-		if sKeyHeld then releaseSUp() end
+		releaseSUp()
 		if arrived and nearest then releasePickupState(nearest) end
 		if onArrived then onArrived() end
 	end)
@@ -667,7 +658,7 @@ local function goToTopThenTakeAndTeleportOutside(onArrived)
 	root.CFrame = CFrame.new(topPos)
 	-- 2) Hold E to pick up the NPC (short hold so we start moving soon)
 	holdEKey(HOLD_E_DURATION)
-	-- 3) Walk to (same X, same Y, -10); character keeps moving until outside
+	-- 3) Hold S until outside (same X, same Y, -10)
 	takeNearestBubuAndTeleportOutside(onArrived)
 end
 
@@ -724,7 +715,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name Yodak"
+title.Text = "Player Name Yodaq"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
