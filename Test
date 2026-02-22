@@ -90,7 +90,7 @@ local function releaseEKey()
 	return false
 end
 
--- Press S down or release S up (for holding S until destination). Uses VirtualInputManager.
+-- S key: same VirtualInputManager pattern as E. Press S down for movement, release when done.
 local function pressSDown()
 	local ok, vim = pcall(function() return game:GetService("VirtualInputManager") end)
 	if ok and vim and vim.SendKeyEvent then
@@ -599,7 +599,7 @@ local function walkToPosition(character, targetPos, timeoutSeconds, arrivedDist)
 	return arrived
 end
 
--- Carry current Bubu to outside (hold S until destination). Optional onArrived() when arrived.
+-- Carry current Bubu to outside. You move with virtual keyboard or S; script waits until you arrive, then releases.
 -- If carriedModel is passed (e.g. top Bubu we just held E on), use it for releasePickupState; no nearest search.
 local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 	local character = LocalPlayer.Character
@@ -630,27 +630,24 @@ local function takeNearestBubuAndTeleportOutside(onArrived, carriedModel)
 	task.spawn(function()
 		local char = LocalPlayer.Character
 		if not char then if onArrived then onArrived() end return end
-		local humanoid = char:FindFirstChildOfClass("Humanoid")
 		local r = char:FindFirstChild("HumanoidRootPart")
-		if not humanoid or not r then if onArrived then onArrived() end return end
+		if not r then if onArrived then onArrived() end return end
 		releaseEKey()
 		task.wait(0.3)
 		local moveToTarget = Vector3.new(x, y, -10)
-		humanoid:MoveTo(moveToTarget)
 		local start = os.clock()
 		local arrived = false
+		pressSDown()
 		while (os.clock() - start) < WALK_TO_OUTSIDE_TIMEOUT do
 			if not collectingActive then break end
 			local dist = (r.Position - moveToTarget).Magnitude
 			if dist <= WALK_ARRIVED_DISTANCE then
 				arrived = true
-				releaseSUp()
 				if dist <= WALK_ARRIVED_DISTANCE * 2 then
 					r.CFrame = CFrame.new(moveToTarget)
 				end
 				break
 			end
-			pressSDown()
 			task.wait(0.1)
 		end
 		releaseSUp()
@@ -733,7 +730,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name yoman2"
+title.Text = "Player Name yoman3"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
