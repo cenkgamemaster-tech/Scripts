@@ -86,6 +86,9 @@ local function holdEKey(durationSeconds)
 	return false
 end
 
+-- NPCs in this set are rare but we collect all mutations for them (no low-rarity exclusion for Gold/Diamond/Music/etc.)
+local COLLECT_ALL_MUTATIONS_NPC_IDS = { ["Happiness"] = true }
+
 -- Get all Bubu models (path match; include if Mutation ~= Normal, or if Mutation is Normal but Rarity is Secret/Exclusive)
 local function getCharacterInfoLabelTopLevel(model, labelName)
 	for _, desc in ipairs(model:GetDescendants()) do
@@ -125,8 +128,10 @@ local function getBubuModels()
 					local includeByMutation = (mutation ~= "Normal")
 						or (mutation == "Normal" and (rarity == "Secret" or rarity == "Exclusive"))
 					if includeByMutation then
+						local npcId = tostring(obj:GetAttribute("NPCId") or obj:GetAttribute("NpcId") or getCharacterInfoLabelTopLevel(obj, "NpcName") or obj.Name or "")
 						local excludeGoldDiamondLowRarity = (mutation == "Gold" or mutation == "Diamond" or mutation == "Music" or mutation == "Toxic" or mutation == "Volcano" or mutation == "Candy")
 							and (rarity == "Common" or rarity == "Uncommon" or rarity == "Rare")
+							and not COLLECT_ALL_MUTATIONS_NPC_IDS[npcId]
 						if not excludeGoldDiamondLowRarity then
 							table.insert(collected, obj)
 						end
@@ -732,7 +737,7 @@ title.Size = UDim2.new(1, -44, 0, 28)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Active = true  -- required for InputBegan to fire on drag handle
-title.Text = "Player Name yoman11"
+title.Text = "Player Name yoman13"
 title.TextColor3 = Color3.fromRGB(200, 230, 255)
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
