@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.8.0"
+local VERSION = "1.8.1"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -257,6 +257,159 @@ local function getMatchingPetsListSameAsEscape()
 	return out
 end
 
+-- Build text: one instance full name + its attributes (for copiable detail window)
+local function getInstanceFullNameAndAttributesText(obj)
+	if not obj then return "" end
+	local lines = {}
+	local okName, fullName = pcall(function() return obj:GetFullName() or obj.Name or "?" end)
+	lines[1] = (okName and fullName) or "?"
+	local okAttr, names = pcall(function() return obj:GetAttributeNames() end)
+	if okAttr and names and #names > 0 then
+		for _, attrName in ipairs(names) do
+			local val = obj:GetAttribute(attrName)
+			table.insert(lines, "  " .. tostring(attrName) .. " = " .. tostring(val))
+		end
+	else
+		table.insert(lines, "  (no attributes)")
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Build text: root inst + all descendants, each with full name and attributes (copiable)
+local function getAllDescendantsWithAttributesText(inst)
+	if not inst then return "(no object)" end
+	local lines = {}
+	local okRoot, rootName = pcall(function() return inst:GetFullName() end)
+	table.insert(lines, "=== " .. (okRoot and rootName or "?") .. " ===")
+	table.insert(lines, getInstanceFullNameAndAttributesText(inst))
+	table.insert(lines, "")
+	local ok, descList = pcall(function() return inst:GetDescendants() end)
+	if ok and descList then
+		for _, d in ipairs(descList) do
+			table.insert(lines, "---")
+			table.insert(lines, getInstanceFullNameAndAttributesText(d))
+			table.insert(lines, "")
+		end
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Open a new window: all descendants of inst with full name and attributes; content is copiable (TextBox)
+local function openMatchingPetsDescendantsWindow(inst)
+	if not inst or not inst.Parent then return end
+	local existing = PlayerGui:FindFirstChild("Zooman_MatchingPets_Descendants")
+	if existing then existing:Destroy() end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "Zooman_MatchingPets_Descendants"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 101
+	gui.Parent = PlayerGui
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 520, 0, 420)
+	frame.Position = UDim2.new(0.5, -260, 0.5, -210)
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Parent = gui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = frame
+	local top = Instance.new("Frame")
+	top.Size = UDim2.new(1, 0, 0, 28)
+	top.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+	top.BorderSizePixel = 0
+	top.Parent = frame
+	local topCorner = Instance.new("UICorner")
+	topCorner.CornerRadius = UDim.new(0, 10)
+	topCorner.Parent = top
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -44, 0, 28)
+	title.Position = UDim2.new(0, 8, 0, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "Descendants & Attributes (select and copy)"
+	title.TextColor3 = Color3.fromRGB(255, 220, 120)
+	title.TextSize = 13
+	title.Font = Enum.Font.GothamBold
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextTruncate = Enum.TextTruncate.AtEnd
+	title.Parent = top
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0, 28, 0, 28)
+	closeBtn.Position = UDim2.new(1, -28, 0, 0)
+	closeBtn.BackgroundTransparency = 1
+	closeBtn.Text = "×"
+	closeBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	closeBtn.TextSize = 20
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.ZIndex = 2
+	closeBtn.Parent = top
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Size = UDim2.new(1, -16, 1, -44)
+	scroll.Position = UDim2.new(0, 8, 0, 36)
+	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 8
+	scroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	scroll.Parent = frame
+	local scrollCorner = Instance.new("UICorner")
+	scrollCorner.CornerRadius = UDim.new(0, 6)
+	scrollCorner.Parent = scroll
+	local detailText = Instance.new("TextBox")
+	detailText.Size = UDim2.new(1, -8, 0, 0)
+	detailText.Position = UDim2.new(0, 4, 0, 4)
+	detailText.BackgroundTransparency = 1
+	detailText.Text = getAllDescendantsWithAttributesText(inst)
+	detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
+	detailText.TextSize = 11
+	detailText.Font = Enum.Font.Code
+	detailText.TextXAlignment = Enum.TextXAlignment.Left
+	detailText.TextYAlignment = Enum.TextYAlignment.Top
+	detailText.TextWrapped = true
+	detailText.ClearTextOnFocus = false
+	detailText.MultiLine = true
+	detailText.TextEditable = false
+	detailText.AutomaticSize = Enum.AutomaticSize.Y
+	detailText.Parent = scroll
+	local function updateCanvasSize()
+		local contentY = detailText.AbsoluteSize.Y
+		local scrollY = scroll.AbsoluteWindowSize.Y
+		scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+	end
+	detailText:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateCanvasSize)
+	task.defer(updateCanvasSize)
+	detailText.Focused:Connect(function()
+		scroll.ScrollingEnabled = false
+		detailText.CursorPosition = #detailText.Text + 1
+		detailText.SelectionStart = 1
+	end)
+	detailText.FocusLost:Connect(function()
+		scroll.ScrollingEnabled = true
+	end)
+	closeBtn.MouseButton1Click:Connect(function()
+		gui:Destroy()
+	end)
+	local dragging, dragStart, startPos = false, nil, nil
+	top.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = inp.Position
+			startPos = frame.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(inp)
+		if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = inp.Position - dragStart
+			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	end)
+end
+
 -- Helper: add list rows to the matching pets ScrollingFrame (preserves window position when updating)
 local function populateMatchingPetsList(scroll, foundList)
 	local listLayout = scroll:FindFirstChild("UIListLayout")
@@ -313,6 +466,20 @@ local function populateMatchingPetsList(scroll, foundList)
 		sourceLabel.TextXAlignment = Enum.TextXAlignment.Left
 		sourceLabel.TextTruncate = Enum.TextTruncate.AtEnd
 		sourceLabel.Parent = row
+		-- Click to open descendants/attributes window (copiable)
+		local rowBtn = Instance.new("TextButton")
+		rowBtn.Size = UDim2.new(1, 0, 1, 0)
+		rowBtn.Position = UDim2.new(0, 0, 0, 0)
+		rowBtn.BackgroundTransparency = 1
+		rowBtn.Text = ""
+		rowBtn.ZIndex = 2
+		rowBtn.Parent = row
+		local instForClick = f.inst
+		rowBtn.MouseButton1Click:Connect(function()
+			if instForClick and instForClick.Parent then
+				openMatchingPetsDescendantsWindow(instForClick)
+			end
+		end)
 	end
 end
 
