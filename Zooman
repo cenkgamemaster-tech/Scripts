@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.7"
+local VERSION = "1.6.8"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -97,27 +97,30 @@ local function getRarityAndIncome(inst)
 		if desc:IsA("BillboardGui") then
 			local r = desc:FindFirstChild("Rarity", true)
 			local inc = desc:FindFirstChild("Income", true)
+			local thisRarity, thisIncome
 			if r and (r:IsA("TextLabel") or r:IsA("TextButton") or r:IsA("TextBox")) and r.Text and r.Text ~= "" then
-				rarityStr = r.Text:gsub("^%s+", ""):gsub("%s+$", "")
+				thisRarity = r.Text:gsub("^%s+", ""):gsub("%s+$", "")
 			end
 			if inc and (inc:IsA("TextLabel") or inc:IsA("TextButton") or inc:IsA("TextBox")) and inc.Text and inc.Text ~= "" then
-				incomeStr = inc.Text
+				thisIncome = inc.Text
 			end
-			-- Fallback: parse from any label text like "Rarity: Prismatic" or "Income: $400,000/s"
-			if (not rarityStr or not incomeStr) then
+			if not thisRarity or not thisIncome then
 				for _, guiChild in ipairs(desc:GetDescendants()) do
 					if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
 						local t = guiChild.Text or ""
-						if t:find("Rarity") and not rarityStr then
-							rarityStr = t:match("Rarity%s*:?%s*(%S+)") or t:match("(%a+)$") or rarityStr
+						if t:find("Rarity") and not thisRarity then
+							thisRarity = t:match("Rarity%s*:?%s*(%S+)") or t:match("(%a+)$")
 						end
-						if (t:find("Income") or t:find("%$")) and not incomeStr then
-							incomeStr = t
+						if (t:find("Income") or t:find("%$")) and not thisIncome then
+							thisIncome = t
 						end
 					end
 				end
 			end
-			if rarityStr and incomeStr then break end
+			if thisRarity and thisRarity ~= "" and thisIncome and thisIncome ~= "" then
+				rarityStr = thisRarity
+				incomeStr = thisIncome
+			end
 		end
 	end
 	-- Parse income: "$400,000/s" -> 400000 (strip non-digits)
@@ -160,10 +163,10 @@ local function checkRarityIncomeTargets()
 		local rarity, income = getRarityAndIncome(inst)
 		if rarity and income then
 			local name = rarity:lower()
-			if name == "prismatic" and income > PRISMATIC_INCOME_MIN then
-				table.insert(found, { inst = inst, rarity = "Prismatic", income = income })
-			elseif name == "divine" and income > DIVINE_INCOME_MIN then
-				table.insert(found, { inst = inst, rarity = "Divine", income = income })
+			if name:find("prismatic", 1, true) and income > PRISMATIC_INCOME_MIN then
+				table.insert(found, { inst = inst, rarity = rarity:gsub("^%s+", ""):gsub("%s+$", ""), income = income })
+			elseif name:find("divine", 1, true) and income > DIVINE_INCOME_MIN then
+				table.insert(found, { inst = inst, rarity = rarity:gsub("^%s+", ""):gsub("%s+$", ""), income = income })
 			end
 		end
 	end
