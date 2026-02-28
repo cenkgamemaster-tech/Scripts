@@ -12,8 +12,8 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
--- Script version (bump minor on new features / code changes)
-local VERSION = "1.4.0"
+-- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
+local VERSION = "1.4.1"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -474,20 +474,38 @@ local function openEscapePetsWindow()
 	detailScroll.Position = UDim2.new(0, 292, 0, 36)
 	detailScroll.BackgroundColor3 = Color3.fromRGB(20, 28, 45)
 	detailScroll.BorderSizePixel = 0
-	detailScroll.ScrollBarThickness = 6
+	detailScroll.ScrollBarThickness = 8
 	detailScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
 	detailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	detailScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	detailScroll.CanvasPosition = Vector2.new(0, 0)
 	detailScroll.Parent = objMain
 
 	local detailScrollCorner = Instance.new("UICorner")
 	detailScrollCorner.CornerRadius = UDim.new(0, 6)
 	detailScrollCorner.Parent = detailScroll
 
+	-- Wrapper Frame so ScrollingFrame canvas size updates correctly (enables scrolling)
+	local detailCanvas = Instance.new("Frame")
+	detailCanvas.Name = "Canvas"
+	detailCanvas.Size = UDim2.new(1, 0, 0, 0)
+	detailCanvas.Position = UDim2.new(0, 0, 0, 0)
+	detailCanvas.BackgroundTransparency = 1
+	detailCanvas.AutomaticSize = Enum.AutomaticSize.Y
+	detailCanvas.Parent = detailScroll
+
+	local detailPadding = Instance.new("UIPadding")
+	detailPadding.PaddingLeft = UDim.new(0, 6)
+	detailPadding.PaddingRight = UDim.new(0, 6)
+	detailPadding.PaddingTop = UDim.new(0, 6)
+	detailPadding.PaddingBottom = UDim.new(0, 6)
+	detailPadding.Parent = detailCanvas
+
 	local detailText = Instance.new("TextLabel")
 	detailText.Name = "Content"
-	detailText.Size = UDim2.new(1, -12, 0, 0)
-	detailText.Position = UDim2.new(0, 6, 0, 6)
+	detailText.Size = UDim2.new(1, 0, 0, 0)
+	detailText.Position = UDim2.new(0, 0, 0, 0)
 	detailText.BackgroundTransparency = 1
 	detailText.Text = "Select an object from the list."
 	detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
@@ -497,7 +515,7 @@ local function openEscapePetsWindow()
 	detailText.TextYAlignment = Enum.TextYAlignment.Top
 	detailText.TextWrapped = true
 	detailText.AutomaticSize = Enum.AutomaticSize.Y
-	detailText.Parent = detailScroll
+	detailText.Parent = detailCanvas
 
 	local ROW_HEIGHT = 24
 
