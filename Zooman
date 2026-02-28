@@ -1,6 +1,6 @@
 --[[
 	Zooman – test script for Roblox game.
-	Lists exclusive pets on Escape mode by scanning BillboardGui components for Divine/Prismatic text.
+	Lists all objects that have a BillboardGui; click to see details (attributes, children, descendants).
 	UI reference: Test script.
 ]]
 
@@ -13,47 +13,26 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (bump minor on new features / code changes)
-local VERSION = "1.1.0"
+local VERSION = "1.2.0"
 
--- Keywords to identify exclusive pets (Escape mode): name or attribute contains one of these (case-insensitive)
-local EXCLUSIVE_KEYWORDS = { "Divine", "Prismatic" }
-
-local function stringContainsAny(str, keywords)
-	if type(str) ~= "string" or str == "" then return false end
-	local lower = str:lower()
-	for _, kw in ipairs(keywords) do
-		if lower:find(kw:lower(), 1, true) then
+-- Check if instance has any BillboardGui as descendant
+local function hasBillboardGui(inst)
+	if not inst or not inst.GetDescendants then return false end
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
 			return true
 		end
 	end
 	return false
 end
 
--- Check if any BillboardGui under this instance has text containing EXCLUSIVE_KEYWORDS (Divine / Prismatic)
-local function hasBillboardGuiWithExclusiveKeyword(inst)
-	if not inst or not inst.GetDescendants then return false end
-	for _, desc in ipairs(inst:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			for _, guiChild in ipairs(desc:GetDescendants()) do
-				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
-					local text = guiChild.Text
-					if type(text) == "string" and text ~= "" and stringContainsAny(text, EXCLUSIVE_KEYWORDS) then
-						return true
-					end
-				end
-			end
-		end
-	end
-	return false
-end
-
--- Get all pets (Models) that have a BillboardGui with EXCLUSIVE_KEYWORDS in their text
-local function getEscapeExclusivePets()
-	local collected = {}
+-- Get all objects that have a BillboardGui (minimal container: no child of this instance also has a BillboardGui)
+local function getObjectsWithBillboardGui()
+	local withGui = {}
 	local function scan(parent)
 		for _, child in ipairs(parent:GetChildren()) do
-			if child:IsA("Model") and hasBillboardGuiWithExclusiveKeyword(child) then
-				table.insert(collected, child)
+			if hasBillboardGui(child) then
+				table.insert(withGui, child)
 			end
 			scan(child)
 		end
@@ -61,10 +40,28 @@ local function getEscapeExclusivePets()
 	pcall(function() scan(Workspace) end)
 	pcall(function() scan(ReplicatedStorage) end)
 	pcall(function() scan(PlayerGui) end)
-	table.sort(collected, function(a, b)
+	-- Keep only minimal containers: drop instance if any of its children is also in the list
+	local inList = {}
+	for _, inst in ipairs(withGui) do
+		inList[inst] = true
+	end
+	local minimal = {}
+	for _, inst in ipairs(withGui) do
+		local childInList = false
+		for _, c in ipairs(inst:GetChildren()) do
+			if inList[c] then
+				childInList = true
+				break
+			end
+		end
+		if not childInList then
+			table.insert(minimal, inst)
+		end
+	end
+	table.sort(minimal, function(a, b)
 		return (a:GetFullName() or "") < (b:GetFullName() or "")
 	end)
-	return collected
+	return minimal
 end
 
 -- Remove existing Zooman UI so we don't stack
@@ -216,19 +213,52 @@ versionLabel.Font = Enum.Font.Gotham
 versionLabel.TextXAlignment = Enum.TextXAlignment.Right
 versionLabel.Parent = main
 
--- Build detail string for an instance (FullName, ClassName, attributes)
+-- Max descendants to list in details (avoid huge text)
+local MAX_DESCENDANTS_IN_DETAILS = 200
+
+-- Build detail string for an instance: FullName, ClassName, attributes, children, descendants
 local function getInstanceDetails(inst)
 	if not inst or not inst.GetFullName then return "(invalid)" end
 	local lines = {}
 	table.insert(lines, "FullName: " .. (inst:GetFullName() or "?"))
 	table.insert(lines, "ClassName: " .. (inst.ClassName or "?"))
 	table.insert(lines, "Name: " .. (inst.Name or "?"))
+	-- Attributes
 	local ok, names = pcall(function() return inst:GetAttributeNames() end)
 	if ok and names and #names > 0 then
+		table.insert(lines, "")
 		table.insert(lines, "Attributes:")
 		for _, attrName in ipairs(names) do
 			local val = inst:GetAttribute(attrName)
 			table.insert(lines, "  " .. tostring(attrName) .. " = " .. tostring(val))
+		end
+	end
+	-- Children
+	table.insert(lines, "")
+	table.insert(lines, "Children:")
+	local children = inst:GetChildren()
+	if #children == 0 then
+		table.insert(lines, "  (none)")
+	else
+		for _, c in ipairs(children) do
+			table.insert(lines, "  " .. (c.Name or "?") .. " (" .. (c.ClassName or "?") .. ")")
+		end
+	end
+	-- Descendants
+	table.insert(lines, "")
+	table.insert(lines, "Descendants:")
+	local descOk, descList = pcall(function() return inst:GetDescendants() end)
+	if not descOk or not descList then
+		table.insert(lines, "  (error)")
+	else
+		table.insert(lines, "  Total: " .. #descList)
+		local limit = math.min(#descList, MAX_DESCENDANTS_IN_DETAILS)
+		for i = 1, limit do
+			local d = descList[i]
+			table.insert(lines, "  " .. (d:GetFullName() or d.Name or "?") .. " (" .. (d.ClassName or "?") .. ")")
+		end
+		if #descList > MAX_DESCENDANTS_IN_DETAILS then
+			table.insert(lines, "  ... and " .. (#descList - MAX_DESCENDANTS_IN_DETAILS) .. " more")
 		end
 	end
 	return table.concat(lines, "\n")
@@ -279,7 +309,7 @@ local function openEscapePetsWindow()
 	objTitle.Position = UDim2.new(0, 8, 0, 0)
 	objTitle.BackgroundTransparency = 1
 	objTitle.Active = true
-	objTitle.Text = "Escape Pets (Divine / Prismatic)"
+	objTitle.Text = "Objects with BillboardGui"
 	objTitle.TextColor3 = Color3.fromRGB(200, 230, 255)
 	objTitle.TextSize = 14
 	objTitle.Font = Enum.Font.GothamBold
@@ -496,7 +526,7 @@ local function openEscapePetsWindow()
 				child:Destroy()
 			end
 		end
-		local list = getEscapeExclusivePets()
+		local list = getObjectsWithBillboardGui()
 		for i, inst in ipairs(list) do
 			addRow(inst, i)
 		end
