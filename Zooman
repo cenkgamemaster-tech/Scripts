@@ -13,12 +13,20 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.8"
+local VERSION = "1.7.9"
 
--- Scan under this path (same as Escape Pets so both windows see the same objects)
-local WORKSPACE_PREFIX = "Workspace.Tsunami"
+-- Scan under this path; objects under Gen are treated as having BillboardGui (no descendant scan needed)
+local WORKSPACE_PREFIX = "Workspace.Tsunami.Gen"
+local TSUNAMI_GEN_PREFIX = "Workspace.Tsunami.Gen"  -- if full name starts with this, object has BillboardGui
 
--- Check if instance has any BillboardGui as descendant
+-- True if object is under Workspace.Tsunami.Gen (no descendant scan)
+local function underTsunamiGen(inst)
+	if not inst or not inst.GetFullName then return false end
+	local ok, name = pcall(function() return inst:GetFullName() or "" end)
+	return ok and name and name:find("^" .. TSUNAMI_GEN_PREFIX:gsub("%.", "%%.")) == 1
+end
+
+-- Legacy: check if instance has any BillboardGui as descendant (kept for fallback; list uses underTsunamiGen)
 local function hasBillboardGui(inst)
 	if not inst or not inst.GetDescendants then return false end
 	for _, desc in ipairs(inst:GetDescendants()) do
@@ -29,7 +37,7 @@ local function hasBillboardGui(inst)
 	return false
 end
 
--- Get root to scan: e.g. Workspace.Tsunami.Gen; if Gen not found, fallback to Workspace.Tsunami
+-- Get root to scan (e.g. Workspace.Tsunami.Gen); if Gen not found, fallback to Workspace.Tsunami
 local function getScanRoot()
 	if not WORKSPACE_PREFIX or WORKSPACE_PREFIX == "" then
 		return Workspace
@@ -52,7 +60,7 @@ local function getScanRoot()
 	return node or Workspace
 end
 
--- Get all objects that have a BillboardGui (minimal container) under Workspace.Tsunami only
+-- List objects under Workspace.Tsunami.Gen: use prefix rule (no descendant scan). Minimal containers only (Part/Model).
 local function getObjectsWithBillboardGui()
 	local root = getScanRoot()
 	if not root then
@@ -61,7 +69,8 @@ local function getObjectsWithBillboardGui()
 	local withGui = {}
 	local function scan(parent)
 		for _, child in ipairs(parent:GetChildren()) do
-			if hasBillboardGui(child) then
+			-- Object under Gen (full name starts with Workspace.Tsunami.Gen) = has BillboardGui; only list Part/Model containers
+			if underTsunamiGen(child) and (child:IsA("BasePart") or child:IsA("Model")) then
 				table.insert(withGui, child)
 			end
 			scan(child)
