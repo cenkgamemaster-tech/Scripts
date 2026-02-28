@@ -13,10 +13,10 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.1"
+local VERSION = "1.7.2"
 
--- Only scan under this workspace path (prefix); objects under Workspace.Tsunami.Gen, Part.GUI/TsunamiPetGUI has attributes Rarity and Income
-local WORKSPACE_PREFIX = "Workspace.Tsunami.Gen"
+-- Scan under this path (same as Escape Pets so both windows see the same objects)
+local WORKSPACE_PREFIX = "Workspace.Tsunami"
 
 -- Check if instance has any BillboardGui as descendant
 local function hasBillboardGui(inst)
@@ -92,9 +92,9 @@ local function getObjectsWithBillboardGui()
 	return minimal
 end
 
--- Get Rarity and Income from attributes; Part.GUI.TsunamiPetGUI - check BillboardGui, GUI (parent), Part (parent.Parent), and inst
+-- Get Rarity and Income: try attributes first (TsunamiPetGUI / Part), then same text as Escape Pets details (all BillboardGui text)
 local function getRarityAndIncome(inst)
-	if not inst then return nil, nil end
+	if not inst or not inst.GetDescendants then return nil, nil end
 	local function getAttr(obj, name)
 		if not obj or not obj.GetAttribute then return nil end
 		return obj:GetAttribute(name)
@@ -109,42 +109,49 @@ local function getRarityAndIncome(inst)
 		if r == nil then return nil end
 		return tostring(r):gsub("^%s+", ""):gsub("%s+$", "")
 	end
-	-- Walk inst and all descendants; for each TsunamiPetGUI BillboardGui, check it + parent + parent.Parent (Part)
-	for _, desc in ipairs(inst:GetDescendants()) do
-		if desc:IsA("BillboardGui") and (desc.Name == "TsunamiPetGUI" or (desc:GetFullName() or ""):find("TsunamiPetGUI")) then
-			local r, inc
-			r = getAttr(desc, "Rarity"); inc = getAttr(desc, "Income")
-			if not r then r = getAttr(desc.Parent, "Rarity") end
-			if not inc then inc = getAttr(desc.Parent, "Income") end
-			if not r then r = getAttr(desc.Parent and desc.Parent.Parent, "Rarity") end
-			if not inc then inc = getAttr(desc.Parent and desc.Parent.Parent, "Income") end
-			if r or inc then
-				return parseRarity(r), parseIncome(inc)
-			end
-		end
-	end
-	-- Fallback: any BillboardGui under inst, check it and ancestors
+	-- 1) Attributes on any BillboardGui and its parents (Part.GUI.TsunamiPetGUI)
+	local attrR, attrInc = nil, nil
 	for _, desc in ipairs(inst:GetDescendants()) do
 		if desc:IsA("BillboardGui") then
-			local r, inc = getAttr(desc, "Rarity"), getAttr(desc, "Income")
-			local node = desc.Parent
-			for _ = 1, 3 do
-				if not node then break end
-				if not r then r = getAttr(node, "Rarity") end
-				if not inc then inc = getAttr(node, "Income") end
-				node = node.Parent
-			end
-			if r or inc then
-				return parseRarity(r), parseIncome(inc)
+			local r = getAttr(desc, "Rarity") or (desc.Parent and getAttr(desc.Parent, "Rarity")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Rarity"))
+			local inc = getAttr(desc, "Income") or (desc.Parent and getAttr(desc.Parent, "Income")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Income"))
+			if r then attrR = parseRarity(r) end
+			if inc then attrInc = parseIncome(inc) end
+			if attrR and attrInc then break end
+		end
+	end
+	-- 2) Same source as Escape Pets details: all text from BillboardGuis, parse "Rarity: X" and "$N"
+	local allText = {}
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			for _, guiChild in ipairs(desc:GetDescendants()) do
+				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+					local t = guiChild.Text
+					if type(t) == "string" and t ~= "" then
+						table.insert(allText, t)
+					end
+				end
 			end
 		end
 	end
-	-- Check inst itself
-	local r, inc = getAttr(inst, "Rarity"), getAttr(inst, "Income")
-	if r or inc then
-		return parseRarity(r), parseIncome(inc)
+	local combined = table.concat(allText, " ")
+	local textR = combined:match("Rarity%s*:?%s*([%w]+)")
+	if not textR then
+		textR = combined:find("Divine", 1, true) and "Divine" or (combined:find("Prismatic", 1, true) and "Prismatic" or nil)
 	end
-	return nil, nil
+	if textR then textR = textR:gsub("^%s+", ""):gsub("%s+$", "") end
+	local textInc = nil
+	for part in combined:gmatch("%$[%d,]+") do
+		local n = tonumber(part:gsub("%D", ""))
+		if n and (not textInc or n > textInc) then textInc = n end
+	end
+	if not textInc and combined:find("Income") then
+		for w in combined:gsub("%D", " "):gmatch("%d+") do
+			local n = tonumber(w)
+			if n and n > 1000 and (not textInc or n > textInc) then textInc = n end
+		end
+	end
+	return attrR or textR, attrInc or textInc
 end
 
 -- Play a short notification sound (Roblox asset; parent to Camera so local player hears it)
