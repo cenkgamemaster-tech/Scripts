@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.6"
+local VERSION = "1.7.7"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -92,9 +92,9 @@ local function getObjectsWithBillboardGui()
 	return minimal
 end
 
--- Get Rarity and Income: try attributes first (TsunamiPetGUI / Part), then same text as Escape Pets details (all BillboardGui text)
+-- Get Rarity and Income: scan inst and every descendant for Rarity/Income attributes, then Value objects, then BillboardGui text
 local function getRarityAndIncome(inst)
-	if not inst or not inst.GetDescendants then return nil, nil end
+	if not inst then return nil, nil end
 	local function getAttr(obj, name)
 		if not obj then return nil end
 		local ok, val = pcall(function()
@@ -113,22 +113,21 @@ local function getRarityAndIncome(inst)
 		return tostring(r):gsub("^%s+", ""):gsub("%s+$", "")
 	end
 	local attrR, attrInc = nil, nil
-	-- 1) Attributes on inst first (Escape Pets shows attributes of clicked instance = Part with TsunamiPetGUI)
-	attrR = parseRarity(getAttr(inst, "Rarity"))
-	attrInc = parseIncome(getAttr(inst, "Income"))
-	-- 2) If missing, try any BillboardGui and its parents (Part.GUI.TsunamiPetGUI)
-	if (not attrR or not attrInc) and inst.GetDescendants then
+	-- 1) Go through inst and every descendant: read Rarity and Income attribute from each element
+	local function scanAttr(obj)
+		if not obj then return end
+		local r, inc = getAttr(obj, "Rarity"), getAttr(obj, "Income")
+		if r then attrR = attrR or parseRarity(r) end
+		if inc then attrInc = attrInc or parseIncome(inc) end
+	end
+	scanAttr(inst)
+	if inst.GetDescendants then
 		for _, desc in ipairs(inst:GetDescendants()) do
-			if desc:IsA("BillboardGui") then
-				local r = getAttr(desc, "Rarity") or (desc.Parent and getAttr(desc.Parent, "Rarity")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Rarity"))
-				local inc = getAttr(desc, "Income") or (desc.Parent and getAttr(desc.Parent, "Income")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Income"))
-				if r then attrR = attrR or parseRarity(r) end
-				if inc then attrInc = attrInc or parseIncome(inc) end
-				if attrR and attrInc then break end
-			end
+			scanAttr(desc)
+			if attrR and attrInc then break end
 		end
 	end
-	-- 2b) Value objects (e.g. StringValue "Rarity", NumberValue "Income") anywhere under inst
+	-- 2) Value objects (e.g. StringValue "Rarity", NumberValue "Income") anywhere under inst
 	if (not attrR or not attrInc) and inst.GetDescendants then
 		for _, desc in ipairs(inst:GetDescendants()) do
 			local name = (desc.Name or ""):lower()
