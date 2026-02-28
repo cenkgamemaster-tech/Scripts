@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.4.2"
+local VERSION = "1.4.4"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -265,6 +265,50 @@ local function getChildDetail(c)
 	return ("  %s (%s)"):format(name, class)
 end
 
+-- Get text and image/file info from an instance and its descendants (e.g. MutateFX Attachment)
+local function getMutateFXDetails(mutateFxInst)
+	if not mutateFxInst or not mutateFxInst.GetDescendants then return {} end
+	local textLines = {}
+	local imageLines = {}
+	for _, d in ipairs(mutateFxInst:GetDescendants()) do
+		-- Text
+		if d:IsA("StringValue") or d:IsA("BinaryStringValue") then
+			local v = d.Value and tostring(d.Value) or ""
+			if v ~= "" then
+				table.insert(textLines, ("    %s (StringValue): %s"):format(d.Name or "?", #v > 80 and (v:sub(1, 77) .. "...") or v))
+			end
+		elseif d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+			local t = d.Text
+			if type(t) == "string" and t ~= "" then
+				table.insert(textLines, ("    %s: %s"):format(d.Name or "?", #t > 80 and (t:sub(1, 77) .. "...") or t))
+			end
+		end
+		-- Image / texture file
+		if d:IsA("Decal") then
+			local tex = d.Texture
+			if type(tex) == "string" and tex ~= "" then
+				table.insert(imageLines, ("    %s (Decal): %s"):format(d.Name or "?", tex))
+			end
+		elseif d:IsA("ImageLabel") or d:IsA("ImageButton") then
+			local img = d.Image
+			if type(img) == "string" and img ~= "" then
+				table.insert(imageLines, ("    %s (%s): %s"):format(d.Name or "?", d.ClassName, img))
+			end
+		elseif d:IsA("ParticleEmitter") then
+			local tex = d.Texture
+			if type(tex) == "string" and tex ~= "" then
+				table.insert(imageLines, ("    %s (ParticleEmitter): %s"):format(d.Name or "?", tex))
+			end
+		elseif d:IsA("MeshPart") and d.TextureID then
+			local tid = d.TextureID
+			if type(tid) == "string" and tid ~= "" then
+				table.insert(imageLines, ("    %s (MeshPart TextureID): %s"):format(d.Name or "?", tid))
+			end
+		end
+	end
+	return textLines, imageLines
+end
+
 -- Build BillboardGui details: each BillboardGui and its text elements
 local function getBillboardGuiDetails(inst)
 	local lines = {}
@@ -314,6 +358,28 @@ local function getInstanceDetails(inst)
 	else
 		for _, c in ipairs(children) do
 			table.insert(lines, getChildDetail(c))
+		end
+	end
+	-- MutateFX details (if child MutateFX of type Attachment exists): text and image/file
+	local mutateFx = inst:FindFirstChild("MutateFX")
+	if mutateFx and mutateFx:IsA("Attachment") then
+		table.insert(lines, "")
+		table.insert(lines, "MutateFX (Attachment) details:")
+		local textLines, imageLines = getMutateFXDetails(mutateFx)
+		if #textLines > 0 then
+			table.insert(lines, "  Text:")
+			for _, ln in ipairs(textLines) do
+				table.insert(lines, ln)
+			end
+		end
+		if #imageLines > 0 then
+			table.insert(lines, "  Image / texture:")
+			for _, ln in ipairs(imageLines) do
+				table.insert(lines, ln)
+			end
+		end
+		if #textLines == 0 and #imageLines == 0 then
+			table.insert(lines, "  (no text or image/texture found)")
 		end
 	end
 	-- BillboardGui details
