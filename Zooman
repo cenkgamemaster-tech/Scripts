@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.3"
+local VERSION = "1.7.4"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -195,7 +195,7 @@ end
 
 -- Check for Prismatic (income > 499,999) or Divine (income > 200,000) and notify with sound
 local PRISMATIC_INCOME_MIN = 499999
-local DIVINE_INCOME_MIN = 200000
+local DIVINE_INCOME_MIN = 50000  -- lowered for testing (production: 200000)
 local function checkRarityIncomeTargets()
 	local list = getObjectsWithBillboardGui()
 	local found = {}
