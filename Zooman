@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.2"
+local VERSION = "1.6.3"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -180,7 +180,7 @@ end
 local function populateMatchingPetsList(scroll, foundList)
 	local listLayout = scroll:FindFirstChild("UIListLayout")
 	for _, child in ipairs(scroll:GetChildren()) do
-		if child ~= listLayout then
+		if child ~= listLayout and not child:IsA("UICorner") then
 			child:Destroy()
 		end
 	end
@@ -218,13 +218,15 @@ local function populateMatchingPetsList(scroll, foundList)
 end
 
 -- Open or update window showing pets that matched criteria; if window exists, only update list (keeps position)
+local MATCHING_PETS_DISPLAY_ORDER = 100
 local function openMatchingPetsWindow(foundList)
 	if not foundList or #foundList == 0 then return end
 	local existingGui = PlayerGui:FindFirstChild("Zooman_MatchingPets")
-	if existingGui then
+	if existingGui and existingGui.Parent == PlayerGui then
 		local frame = existingGui:FindFirstChild("Main")
 		local scroll = frame and frame:FindFirstChildOfClass("ScrollingFrame")
-		if scroll then
+		if frame and scroll then
+			existingGui.DisplayOrder = MATCHING_PETS_DISPLAY_ORDER
 			populateMatchingPetsList(scroll, foundList)
 			return
 		end
@@ -234,6 +236,7 @@ local function openMatchingPetsWindow(foundList)
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "Zooman_MatchingPets"
 	gui.ResetOnSpawn = false
+	gui.DisplayOrder = MATCHING_PETS_DISPLAY_ORDER
 	gui.Parent = PlayerGui
 
 	local frame = Instance.new("Frame")
