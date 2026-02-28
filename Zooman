@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.4"
+local VERSION = "1.6.5"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -217,31 +217,24 @@ local function populateMatchingPetsList(scroll, foundList)
 	end
 end
 
--- Open window showing pets that matched criteria; always create fresh so window appears (save/restore position when re-opening)
-local MATCHING_PETS_DISPLAY_ORDER = 100
-local savedMatchingWindowPosition = nil
+-- Open window showing pets that matched criteria (destroy existing and create fresh at center)
 local function openMatchingPetsWindow(foundList)
 	if not foundList or #foundList == 0 then return end
 	local existingGui = PlayerGui:FindFirstChild("Zooman_MatchingPets")
 	if existingGui then
-		local frame = existingGui:FindFirstChild("Main")
-		if frame then
-			savedMatchingWindowPosition = frame.Position
-		end
 		existingGui:Destroy()
 	end
 
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "Zooman_MatchingPets"
 	gui.ResetOnSpawn = false
-	gui.DisplayOrder = MATCHING_PETS_DISPLAY_ORDER
 	gui.Parent = PlayerGui
 
 	local frame = Instance.new("Frame")
 	frame.Name = "Main"
 	frame.Size = UDim2.new(0, 420, 0, 340)
-	frame.Position = savedMatchingWindowPosition or UDim2.new(0.5, -210, 0.5, -170)
-	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.Position = UDim2.new(0, 16, 0.5, -170)
+	frame.AnchorPoint = Vector2.new(0, 0.5)
 	frame.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	frame.BorderSizePixel = 0
 	frame.Active = true
