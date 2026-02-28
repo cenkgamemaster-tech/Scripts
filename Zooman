@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.5"
+local VERSION = "1.7.6"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -195,7 +195,7 @@ end
 
 -- Check for Prismatic (income > 499,999) or Divine (income > 200,000) and notify with sound
 local PRISMATIC_INCOME_MIN = 499999
-local DIVINE_INCOME_MIN = 50000  -- lowered for testing (production: 200000)
+local DIVINE_INCOME_MIN = 200000
 local function checkRarityIncomeTargets()
 	local list = getObjectsWithBillboardGui()
 	local found = {}
@@ -219,12 +219,17 @@ local function checkRarityIncomeTargets()
 	return found
 end
 
--- Build list identical to Escape Pets: all objects with BillboardGui, with optional Rarity/Income for display
+-- Build list identical to Escape Pets: all objects with BillboardGui, with optional Rarity/Income for display.
+-- Returns list, or nil on error (caller should show placeholder).
 local function getMatchingPetsListSameAsEscape()
-	local list = getObjectsWithBillboardGui()
+	local ok, list = pcall(getObjectsWithBillboardGui)
+	if not ok or not list then return nil end
 	local out = {}
 	for _, inst in ipairs(list) do
-		local r, inc = getRarityAndIncome(inst)
+		local r, inc = nil, nil
+		pcall(function()
+			r, inc = getRarityAndIncome(inst)
+		end)
 		table.insert(out, { inst = inst, rarity = r or "—", income = inc and tostring(inc) or "—" })
 	end
 	return out
@@ -593,14 +598,32 @@ end
 startNotifyBtn.MouseButton1Click:Connect(function()
 	if notifyRunning then return end
 	notifyRunning = true
-	openMatchingPetsWindow(getMatchingPetsListSameAsEscape())
+	-- Open window immediately so it always appears; then fill/refresh with list
+	local function showList()
+		local ok, err = pcall(function()
+			local list = getMatchingPetsListSameAsEscape()
+			if list and #list > 0 then
+				openMatchingPetsWindow(list)
+			elseif list then
+				openMatchingPetsWindow({ { inst = nil, rarity = "—", income = "No objects with BillboardGui." } })
+			else
+				openMatchingPetsWindow({ { inst = nil, rarity = "—", income = "Error loading list." } })
+			end
+		end)
+		if not ok then
+			openMatchingPetsWindow({ { inst = nil, rarity = "—", income = "Error: " .. tostring(err) } })
+		end
+	end
+	-- Open window immediately so it is always visible
+	pcall(function()
+		openMatchingPetsWindow({ { inst = nil, rarity = "—", income = "Loading…" } })
+	end)
+	task.defer(showList)
 	notifyThread = task.spawn(function()
 		while notifyRunning do
-			openMatchingPetsWindow(getMatchingPetsListSameAsEscape())
-			for _ = 1, NOTIFY_INTERVAL_SEC do
-				if not notifyRunning then break end
-				task.wait(1)
-			end
+			task.wait(NOTIFY_INTERVAL_SEC)
+			if not notifyRunning then break end
+			showList()
 		end
 	end)
 end)
