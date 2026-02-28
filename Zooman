@@ -13,14 +13,16 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.8.1"
+local VERSION = "1.8.2"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
 
--- Check if instance has any BillboardGui as descendant
+-- Check if instance has a BillboardGui: the instance itself or any descendant
 local function hasBillboardGui(inst)
-	if not inst or not inst.GetDescendants then return false end
+	if not inst then return false end
+	if inst:IsA("BillboardGui") then return true end
+	if not inst.GetDescendants then return false end
 	for _, desc in ipairs(inst:GetDescendants()) do
 		if desc:IsA("BillboardGui") then
 			return true
