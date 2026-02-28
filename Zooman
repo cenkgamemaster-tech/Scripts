@@ -13,10 +13,10 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.9"
+local VERSION = "1.7.0"
 
--- Only scan under this workspace path (prefix); nil = scan full Workspace
-local WORKSPACE_PREFIX = "Workspace.Tsunami"
+-- Only scan under this workspace path (prefix); objects under Workspace.Tsunami.Gen, Part.GUI/TsunamiPetGUI has attributes Rarity and Income
+local WORKSPACE_PREFIX = "Workspace.Tsunami.Gen"
 
 -- Check if instance has any BillboardGui as descendant
 local function hasBillboardGui(inst)
@@ -89,47 +89,69 @@ local function getObjectsWithBillboardGui()
 	return minimal
 end
 
--- Get Rarity and Income from an instance's BillboardGui (same source as Escape Pets details: all text from TsunamiPetGUI etc.)
+-- Get Rarity and Income from attributes (Part.GUI/TsunamiPetGUI has attributes Rarity and Income)
 local function getRarityAndIncome(inst)
 	if not inst or not inst.GetDescendants then return nil, nil end
-	local allText = {}
 	for _, desc in ipairs(inst:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			for _, guiChild in ipairs(desc:GetDescendants()) do
-				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
-					local t = guiChild.Text
-					if type(t) == "string" and t ~= "" then
-						table.insert(allText, t)
-					end
+		if desc:IsA("BillboardGui") and (desc.Name == "TsunamiPetGUI" or (desc:GetFullName() or ""):find("TsunamiPetGUI")) then
+			local r = desc:GetAttribute("Rarity")
+			local inc = desc:GetAttribute("Income")
+			if not r and not inc then
+				local parent = desc.Parent
+				if parent then
+					r = parent:GetAttribute("Rarity")
+					inc = parent:GetAttribute("Income")
 				end
 			end
-		end
-	end
-	local combined = table.concat(allText, " ")
-	local rarityStr = combined:match("Rarity%s*:?%s*([%w]+)") or combined:match("([Dd]ivine)") or combined:match("([Pp]rismatic)")
-	if rarityStr then
-		rarityStr = rarityStr:gsub("^%s+", ""):gsub("%s+$", "")
-	end
-	local incomeNum = nil
-	for part in combined:gmatch("%$[%d,]+") do
-		local digits = part:gsub("%D", "")
-		if digits ~= "" then
-			local n = tonumber(digits)
-			if n and (not incomeNum or n > incomeNum) then
-				incomeNum = n
+			if (r or inc) then
+				local rarityStr = nil
+				if r ~= nil then
+					rarityStr = tostring(r):gsub("^%s+", ""):gsub("%s+$", "")
+				end
+				local incomeNum = nil
+				if inc ~= nil then
+					if type(inc) == "number" then
+						incomeNum = inc
+					else
+						local digits = tostring(inc):gsub("%D", "")
+						if digits ~= "" then
+							incomeNum = tonumber(digits)
+						end
+					end
+				end
+				return rarityStr, incomeNum
 			end
 		end
 	end
-	if not incomeNum and combined:find("Income") then
-		local digits = combined:gsub("%D", " ")
-		for w in digits:gmatch("%d+") do
-			local n = tonumber(w)
-			if n and (not incomeNum or n > incomeNum) then
-				incomeNum = n
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			local r = desc:GetAttribute("Rarity")
+			local inc = desc:GetAttribute("Income")
+			if not r then r = desc.Parent and desc.Parent:GetAttribute("Rarity") end
+			if not inc then inc = desc.Parent and desc.Parent:GetAttribute("Income") end
+			if (r or inc) then
+				local rarityStr = r and tostring(r):gsub("^%s+", ""):gsub("%s+$", "") or nil
+				local incomeNum = nil
+				if inc ~= nil then
+					if type(inc) == "number" then incomeNum = inc
+					else local d = tostring(inc):gsub("%D", "") if d ~= "" then incomeNum = tonumber(d) end end
+				end
+				return rarityStr, incomeNum
 			end
 		end
 	end
-	return rarityStr, incomeNum
+	if inst:GetAttribute("Rarity") or inst:GetAttribute("Income") then
+		local r = inst:GetAttribute("Rarity")
+		local inc = inst:GetAttribute("Income")
+		local rarityStr = r and tostring(r):gsub("^%s+", ""):gsub("%s+$", "") or nil
+		local incomeNum = nil
+		if inc ~= nil then
+			if type(inc) == "number" then incomeNum = inc
+			else local d = tostring(inc):gsub("%D", "") if d ~= "" then incomeNum = tonumber(d) end end
+		end
+		return rarityStr, incomeNum
+	end
+	return nil, nil
 end
 
 -- Play a short notification sound (Roblox asset; parent to Camera so local player hears it)
