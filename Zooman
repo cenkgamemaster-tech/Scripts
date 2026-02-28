@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.4"
+local VERSION = "1.7.5"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -219,6 +219,17 @@ local function checkRarityIncomeTargets()
 	return found
 end
 
+-- Build list identical to Escape Pets: all objects with BillboardGui, with optional Rarity/Income for display
+local function getMatchingPetsListSameAsEscape()
+	local list = getObjectsWithBillboardGui()
+	local out = {}
+	for _, inst in ipairs(list) do
+		local r, inc = getRarityAndIncome(inst)
+		table.insert(out, { inst = inst, rarity = r or "—", income = inc and tostring(inc) or "—" })
+	end
+	return out
+end
+
 -- Helper: add list rows to the matching pets ScrollingFrame (preserves window position when updating)
 local function populateMatchingPetsList(scroll, foundList)
 	local listLayout = scroll:FindFirstChild("UIListLayout")
@@ -240,7 +251,7 @@ local function populateMatchingPetsList(scroll, foundList)
 		pathLabel.Size = UDim2.new(1, -12, 0, 18)
 		pathLabel.Position = UDim2.new(0, 6, 0, 4)
 		pathLabel.BackgroundTransparency = 1
-		pathLabel.Text = f.inst and f.inst.GetFullName and f.inst:GetFullName() or "?"
+		pathLabel.Text = (f.inst and f.inst.GetFullName and f.inst:GetFullName()) or "(no objects)"
 		pathLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
 		pathLabel.TextSize = 11
 		pathLabel.Font = Enum.Font.Code
@@ -306,7 +317,7 @@ local function openMatchingPetsWindow(foundList)
 	title.Position = UDim2.new(0, 8, 0, 0)
 	title.BackgroundTransparency = 1
 	title.Active = true
-	title.Text = "Matching pets (Prismatic >499k / Divine >200k)"
+	title.Text = "Matching pets (same list as Escape Pets)"
 	title.TextColor3 = Color3.fromRGB(255, 220, 120)
 	title.TextSize = 13
 	title.Font = Enum.Font.GothamBold
@@ -351,7 +362,7 @@ local function openMatchingPetsWindow(foundList)
 	if #foundList > 0 then
 		populateMatchingPetsList(scroll, foundList)
 	else
-		populateMatchingPetsList(scroll, { { inst = nil, rarity = "—", income = "Checking every 5 sec. No targets yet." } })
+		populateMatchingPetsList(scroll, { { inst = nil, rarity = "—", income = "No objects with BillboardGui." } })
 	end
 
 	closeBtn.MouseButton1Click:Connect(function()
@@ -582,11 +593,10 @@ end
 startNotifyBtn.MouseButton1Click:Connect(function()
 	if notifyRunning then return end
 	notifyRunning = true
-	openMatchingPetsWindow({})
+	openMatchingPetsWindow(getMatchingPetsListSameAsEscape())
 	notifyThread = task.spawn(function()
 		while notifyRunning do
-			local found = checkRarityIncomeTargets()
-			openMatchingPetsWindow(found)
+			openMatchingPetsWindow(getMatchingPetsListSameAsEscape())
 			for _ = 1, NOTIFY_INTERVAL_SEC do
 				if not notifyRunning then break end
 				task.wait(1)
