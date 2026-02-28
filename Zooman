@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.5.0"
+local VERSION = "1.6.0"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -173,6 +173,160 @@ local function checkRarityIncomeTargets()
 	return found
 end
 
+-- Open or update window showing pets that matched criteria (Prismatic >499k / Divine >200k)
+local function openMatchingPetsWindow(foundList)
+	if not foundList or #foundList == 0 then return end
+	local existingGui = PlayerGui:FindFirstChild("Zooman_MatchingPets")
+	if existingGui then
+		existingGui:Destroy()
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "Zooman_MatchingPets"
+	gui.ResetOnSpawn = false
+	gui.Parent = PlayerGui
+
+	local frame = Instance.new("Frame")
+	frame.Name = "Main"
+	frame.Size = UDim2.new(0, 420, 0, 340)
+	frame.Position = UDim2.new(0.5, -210, 0.5, -170)
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Parent = gui
+
+	local frameCorner = Instance.new("UICorner")
+	frameCorner.CornerRadius = UDim.new(0, 10)
+	frameCorner.Parent = frame
+
+	local top = Instance.new("Frame")
+	top.Size = UDim2.new(1, 0, 0, 28)
+	top.Position = UDim2.new(0, 0, 0, 0)
+	top.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+	top.BorderSizePixel = 0
+	top.Active = true
+	top.Parent = frame
+
+	local topCorner = Instance.new("UICorner")
+	topCorner.CornerRadius = UDim.new(0, 10)
+	topCorner.Parent = top
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -44, 0, 28)
+	title.Position = UDim2.new(0, 8, 0, 0)
+	title.BackgroundTransparency = 1
+	title.Active = true
+	title.Text = "Matching pets (Prismatic >499k / Divine >200k)"
+	title.TextColor3 = Color3.fromRGB(255, 220, 120)
+	title.TextSize = 13
+	title.Font = Enum.Font.GothamBold
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextTruncate = Enum.TextTruncate.AtEnd
+	title.Parent = top
+
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0, 28, 0, 28)
+	closeBtn.Position = UDim2.new(1, -28, 0, 0)
+	closeBtn.BackgroundTransparency = 1
+	closeBtn.Text = "×"
+	closeBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	closeBtn.TextSize = 20
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.Parent = top
+
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Size = UDim2.new(1, -16, 1, -44)
+	scroll.Position = UDim2.new(0, 8, 0, 36)
+	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 8
+	scroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	scroll.Parent = frame
+
+	local scrollCorner = Instance.new("UICorner")
+	scrollCorner.CornerRadius = UDim.new(0, 6)
+	scrollCorner.Parent = scroll
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.Padding = UDim.new(0, 4)
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Parent = scroll
+
+	for i, f in ipairs(foundList) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 44)
+		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
+		row.LayoutOrder = i
+		row.Parent = scroll
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 4)
+		rowCorner.Parent = row
+		local pathLabel = Instance.new("TextLabel")
+		pathLabel.Size = UDim2.new(1, -12, 0, 18)
+		pathLabel.Position = UDim2.new(0, 6, 0, 4)
+		pathLabel.BackgroundTransparency = 1
+		pathLabel.Text = f.inst and f.inst.GetFullName and f.inst:GetFullName() or "?"
+		pathLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
+		pathLabel.TextSize = 11
+		pathLabel.Font = Enum.Font.Code
+		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		pathLabel.Parent = row
+		local infoLabel = Instance.new("TextLabel")
+		infoLabel.Size = UDim2.new(1, -12, 0, 18)
+		infoLabel.Position = UDim2.new(0, 6, 0, 22)
+		infoLabel.BackgroundTransparency = 1
+		infoLabel.Text = ("Rarity: %s | Income: %s"):format(f.rarity or "?", tostring(f.income or "?"))
+		infoLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+		infoLabel.TextSize = 11
+		infoLabel.Font = Enum.Font.Gotham
+		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+		infoLabel.Parent = row
+	end
+
+	closeBtn.MouseButton1Click:Connect(function()
+		gui:Destroy()
+	end)
+
+	local dragging = false
+	local dragStart, startPos
+	top.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = inp.Position
+			startPos = frame.Position
+		end
+	end)
+	title.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = inp.Position
+			startPos = frame.Position
+		end
+	end)
+	frame.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = inp.Position
+			startPos = frame.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(inp)
+		if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = inp.Position - dragStart
+			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = false
+		end
+	end)
+end
+
 -- Remove existing Zooman UI so we don't stack
 local existing = PlayerGui:FindFirstChild("Zooman")
 if existing then
@@ -187,7 +341,7 @@ screen.Parent = PlayerGui
 -- Main window (same style as Test)
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 220, 0, 120)
+main.Size = UDim2.new(0, 220, 0, 168)
 main.Position = UDim2.new(0, 16, 0, 16)
 main.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 main.BorderSizePixel = 0
@@ -286,6 +440,7 @@ inputEndedConnection = UserInputService.InputEnded:Connect(function(inp)
 end)
 
 closeBtn.MouseButton1Click:Connect(function()
+	stopNotifyLoop()
 	if inputChangedConnection then inputChangedConnection:Disconnect() inputChangedConnection = nil end
 	if inputEndedConnection then inputEndedConnection:Disconnect() inputEndedConnection = nil end
 	screen:Destroy()
@@ -308,11 +463,75 @@ local escapePetsBtnCorner = Instance.new("UICorner")
 escapePetsBtnCorner.CornerRadius = UDim.new(0, 6)
 escapePetsBtnCorner.Parent = escapePetsBtn
 
+-- Start notify button (check every 5 sec, sound + matching pets window when criteria met)
+local startNotifyBtn = Instance.new("TextButton")
+startNotifyBtn.Name = "StartNotify"
+startNotifyBtn.Size = UDim2.new(0.5, -10, 0, 28)
+startNotifyBtn.Position = UDim2.new(0, 8, 0, 74)
+startNotifyBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 50)
+startNotifyBtn.BorderSizePixel = 0
+startNotifyBtn.Text = "Start notify"
+startNotifyBtn.TextColor3 = Color3.fromRGB(200, 255, 220)
+startNotifyBtn.TextSize = 11
+startNotifyBtn.Font = Enum.Font.Gotham
+startNotifyBtn.Parent = main
+
+local startNotifyCorner = Instance.new("UICorner")
+startNotifyCorner.CornerRadius = UDim.new(0, 6)
+startNotifyCorner.Parent = startNotifyBtn
+
+-- Stop notify button
+local stopNotifyBtn = Instance.new("TextButton")
+stopNotifyBtn.Name = "StopNotify"
+stopNotifyBtn.Size = UDim2.new(0.5, -10, 0, 28)
+stopNotifyBtn.Position = UDim2.new(0.5, 2, 0, 74)
+stopNotifyBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+stopNotifyBtn.BorderSizePixel = 0
+stopNotifyBtn.Text = "Stop notify"
+stopNotifyBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+stopNotifyBtn.TextSize = 11
+stopNotifyBtn.Font = Enum.Font.Gotham
+stopNotifyBtn.Parent = main
+
+local stopNotifyCorner = Instance.new("UICorner")
+stopNotifyCorner.CornerRadius = UDim.new(0, 6)
+stopNotifyCorner.Parent = stopNotifyBtn
+
+local NOTIFY_INTERVAL_SEC = 5
+local notifyRunning = false
+local notifyThread = nil
+
+local function stopNotifyLoop()
+	notifyRunning = false
+	notifyThread = nil
+end
+
+startNotifyBtn.MouseButton1Click:Connect(function()
+	if notifyRunning then return end
+	notifyRunning = true
+	notifyThread = task.spawn(function()
+		while notifyRunning do
+			local found = checkRarityIncomeTargets()
+			if #found > 0 then
+				openMatchingPetsWindow(found)
+			end
+			for _ = 1, NOTIFY_INTERVAL_SEC do
+				if not notifyRunning then break end
+				task.wait(1)
+			end
+		end
+	end)
+end)
+
+stopNotifyBtn.MouseButton1Click:Connect(function()
+	stopNotifyLoop()
+end)
+
 -- Version label on main screen
 local versionLabel = Instance.new("TextLabel")
 versionLabel.Name = "Version"
 versionLabel.Size = UDim2.new(1, -16, 0, 18)
-versionLabel.Position = UDim2.new(0, 8, 1, -22)
+versionLabel.Position = UDim2.new(0, 8, 1, -24)
 versionLabel.AnchorPoint = Vector2.new(0, 0)
 versionLabel.BackgroundTransparency = 1
 versionLabel.Text = "v" .. VERSION
