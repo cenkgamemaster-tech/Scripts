@@ -1,6 +1,6 @@
 --[[
 	Zooman – test script for Roblox game.
-	Lists exclusive pets on Escape mode (objects with Divine or Prismatic in name or attributes).
+	Lists exclusive pets on Escape mode by scanning BillboardGui components for Divine/Prismatic text.
 	UI reference: Test script.
 ]]
 
@@ -11,6 +11,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
+
+-- Script version (bump minor on new features / code changes)
+local VERSION = "1.1.0"
 
 -- Keywords to identify exclusive pets (Escape mode): name or attribute contains one of these (case-insensitive)
 local EXCLUSIVE_KEYWORDS = { "Divine", "Prismatic" }
@@ -26,41 +29,38 @@ local function stringContainsAny(str, keywords)
 	return false
 end
 
--- Check if an instance has Divine or Prismatic in its Name or in any attribute value
-local function instanceIsExclusivePet(inst)
-	if not inst or not inst.GetFullName then return false end
-	local name = inst.Name or ""
-	if stringContainsAny(name, EXCLUSIVE_KEYWORDS) then
-		return true
-	end
-	local ok, names = pcall(function() return inst:GetAttributeNames() end)
-	if ok and names then
-		for _, attrName in ipairs(names) do
-			local val = inst:GetAttribute(attrName)
-			if val ~= nil and stringContainsAny(tostring(val), EXCLUSIVE_KEYWORDS) then
-				return true
+-- Check if any BillboardGui under this instance has text containing EXCLUSIVE_KEYWORDS (Divine / Prismatic)
+local function hasBillboardGuiWithExclusiveKeyword(inst)
+	if not inst or not inst.GetDescendants then return false end
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			for _, guiChild in ipairs(desc:GetDescendants()) do
+				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+					local text = guiChild.Text
+					if type(text) == "string" and text ~= "" and stringContainsAny(text, EXCLUSIVE_KEYWORDS) then
+						return true
+					end
+				end
 			end
 		end
 	end
 	return false
 end
 
--- Get all objects (under given parent) that match exclusive pet criteria (Divine / Prismatic)
+-- Get all pets (Models) that have a BillboardGui with EXCLUSIVE_KEYWORDS in their text
 local function getEscapeExclusivePets()
 	local collected = {}
 	local function scan(parent)
 		for _, child in ipairs(parent:GetChildren()) do
-			if instanceIsExclusivePet(child) then
+			if child:IsA("Model") and hasBillboardGuiWithExclusiveKeyword(child) then
 				table.insert(collected, child)
 			end
 			scan(child)
 		end
 	end
-	-- Scan Workspace, ReplicatedStorage, PlayerGui (same scope as Test's listObjectsInGame)
 	pcall(function() scan(Workspace) end)
 	pcall(function() scan(ReplicatedStorage) end)
 	pcall(function() scan(PlayerGui) end)
-	-- Sort by FullName for stable list
 	table.sort(collected, function(a, b)
 		return (a:GetFullName() or "") < (b:GetFullName() or "")
 	end)
@@ -201,6 +201,20 @@ escapePetsBtn.Parent = main
 local escapePetsBtnCorner = Instance.new("UICorner")
 escapePetsBtnCorner.CornerRadius = UDim.new(0, 6)
 escapePetsBtnCorner.Parent = escapePetsBtn
+
+-- Version label on main screen
+local versionLabel = Instance.new("TextLabel")
+versionLabel.Name = "Version"
+versionLabel.Size = UDim2.new(1, -16, 0, 18)
+versionLabel.Position = UDim2.new(0, 8, 1, -22)
+versionLabel.AnchorPoint = Vector2.new(0, 0)
+versionLabel.BackgroundTransparency = 1
+versionLabel.Text = "v" .. VERSION
+versionLabel.TextColor3 = Color3.fromRGB(140, 170, 200)
+versionLabel.TextSize = 11
+versionLabel.Font = Enum.Font.Gotham
+versionLabel.TextXAlignment = Enum.TextXAlignment.Right
+versionLabel.Parent = main
 
 -- Build detail string for an instance (FullName, ClassName, attributes)
 local function getInstanceDetails(inst)
