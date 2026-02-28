@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.8.2"
+local VERSION = "1.8.3"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -926,19 +926,34 @@ local function getMutateFXDetails(mutateFxInst)
 	return textLines, imageLines
 end
 
--- Build BillboardGui details: each BillboardGui and its text elements
+-- Build BillboardGui details: when inst is a BillboardGui include it; then each descendant BillboardGui and its text elements
 local function getBillboardGuiDetails(inst)
 	local lines = {}
 	local count = 0
-	for _, desc in ipairs(inst:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			count = count + 1
-			table.insert(lines, ("  [%d] %s"):format(count, desc:GetFullName() or desc.Name or "?"))
-			for _, guiChild in ipairs(desc:GetDescendants()) do
-				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
-					local text = guiChild.Text
-					local preview = type(text) == "string" and (#text > 60 and (text:sub(1, 57) .. "...") or text) or ""
-					table.insert(lines, ("      %s: %s"):format(guiChild.Name or "?", preview))
+	-- If inst itself is a BillboardGui, show it first (so Escape Pets details show Rarity/Income from labels when row is TsunamiPetGUI)
+	if inst and inst:IsA("BillboardGui") then
+		count = count + 1
+		table.insert(lines, ("  [%d] %s"):format(count, inst:GetFullName() or inst.Name or "?"))
+		for _, guiChild in ipairs(inst:GetDescendants()) do
+			if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+				local text = guiChild.Text
+				local preview = type(text) == "string" and (#text > 60 and (text:sub(1, 57) .. "...") or text) or ""
+				table.insert(lines, ("      %s: %s"):format(guiChild.Name or "?", preview))
+			end
+		end
+	end
+	-- Then any descendant that is a BillboardGui (when inst is Part/Model)
+	if inst and inst.GetDescendants then
+		for _, desc in ipairs(inst:GetDescendants()) do
+			if desc:IsA("BillboardGui") then
+				count = count + 1
+				table.insert(lines, ("  [%d] %s"):format(count, desc:GetFullName() or desc.Name or "?"))
+				for _, guiChild in ipairs(desc:GetDescendants()) do
+					if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+						local text = guiChild.Text
+						local preview = type(text) == "string" and (#text > 60 and (text:sub(1, 57) .. "...") or text) or ""
+						table.insert(lines, ("      %s: %s"):format(guiChild.Name or "?", preview))
+					end
 				end
 			end
 		end
@@ -964,6 +979,21 @@ local function getInstanceDetails(inst)
 		for _, attrName in ipairs(names) do
 			local val = inst:GetAttribute(attrName)
 			table.insert(lines, "  " .. tostring(attrName) .. " = " .. tostring(val))
+		end
+	else
+		-- Fallback: try common attributes (Rarity, Income) so Escape Pets still shows them if GetAttributeNames fails
+		local fallbackAttrs = { "Rarity", "Income", "TXT" }
+		local anyAttr = false
+		for _, attrName in ipairs(fallbackAttrs) do
+			local okGet, val = pcall(function() return inst.GetAttribute and inst:GetAttribute(attrName) end)
+			if okGet and val ~= nil then
+				if not anyAttr then
+					table.insert(lines, "")
+					table.insert(lines, "Attributes:")
+					anyAttr = true
+				end
+				table.insert(lines, "  " .. tostring(attrName) .. " = " .. tostring(val))
+			end
 		end
 	end
 	-- Children (with details e.g. CS_TsunamiWildPet StringValue value)
