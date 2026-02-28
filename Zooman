@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.7"
+local VERSION = "1.7.8"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -92,15 +92,21 @@ local function getObjectsWithBillboardGui()
 	return minimal
 end
 
--- Get Rarity and Income: scan inst and every descendant for Rarity/Income attributes, then Value objects, then BillboardGui text
+-- Get Rarity and Income: scan inst and every descendant for Rarity/Income attributes; record full name of child where found.
+-- Returns: rarity, income, sourceRarityFrom (full name of instance where Rarity was found), sourceIncomeFrom (same for Income)
 local function getRarityAndIncome(inst)
-	if not inst then return nil, nil end
+	if not inst then return nil, nil, nil, nil end
 	local function getAttr(obj, name)
 		if not obj then return nil end
 		local ok, val = pcall(function()
 			return obj.GetAttribute and obj:GetAttribute(name) or nil
 		end)
 		return ok and val or nil
+	end
+	local function fullName(obj)
+		if not obj or not obj.GetFullName then return nil end
+		local ok, name = pcall(function() return obj:GetFullName() end)
+		return ok and name or nil
 	end
 	local function parseIncome(inc)
 		if inc == nil then return nil end
@@ -113,12 +119,19 @@ local function getRarityAndIncome(inst)
 		return tostring(r):gsub("^%s+", ""):gsub("%s+$", "")
 	end
 	local attrR, attrInc = nil, nil
-	-- 1) Go through inst and every descendant: read Rarity and Income attribute from each element
+	local sourceRarityFrom, sourceIncomeFrom = nil, nil
+	-- 1) Go through inst and every descendant: read Rarity and Income attribute; record full name when found
 	local function scanAttr(obj)
 		if not obj then return end
 		local r, inc = getAttr(obj, "Rarity"), getAttr(obj, "Income")
-		if r then attrR = attrR or parseRarity(r) end
-		if inc then attrInc = attrInc or parseIncome(inc) end
+		if r and not attrR then
+			attrR = parseRarity(r)
+			sourceRarityFrom = fullName(obj)
+		end
+		if inc and not attrInc then
+			attrInc = parseIncome(inc)
+			sourceIncomeFrom = fullName(obj)
+		end
 	end
 	scanAttr(inst)
 	if inst.GetDescendants then
@@ -127,21 +140,24 @@ local function getRarityAndIncome(inst)
 			if attrR and attrInc then break end
 		end
 	end
-	-- 2) Value objects (e.g. StringValue "Rarity", NumberValue "Income") anywhere under inst
+	-- 2) Value objects (e.g. StringValue "Rarity", NumberValue "Income"); record full name of that child
 	if (not attrR or not attrInc) and inst.GetDescendants then
 		for _, desc in ipairs(inst:GetDescendants()) do
 			local name = (desc.Name or ""):lower()
-			if (name == "rarity") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value then
-				attrR = attrR or parseRarity(tostring(desc.Value))
-			elseif (name == "income") and (desc:IsA("IntValue") or desc:IsA("NumberValue")) then
-				attrInc = attrInc or parseIncome(desc.Value)
-			elseif (name == "income") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value then
-				attrInc = attrInc or parseIncome(desc.Value)
+			if (name == "rarity") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value and not attrR then
+				attrR = parseRarity(tostring(desc.Value))
+				sourceRarityFrom = fullName(desc)
+			elseif (name == "income") and (desc:IsA("IntValue") or desc:IsA("NumberValue")) and not attrInc then
+				attrInc = parseIncome(desc.Value)
+				sourceIncomeFrom = fullName(desc)
+			elseif (name == "income") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value and not attrInc then
+				attrInc = parseIncome(desc.Value)
+				sourceIncomeFrom = fullName(desc)
 			end
 			if attrR and attrInc then break end
 		end
 	end
-	-- 2) Same source as Escape Pets details: all text from BillboardGuis, parse "Rarity: X" and "$N"
+	-- 3) Fallback: BillboardGui label text; source is "BillboardGui text"
 	local allText = {}
 	for _, desc in ipairs(inst:GetDescendants()) do
 		if desc:IsA("BillboardGui") then
@@ -162,7 +178,6 @@ local function getRarityAndIncome(inst)
 	end
 	if textR then textR = textR:gsub("^%s+", ""):gsub("%s+$", "") end
 	local textInc = nil
-	-- Match $890,832 or 890,832/s or plain numbers
 	for part in combined:gmatch("%$?[%d,]+/?%s*[%d]*") do
 		local n = tonumber(part:gsub("%D", ""))
 		if n and n > 100 and (not textInc or n > textInc) then textInc = n end
@@ -173,7 +188,9 @@ local function getRarityAndIncome(inst)
 			if n and n > 1000 and (not textInc or n > textInc) then textInc = n end
 		end
 	end
-	return attrR or textR, attrInc or textInc
+	if textR and not sourceRarityFrom then sourceRarityFrom = "BillboardGui text" end
+	if textInc and not sourceIncomeFrom then sourceIncomeFrom = "BillboardGui text" end
+	return attrR or textR, attrInc or textInc, sourceRarityFrom, sourceIncomeFrom
 end
 
 -- Play a short notification sound (Roblox asset; parent to Camera so local player hears it)
@@ -225,11 +242,17 @@ local function getMatchingPetsListSameAsEscape()
 	if not ok or not list then return nil end
 	local out = {}
 	for _, inst in ipairs(list) do
-		local r, inc = nil, nil
+		local r, inc, srcR, srcInc = nil, nil, nil, nil
 		pcall(function()
-			r, inc = getRarityAndIncome(inst)
+			r, inc, srcR, srcInc = getRarityAndIncome(inst)
 		end)
-		table.insert(out, { inst = inst, rarity = r or "—", income = inc and tostring(inc) or "—" })
+		table.insert(out, {
+			inst = inst,
+			rarity = r or "—",
+			income = inc and tostring(inc) or "—",
+			sourceRarityFrom = srcR or "",
+			sourceIncomeFrom = srcInc or ""
+		})
 	end
 	return out
 end
@@ -244,7 +267,7 @@ local function populateMatchingPetsList(scroll, foundList)
 	end
 	for i, f in ipairs(foundList) do
 		local row = Instance.new("Frame")
-		row.Size = UDim2.new(1, -8, 0, 44)
+		row.Size = UDim2.new(1, -8, 0, 62)
 		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
 		row.LayoutOrder = i
 		row.Parent = scroll
@@ -272,6 +295,24 @@ local function populateMatchingPetsList(scroll, foundList)
 		infoLabel.Font = Enum.Font.Gotham
 		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
 		infoLabel.Parent = row
+		local sourceLabel = Instance.new("TextLabel")
+		sourceLabel.Size = UDim2.new(1, -12, 0, 18)
+		sourceLabel.Position = UDim2.new(0, 6, 0, 40)
+		sourceLabel.BackgroundTransparency = 1
+		local srcText = {}
+		if f.sourceRarityFrom and f.sourceRarityFrom ~= "" then
+			table.insert(srcText, "Rarity from: " .. tostring(f.sourceRarityFrom))
+		end
+		if f.sourceIncomeFrom and f.sourceIncomeFrom ~= "" then
+			table.insert(srcText, "Income from: " .. tostring(f.sourceIncomeFrom))
+		end
+		sourceLabel.Text = #srcText > 0 and table.concat(srcText, "  |  ") or ""
+		sourceLabel.TextColor3 = Color3.fromRGB(180, 200, 220)
+		sourceLabel.TextSize = 10
+		sourceLabel.Font = Enum.Font.Gotham
+		sourceLabel.TextXAlignment = Enum.TextXAlignment.Left
+		sourceLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		sourceLabel.Parent = row
 	end
 end
 
