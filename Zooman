@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.4.1"
+local VERSION = "1.4.2"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -467,7 +467,7 @@ local function openEscapePetsWindow()
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	listLayout.Parent = listScroll
 
-	-- Details panel (scrollable) next to list
+	-- Details panel (scrollable) next to list – manual CanvasSize like Test's Scan Fuse window
 	local detailScroll = Instance.new("ScrollingFrame")
 	detailScroll.Name = "Details"
 	detailScroll.Size = UDim2.new(1, -296, 1, -44)
@@ -476,36 +476,18 @@ local function openEscapePetsWindow()
 	detailScroll.BorderSizePixel = 0
 	detailScroll.ScrollBarThickness = 8
 	detailScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-	detailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-	detailScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	detailScroll.ScrollingDirection = Enum.ScrollingDirection.Y
-	detailScroll.CanvasPosition = Vector2.new(0, 0)
+	detailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 	detailScroll.Parent = objMain
 
 	local detailScrollCorner = Instance.new("UICorner")
 	detailScrollCorner.CornerRadius = UDim.new(0, 6)
 	detailScrollCorner.Parent = detailScroll
 
-	-- Wrapper Frame so ScrollingFrame canvas size updates correctly (enables scrolling)
-	local detailCanvas = Instance.new("Frame")
-	detailCanvas.Name = "Canvas"
-	detailCanvas.Size = UDim2.new(1, 0, 0, 0)
-	detailCanvas.Position = UDim2.new(0, 0, 0, 0)
-	detailCanvas.BackgroundTransparency = 1
-	detailCanvas.AutomaticSize = Enum.AutomaticSize.Y
-	detailCanvas.Parent = detailScroll
-
-	local detailPadding = Instance.new("UIPadding")
-	detailPadding.PaddingLeft = UDim.new(0, 6)
-	detailPadding.PaddingRight = UDim.new(0, 6)
-	detailPadding.PaddingTop = UDim.new(0, 6)
-	detailPadding.PaddingBottom = UDim.new(0, 6)
-	detailPadding.Parent = detailCanvas
-
 	local detailText = Instance.new("TextLabel")
 	detailText.Name = "Content"
-	detailText.Size = UDim2.new(1, 0, 0, 0)
-	detailText.Position = UDim2.new(0, 0, 0, 0)
+	detailText.Size = UDim2.new(1, -8, 0, 0)
+	detailText.Position = UDim2.new(0, 4, 0, 4)
 	detailText.BackgroundTransparency = 1
 	detailText.Text = "Select an object from the list."
 	detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
@@ -515,7 +497,15 @@ local function openEscapePetsWindow()
 	detailText.TextYAlignment = Enum.TextYAlignment.Top
 	detailText.TextWrapped = true
 	detailText.AutomaticSize = Enum.AutomaticSize.Y
-	detailText.Parent = detailCanvas
+	detailText.Parent = detailScroll
+
+	local function updateDetailCanvasSize()
+		local contentY = detailText.AbsoluteSize.Y
+		local scrollY = detailScroll.AbsoluteWindowSize.Y
+		detailScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+	end
+
+	detailText:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateDetailCanvasSize)
 
 	local ROW_HEIGHT = 24
 
@@ -525,6 +515,7 @@ local function openEscapePetsWindow()
 		else
 			detailText.Text = "(object no longer valid)"
 		end
+		task.defer(updateDetailCanvasSize)
 	end
 
 	local function addRow(inst, layoutOrder)
@@ -566,6 +557,7 @@ local function openEscapePetsWindow()
 			end
 		end
 		detailText.Text = "Select an object from the list."
+		task.defer(updateDetailCanvasSize)
 		local list = getObjectsWithBillboardGui()
 		for i, inst in ipairs(list) do
 			addRow(inst, i)
