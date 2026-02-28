@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.0"
+local VERSION = "1.6.1"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -134,13 +134,16 @@ local function getRarityAndIncome(inst)
 	return rarityStr, incomeNum
 end
 
--- Play a short notification sound (Roblox asset)
-local NOTIFY_SOUND_ID = "rbxassetid://1844353333"
+-- Play a short notification sound (Roblox asset; parent to Camera so local player hears it)
+local NOTIFY_SOUND_ID = "rbxassetid://12222216"
 local function playNotificationSound()
+	local camera = workspace.CurrentCamera
+	if not camera then return end
 	local sound = Instance.new("Sound")
 	sound.SoundId = NOTIFY_SOUND_ID
 	sound.Volume = 1
-	sound.Parent = LocalPlayer
+	sound.RollOffMode = Enum.RollOffMode.Always
+	sound.Parent = camera
 	sound.Ended:Connect(function()
 		sound:Destroy()
 	end)
