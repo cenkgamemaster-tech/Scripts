@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.8.3"
+local VERSION = "1.8.4"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -363,7 +363,7 @@ local function openMatchingPetsDescendantsWindow(inst)
 	detailText.Size = UDim2.new(1, -8, 0, 0)
 	detailText.Position = UDim2.new(0, 4, 0, 4)
 	detailText.BackgroundTransparency = 1
-	detailText.Text = getAllDescendantsWithAttributesText(inst)
+	detailText.Text = getInstanceDetails(inst)
 	detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
 	detailText.TextSize = 11
 	detailText.Font = Enum.Font.Code
