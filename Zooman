@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.1"
+local VERSION = "1.6.2"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -176,13 +176,61 @@ local function checkRarityIncomeTargets()
 	return found
 end
 
--- Open or update window showing pets that matched criteria (Prismatic >499k / Divine >200k)
+-- Helper: add list rows to the matching pets ScrollingFrame (preserves window position when updating)
+local function populateMatchingPetsList(scroll, foundList)
+	local listLayout = scroll:FindFirstChild("UIListLayout")
+	for _, child in ipairs(scroll:GetChildren()) do
+		if child ~= listLayout then
+			child:Destroy()
+		end
+	end
+	for i, f in ipairs(foundList) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 44)
+		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
+		row.LayoutOrder = i
+		row.Parent = scroll
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 4)
+		rowCorner.Parent = row
+		local pathLabel = Instance.new("TextLabel")
+		pathLabel.Size = UDim2.new(1, -12, 0, 18)
+		pathLabel.Position = UDim2.new(0, 6, 0, 4)
+		pathLabel.BackgroundTransparency = 1
+		pathLabel.Text = f.inst and f.inst.GetFullName and f.inst:GetFullName() or "?"
+		pathLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
+		pathLabel.TextSize = 11
+		pathLabel.Font = Enum.Font.Code
+		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		pathLabel.Parent = row
+		local infoLabel = Instance.new("TextLabel")
+		infoLabel.Size = UDim2.new(1, -12, 0, 18)
+		infoLabel.Position = UDim2.new(0, 6, 0, 22)
+		infoLabel.BackgroundTransparency = 1
+		infoLabel.Text = ("Rarity: %s | Income: %s"):format(f.rarity or "?", tostring(f.income or "?"))
+		infoLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+		infoLabel.TextSize = 11
+		infoLabel.Font = Enum.Font.Gotham
+		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+		infoLabel.Parent = row
+	end
+end
+
+-- Open or update window showing pets that matched criteria; if window exists, only update list (keeps position)
 local function openMatchingPetsWindow(foundList)
 	if not foundList or #foundList == 0 then return end
 	local existingGui = PlayerGui:FindFirstChild("Zooman_MatchingPets")
 	if existingGui then
+		local frame = existingGui:FindFirstChild("Main")
+		local scroll = frame and frame:FindFirstChildOfClass("ScrollingFrame")
+		if scroll then
+			populateMatchingPetsList(scroll, foundList)
+			return
+		end
 		existingGui:Destroy()
 	end
+
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "Zooman_MatchingPets"
 	gui.ResetOnSpawn = false
@@ -235,9 +283,11 @@ local function openMatchingPetsWindow(foundList)
 	closeBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 	closeBtn.TextSize = 20
 	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.ZIndex = 2
 	closeBtn.Parent = top
 
 	local scroll = Instance.new("ScrollingFrame")
+	scroll.Name = "List"
 	scroll.Size = UDim2.new(1, -16, 1, -44)
 	scroll.Position = UDim2.new(0, 8, 0, 36)
 	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
@@ -254,41 +304,12 @@ local function openMatchingPetsWindow(foundList)
 	scrollCorner.Parent = scroll
 
 	local listLayout = Instance.new("UIListLayout")
+	listLayout.Name = "UIListLayout"
 	listLayout.Padding = UDim.new(0, 4)
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	listLayout.Parent = scroll
 
-	for i, f in ipairs(foundList) do
-		local row = Instance.new("Frame")
-		row.Size = UDim2.new(1, -8, 0, 44)
-		row.BackgroundColor3 = Color3.fromRGB(35, 50, 75)
-		row.LayoutOrder = i
-		row.Parent = scroll
-		local rowCorner = Instance.new("UICorner")
-		rowCorner.CornerRadius = UDim.new(0, 4)
-		rowCorner.Parent = row
-		local pathLabel = Instance.new("TextLabel")
-		pathLabel.Size = UDim2.new(1, -12, 0, 18)
-		pathLabel.Position = UDim2.new(0, 6, 0, 4)
-		pathLabel.BackgroundTransparency = 1
-		pathLabel.Text = f.inst and f.inst.GetFullName and f.inst:GetFullName() or "?"
-		pathLabel.TextColor3 = Color3.fromRGB(200, 220, 255)
-		pathLabel.TextSize = 11
-		pathLabel.Font = Enum.Font.Code
-		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
-		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
-		pathLabel.Parent = row
-		local infoLabel = Instance.new("TextLabel")
-		infoLabel.Size = UDim2.new(1, -12, 0, 18)
-		infoLabel.Position = UDim2.new(0, 6, 0, 22)
-		infoLabel.BackgroundTransparency = 1
-		infoLabel.Text = ("Rarity: %s | Income: %s"):format(f.rarity or "?", tostring(f.income or "?"))
-		infoLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
-		infoLabel.TextSize = 11
-		infoLabel.Font = Enum.Font.Gotham
-		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
-		infoLabel.Parent = row
-	end
+	populateMatchingPetsList(scroll, foundList)
 
 	closeBtn.MouseButton1Click:Connect(function()
 		gui:Destroy()
@@ -410,6 +431,7 @@ closeBtn.Text = "×"
 closeBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 closeBtn.TextSize = 20
 closeBtn.Font = Enum.Font.GothamBold
+closeBtn.ZIndex = 2
 closeBtn.Parent = top
 
 local mainDragging = false
@@ -443,10 +465,15 @@ inputEndedConnection = UserInputService.InputEnded:Connect(function(inp)
 end)
 
 closeBtn.MouseButton1Click:Connect(function()
-	stopNotifyLoop()
+	pcall(function()
+		stopNotifyLoop()
+	end)
 	if inputChangedConnection then inputChangedConnection:Disconnect() inputChangedConnection = nil end
 	if inputEndedConnection then inputEndedConnection:Disconnect() inputEndedConnection = nil end
-	screen:Destroy()
+	local guiToDestroy = screen
+	if guiToDestroy and guiToDestroy.Parent then
+		guiToDestroy:Destroy()
+	end
 end)
 
 -- Escape Pets button
