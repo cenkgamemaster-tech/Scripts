@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.7.2"
+local VERSION = "1.7.3"
 
 -- Scan under this path (same as Escape Pets so both windows see the same objects)
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -96,8 +96,11 @@ end
 local function getRarityAndIncome(inst)
 	if not inst or not inst.GetDescendants then return nil, nil end
 	local function getAttr(obj, name)
-		if not obj or not obj.GetAttribute then return nil end
-		return obj:GetAttribute(name)
+		if not obj then return nil end
+		local ok, val = pcall(function()
+			return obj.GetAttribute and obj:GetAttribute(name) or nil
+		end)
+		return ok and val or nil
 	end
 	local function parseIncome(inc)
 		if inc == nil then return nil end
@@ -109,14 +112,33 @@ local function getRarityAndIncome(inst)
 		if r == nil then return nil end
 		return tostring(r):gsub("^%s+", ""):gsub("%s+$", "")
 	end
-	-- 1) Attributes on any BillboardGui and its parents (Part.GUI.TsunamiPetGUI)
 	local attrR, attrInc = nil, nil
-	for _, desc in ipairs(inst:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			local r = getAttr(desc, "Rarity") or (desc.Parent and getAttr(desc.Parent, "Rarity")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Rarity"))
-			local inc = getAttr(desc, "Income") or (desc.Parent and getAttr(desc.Parent, "Income")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Income"))
-			if r then attrR = parseRarity(r) end
-			if inc then attrInc = parseIncome(inc) end
+	-- 1) Attributes on inst first (Escape Pets shows attributes of clicked instance = Part with TsunamiPetGUI)
+	attrR = parseRarity(getAttr(inst, "Rarity"))
+	attrInc = parseIncome(getAttr(inst, "Income"))
+	-- 2) If missing, try any BillboardGui and its parents (Part.GUI.TsunamiPetGUI)
+	if (not attrR or not attrInc) and inst.GetDescendants then
+		for _, desc in ipairs(inst:GetDescendants()) do
+			if desc:IsA("BillboardGui") then
+				local r = getAttr(desc, "Rarity") or (desc.Parent and getAttr(desc.Parent, "Rarity")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Rarity"))
+				local inc = getAttr(desc, "Income") or (desc.Parent and getAttr(desc.Parent, "Income")) or (desc.Parent and desc.Parent.Parent and getAttr(desc.Parent.Parent, "Income"))
+				if r then attrR = attrR or parseRarity(r) end
+				if inc then attrInc = attrInc or parseIncome(inc) end
+				if attrR and attrInc then break end
+			end
+		end
+	end
+	-- 2b) Value objects (e.g. StringValue "Rarity", NumberValue "Income") anywhere under inst
+	if (not attrR or not attrInc) and inst.GetDescendants then
+		for _, desc in ipairs(inst:GetDescendants()) do
+			local name = (desc.Name or ""):lower()
+			if (name == "rarity") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value then
+				attrR = attrR or parseRarity(tostring(desc.Value))
+			elseif (name == "income") and (desc:IsA("IntValue") or desc:IsA("NumberValue")) then
+				attrInc = attrInc or parseIncome(desc.Value)
+			elseif (name == "income") and (desc:IsA("StringValue") or desc:IsA("BinaryStringValue")) and desc.Value then
+				attrInc = attrInc or parseIncome(desc.Value)
+			end
 			if attrR and attrInc then break end
 		end
 	end
@@ -141,12 +163,13 @@ local function getRarityAndIncome(inst)
 	end
 	if textR then textR = textR:gsub("^%s+", ""):gsub("%s+$", "") end
 	local textInc = nil
-	for part in combined:gmatch("%$[%d,]+") do
+	-- Match $890,832 or 890,832/s or plain numbers
+	for part in combined:gmatch("%$?[%d,]+/?%s*[%d]*") do
 		local n = tonumber(part:gsub("%D", ""))
-		if n and (not textInc or n > textInc) then textInc = n end
+		if n and n > 100 and (not textInc or n > textInc) then textInc = n end
 	end
-	if not textInc and combined:find("Income") then
-		for w in combined:gsub("%D", " "):gmatch("%d+") do
+	if not textInc then
+		for w in combined:gsub("[%d,]+", function(s) return (s:gsub(",", "")) .. " " end):gmatch("%d+") do
 			local n = tonumber(w)
 			if n and n > 1000 and (not textInc or n > textInc) then textInc = n end
 		end
