@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.6.8"
+local VERSION = "1.6.9"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -89,50 +89,45 @@ local function getObjectsWithBillboardGui()
 	return minimal
 end
 
--- Get Rarity and Income from an instance's BillboardGui (e.g. TsunamiPetGUI: "Rarity" / "Income" labels or "Rarity: Prismatic", "Income: $400,000/s")
+-- Get Rarity and Income from an instance's BillboardGui (same source as Escape Pets details: all text from TsunamiPetGUI etc.)
 local function getRarityAndIncome(inst)
 	if not inst or not inst.GetDescendants then return nil, nil end
-	local rarityStr, incomeStr
+	local allText = {}
 	for _, desc in ipairs(inst:GetDescendants()) do
 		if desc:IsA("BillboardGui") then
-			local r = desc:FindFirstChild("Rarity", true)
-			local inc = desc:FindFirstChild("Income", true)
-			local thisRarity, thisIncome
-			if r and (r:IsA("TextLabel") or r:IsA("TextButton") or r:IsA("TextBox")) and r.Text and r.Text ~= "" then
-				thisRarity = r.Text:gsub("^%s+", ""):gsub("%s+$", "")
-			end
-			if inc and (inc:IsA("TextLabel") or inc:IsA("TextButton") or inc:IsA("TextBox")) and inc.Text and inc.Text ~= "" then
-				thisIncome = inc.Text
-			end
-			if not thisRarity or not thisIncome then
-				for _, guiChild in ipairs(desc:GetDescendants()) do
-					if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
-						local t = guiChild.Text or ""
-						if t:find("Rarity") and not thisRarity then
-							thisRarity = t:match("Rarity%s*:?%s*(%S+)") or t:match("(%a+)$")
-						end
-						if (t:find("Income") or t:find("%$")) and not thisIncome then
-							thisIncome = t
-						end
+			for _, guiChild in ipairs(desc:GetDescendants()) do
+				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+					local t = guiChild.Text
+					if type(t) == "string" and t ~= "" then
+						table.insert(allText, t)
 					end
 				end
 			end
-			if thisRarity and thisRarity ~= "" and thisIncome and thisIncome ~= "" then
-				rarityStr = thisRarity
-				incomeStr = thisIncome
+		end
+	end
+	local combined = table.concat(allText, " ")
+	local rarityStr = combined:match("Rarity%s*:?%s*([%w]+)") or combined:match("([Dd]ivine)") or combined:match("([Pp]rismatic)")
+	if rarityStr then
+		rarityStr = rarityStr:gsub("^%s+", ""):gsub("%s+$", "")
+	end
+	local incomeNum = nil
+	for part in combined:gmatch("%$[%d,]+") do
+		local digits = part:gsub("%D", "")
+		if digits ~= "" then
+			local n = tonumber(digits)
+			if n and (not incomeNum or n > incomeNum) then
+				incomeNum = n
 			end
 		end
 	end
-	-- Parse income: "$400,000/s" -> 400000 (strip non-digits)
-	local incomeNum = nil
-	if incomeStr then
-		local digits = incomeStr:gsub("%D", "")
-		if digits ~= "" then
-			incomeNum = tonumber(digits)
+	if not incomeNum and combined:find("Income") then
+		local digits = combined:gsub("%D", " ")
+		for w in digits:gmatch("%d+") do
+			local n = tonumber(w)
+			if n and (not incomeNum or n > incomeNum) then
+				incomeNum = n
+			end
 		end
-	end
-	if rarityStr then
-		rarityStr = rarityStr:gsub("^%s+", ""):gsub("%s+$", "")
 	end
 	return rarityStr, incomeNum
 end
