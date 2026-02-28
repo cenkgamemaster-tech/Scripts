@@ -13,7 +13,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (always bump on code changes: patch 1.4.x, minor 1.x.0, major x.0.0)
-local VERSION = "1.4.5"
+local VERSION = "1.4.6"
 
 -- Only scan under this workspace path (prefix); nil = scan full Workspace
 local WORKSPACE_PREFIX = "Workspace.Tsunami"
@@ -567,6 +567,17 @@ local function openEscapePetsWindow()
 	detailText.TextEditable = false  -- read-only; allows select and copy (Ctrl+A, Ctrl+C)
 	detailText.AutomaticSize = Enum.AutomaticSize.Y
 	detailText.Parent = detailScroll
+
+	-- When TextBox is focused, stop ScrollingFrame from capturing drag (so user can select text)
+	detailText.Focused:Connect(function()
+		detailScroll.ScrollingEnabled = false
+		-- Select all on focus so one click + Ctrl+C copies everything
+		detailText.CursorPosition = #detailText.Text + 1
+		detailText.SelectionStart = 1
+	end)
+	detailText.FocusLost:Connect(function()
+		detailScroll.ScrollingEnabled = true
+	end)
 
 	local function updateDetailCanvasSize()
 		local contentY = detailText.AbsoluteSize.Y
