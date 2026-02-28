@@ -13,7 +13,10 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
 -- Script version (bump minor on new features / code changes)
-local VERSION = "1.2.0"
+local VERSION = "1.4.0"
+
+-- Only scan under this workspace path (prefix); nil = scan full Workspace
+local WORKSPACE_PREFIX = "Workspace.Tsunami"
 
 -- Check if instance has any BillboardGui as descendant
 local function hasBillboardGui(inst)
@@ -26,8 +29,32 @@ local function hasBillboardGui(inst)
 	return false
 end
 
--- Get all objects that have a BillboardGui (minimal container: no child of this instance also has a BillboardGui)
+-- Get root to scan: Workspace.Tsunami if WORKSPACE_PREFIX is set, else full Workspace
+local function getScanRoot()
+	if not WORKSPACE_PREFIX or WORKSPACE_PREFIX == "" then
+		return Workspace
+	end
+	local parts = {}
+	for part in string.gmatch(WORKSPACE_PREFIX, "[^.]+") do
+		table.insert(parts, part)
+	end
+	if parts[1] ~= "Workspace" then
+		return Workspace
+	end
+	local node = Workspace
+	for i = 2, #parts do
+		node = node and node:FindFirstChild(parts[i])
+		if not node then return nil end
+	end
+	return node
+end
+
+-- Get all objects that have a BillboardGui (minimal container) under Workspace.Tsunami only
 local function getObjectsWithBillboardGui()
+	local root = getScanRoot()
+	if not root then
+		return {}
+	end
 	local withGui = {}
 	local function scan(parent)
 		for _, child in ipairs(parent:GetChildren()) do
@@ -37,9 +64,7 @@ local function getObjectsWithBillboardGui()
 			scan(child)
 		end
 	end
-	pcall(function() scan(Workspace) end)
-	pcall(function() scan(ReplicatedStorage) end)
-	pcall(function() scan(PlayerGui) end)
+	pcall(function() scan(root) end)
 	-- Keep only minimal containers: drop instance if any of its children is also in the list
 	local inList = {}
 	for _, inst in ipairs(withGui) do
@@ -216,7 +241,54 @@ versionLabel.Parent = main
 -- Max descendants to list in details (avoid huge text)
 local MAX_DESCENDANTS_IN_DETAILS = 200
 
--- Build detail string for an instance: FullName, ClassName, attributes, children, descendants
+-- Get a short detail string for a child (e.g. StringValue -> Value, CS_TsunamiWildPet value)
+local function getChildDetail(c)
+	local name = c.Name or "?"
+	local class = c.ClassName or "?"
+	local val = nil
+	if c:IsA("StringValue") or c:IsA("BinaryStringValue") then
+		val = tostring(c.Value or "")
+	elseif c:IsA("IntValue") or c:IsA("NumberValue") or c:IsA("DoubleConstrainedValue") or c:IsA("IntConstrainedValue") then
+		val = tostring(c.Value)
+	elseif c:IsA("BoolValue") then
+		val = tostring(c.Value)
+	elseif c:IsA("ObjectValue") then
+		val = c.Value and c.Value:GetFullName() or "nil"
+	elseif c:IsA("Vector3Value") then
+		val = tostring(c.Value)
+	elseif c:IsA("Color3Value") then
+		val = tostring(c.Value)
+	end
+	if val ~= nil then
+		return ("  %s (%s) = %s"):format(name, class, val)
+	end
+	return ("  %s (%s)"):format(name, class)
+end
+
+-- Build BillboardGui details: each BillboardGui and its text elements
+local function getBillboardGuiDetails(inst)
+	local lines = {}
+	local count = 0
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			count = count + 1
+			table.insert(lines, ("  [%d] %s"):format(count, desc:GetFullName() or desc.Name or "?"))
+			for _, guiChild in ipairs(desc:GetDescendants()) do
+				if guiChild:IsA("TextLabel") or guiChild:IsA("TextButton") or guiChild:IsA("TextBox") then
+					local text = guiChild.Text
+					local preview = type(text) == "string" and (#text > 60 and (text:sub(1, 57) .. "...") or text) or ""
+					table.insert(lines, ("      %s: %s"):format(guiChild.Name or "?", preview))
+				end
+			end
+		end
+	end
+	if count == 0 then
+		return "  (none)"
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Build detail string for an instance: FullName, ClassName, attributes, children (with details), BillboardGui details, descendants
 local function getInstanceDetails(inst)
 	if not inst or not inst.GetFullName then return "(invalid)" end
 	local lines = {}
@@ -233,7 +305,7 @@ local function getInstanceDetails(inst)
 			table.insert(lines, "  " .. tostring(attrName) .. " = " .. tostring(val))
 		end
 	end
-	-- Children
+	-- Children (with details e.g. CS_TsunamiWildPet StringValue value)
 	table.insert(lines, "")
 	table.insert(lines, "Children:")
 	local children = inst:GetChildren()
@@ -241,9 +313,13 @@ local function getInstanceDetails(inst)
 		table.insert(lines, "  (none)")
 	else
 		for _, c in ipairs(children) do
-			table.insert(lines, "  " .. (c.Name or "?") .. " (" .. (c.ClassName or "?") .. ")")
+			table.insert(lines, getChildDetail(c))
 		end
 	end
+	-- BillboardGui details
+	table.insert(lines, "")
+	table.insert(lines, "BillboardGui details:")
+	table.insert(lines, getBillboardGuiDetails(inst))
 	-- Descendants
 	table.insert(lines, "")
 	table.insert(lines, "Descendants:")
@@ -278,8 +354,8 @@ local function openEscapePetsWindow()
 
 	local objMain = Instance.new("Frame")
 	objMain.Name = "Main"
-	objMain.Size = UDim2.new(0, 360, 0, 420)
-	objMain.Position = UDim2.new(0.5, -180, 0.5, -210)
+	objMain.Size = UDim2.new(0, 680, 0, 420)
+	objMain.Position = UDim2.new(0.5, -340, 0.5, -210)
 	objMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	objMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	objMain.BorderSizePixel = 0
@@ -309,7 +385,7 @@ local function openEscapePetsWindow()
 	objTitle.Position = UDim2.new(0, 8, 0, 0)
 	objTitle.BackgroundTransparency = 1
 	objTitle.Active = true
-	objTitle.Text = "Objects with BillboardGui"
+	objTitle.Text = "Objects with BillboardGui (" .. (WORKSPACE_PREFIX or "Workspace") .. ")"
 	objTitle.TextColor3 = Color3.fromRGB(200, 230, 255)
 	objTitle.TextSize = 14
 	objTitle.Font = Enum.Font.GothamBold
@@ -369,121 +445,68 @@ local function openEscapePetsWindow()
 		objScreen:Destroy()
 	end)
 
-	local scroll = Instance.new("ScrollingFrame")
-	scroll.Name = "List"
-	scroll.Size = UDim2.new(1, -16, 1, -44)
-	scroll.Position = UDim2.new(0, 8, 0, 36)
-	scroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
-	scroll.BorderSizePixel = 0
-	scroll.ScrollBarThickness = 6
-	scroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-	scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	scroll.Parent = objMain
+	-- Content area: list on the left, details on the right
+	local listScroll = Instance.new("ScrollingFrame")
+	listScroll.Name = "List"
+	listScroll.Size = UDim2.new(0, 280, 1, -44)
+	listScroll.Position = UDim2.new(0, 8, 0, 36)
+	listScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	listScroll.BorderSizePixel = 0
+	listScroll.ScrollBarThickness = 6
+	listScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	listScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	listScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	listScroll.Parent = objMain
 
-	local scrollCorner = Instance.new("UICorner")
-	scrollCorner.CornerRadius = UDim.new(0, 6)
-	scrollCorner.Parent = scroll
+	local listScrollCorner = Instance.new("UICorner")
+	listScrollCorner.CornerRadius = UDim.new(0, 6)
+	listScrollCorner.Parent = listScroll
 
 	local listLayout = Instance.new("UIListLayout")
 	listLayout.Padding = UDim.new(0, 2)
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	listLayout.Parent = scroll
+	listLayout.Parent = listScroll
+
+	-- Details panel (scrollable) next to list
+	local detailScroll = Instance.new("ScrollingFrame")
+	detailScroll.Name = "Details"
+	detailScroll.Size = UDim2.new(1, -296, 1, -44)
+	detailScroll.Position = UDim2.new(0, 292, 0, 36)
+	detailScroll.BackgroundColor3 = Color3.fromRGB(20, 28, 45)
+	detailScroll.BorderSizePixel = 0
+	detailScroll.ScrollBarThickness = 6
+	detailScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	detailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	detailScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	detailScroll.Parent = objMain
+
+	local detailScrollCorner = Instance.new("UICorner")
+	detailScrollCorner.CornerRadius = UDim.new(0, 6)
+	detailScrollCorner.Parent = detailScroll
+
+	local detailText = Instance.new("TextLabel")
+	detailText.Name = "Content"
+	detailText.Size = UDim2.new(1, -12, 0, 0)
+	detailText.Position = UDim2.new(0, 6, 0, 6)
+	detailText.BackgroundTransparency = 1
+	detailText.Text = "Select an object from the list."
+	detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
+	detailText.TextSize = 11
+	detailText.Font = Enum.Font.Code
+	detailText.TextXAlignment = Enum.TextXAlignment.Left
+	detailText.TextYAlignment = Enum.TextYAlignment.Top
+	detailText.TextWrapped = true
+	detailText.AutomaticSize = Enum.AutomaticSize.Y
+	detailText.Parent = detailScroll
 
 	local ROW_HEIGHT = 24
 
-	local function showDetailPopup(inst)
-		local detailScreen = Instance.new("ScreenGui")
-		detailScreen.Name = "Zooman_Detail"
-		detailScreen.ResetOnSpawn = false
-		detailScreen.Parent = PlayerGui
-
-		local overlay = Instance.new("Frame")
-		overlay.Size = UDim2.new(1, 0, 1, 0)
-		overlay.Position = UDim2.new(0, 0, 0, 0)
-		overlay.BackgroundColor3 = Color3.new(0, 0, 0)
-		overlay.BackgroundTransparency = 0.4
-		overlay.BorderSizePixel = 0
-		overlay.Active = true
-		overlay.Parent = detailScreen
-
-		local popup = Instance.new("Frame")
-		popup.Name = "Detail"
-		popup.Size = UDim2.new(0, 400, 0, 320)
-		popup.Position = UDim2.new(0.5, -200, 0.5, -160)
-		popup.AnchorPoint = Vector2.new(0.5, 0.5)
-		popup.BackgroundColor3 = Color3.fromRGB(25, 38, 60)
-		popup.BorderSizePixel = 0
-		popup.Active = true
-		popup.Parent = detailScreen
-
-		local popupCorner = Instance.new("UICorner")
-		popupCorner.CornerRadius = UDim.new(0, 10)
-		popupCorner.Parent = popup
-
-		local popupTop = Instance.new("Frame")
-		popupTop.Size = UDim2.new(1, 0, 0, 32)
-		popupTop.Position = UDim2.new(0, 0, 0, 0)
-		popupTop.BackgroundColor3 = Color3.fromRGB(35, 55, 90)
-		popupTop.BorderSizePixel = 0
-		popupTop.Parent = popup
-
-		local popupTitle = Instance.new("TextLabel")
-		popupTitle.Size = UDim2.new(1, -44, 1, 0)
-		popupTitle.Position = UDim2.new(0, 8, 0, 0)
-		popupTitle.BackgroundTransparency = 1
-		popupTitle.Text = "Details"
-		popupTitle.TextColor3 = Color3.fromRGB(200, 230, 255)
-		popupTitle.TextSize = 14
-		popupTitle.Font = Enum.Font.GothamBold
-		popupTitle.TextXAlignment = Enum.TextXAlignment.Left
-		popupTitle.TextTruncate = Enum.TextTruncate.AtEnd
-		popupTitle.Parent = popupTop
-
-		local popupClose = Instance.new("TextButton")
-		popupClose.Size = UDim2.new(0, 32, 0, 32)
-		popupClose.Position = UDim2.new(1, -32, 0, 0)
-		popupClose.BackgroundTransparency = 1
-		popupClose.Text = "×"
-		popupClose.TextColor3 = Color3.fromRGB(200, 230, 255)
-		popupClose.TextSize = 18
-		popupClose.Font = Enum.Font.GothamBold
-		popupClose.Parent = popupTop
-
-		local detailScroll = Instance.new("ScrollingFrame")
-		detailScroll.Size = UDim2.new(1, -16, 1, -48)
-		detailScroll.Position = UDim2.new(0, 8, 0, 36)
-		detailScroll.BackgroundColor3 = Color3.fromRGB(20, 28, 45)
-		detailScroll.BorderSizePixel = 0
-		detailScroll.ScrollBarThickness = 6
-		detailScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-		detailScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-		detailScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-		detailScroll.Parent = popup
-
-		local detailText = Instance.new("TextLabel")
-		detailText.Size = UDim2.new(1, -8, 0, 0)
-		detailText.Position = UDim2.new(0, 4, 0, 4)
-		detailText.BackgroundTransparency = 1
-		detailText.Text = getInstanceDetails(inst)
-		detailText.TextColor3 = Color3.fromRGB(200, 220, 255)
-		detailText.TextSize = 11
-		detailText.Font = Enum.Font.Code
-		detailText.TextXAlignment = Enum.TextXAlignment.Left
-		detailText.TextYAlignment = Enum.TextYAlignment.Top
-		detailText.TextWrapped = true
-		detailText.AutomaticSize = Enum.AutomaticSize.Y
-		detailText.Parent = detailScroll
-
-		local function closeDetail()
-			detailScreen:Destroy()
+	local function updateDetails(inst)
+		if inst and inst.Parent then
+			detailText.Text = getInstanceDetails(inst)
+		else
+			detailText.Text = "(object no longer valid)"
 		end
-		popupClose.MouseButton1Click:Connect(closeDetail)
-		overlay.InputBegan:Connect(function(inp)
-			if inp.UserInputType == Enum.UserInputType.MouseButton1 then
-				closeDetail()
-			end
-		end)
 	end
 
 	local function addRow(inst, layoutOrder)
@@ -497,7 +520,7 @@ local function openEscapePetsWindow()
 		row.LayoutOrder = layoutOrder
 		row.Text = ""
 		row.AutoButtonColor = true
-		row.Parent = scroll
+		row.Parent = listScroll
 		local rowCorner = Instance.new("UICorner")
 		rowCorner.CornerRadius = UDim.new(0, 4)
 		rowCorner.Parent = row
@@ -513,19 +536,18 @@ local function openEscapePetsWindow()
 		lbl.TextTruncate = Enum.TextTruncate.AtEnd
 		lbl.Parent = row
 		row.MouseButton1Click:Connect(function()
-			if inst.Parent then
-				showDetailPopup(inst)
-			end
+			updateDetails(inst)
 		end)
 		return row
 	end
 
 	local function refreshList()
-		for _, child in ipairs(scroll:GetChildren()) do
+		for _, child in ipairs(listScroll:GetChildren()) do
 			if child ~= listLayout then
 				child:Destroy()
 			end
 		end
+		detailText.Text = "Select an object from the list."
 		local list = getObjectsWithBillboardGui()
 		for i, inst in ipairs(list) do
 			addRow(inst, i)
