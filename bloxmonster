@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.2.0"
+local VERSION = "1.2.1"
 local AUTO_REFRESH_SEC = 5
 local PET_DEATH_POLL_SEC = 0.25
 local PET_DEATH_TIMEOUT_SEC = 180
@@ -336,6 +336,22 @@ local function getFilterPriority(entry)
 	return 999
 end
 
+local function parseFilterEntry(chunk)
+	chunk = normalizeFilterName(chunk)
+	if chunk == "" then
+		return nil
+	end
+	local namePart, prioPart = chunk:match("^(.+)@(%d+)$")
+	if not namePart or not prioPart then
+		return nil
+	end
+	local name = normalizeFilterName(namePart)
+	if name == "" then
+		return nil
+	end
+	return name, parseFilterPriority(prioPart)
+end
+
 local function findFilterIndexByName(name)
 	local lower = name:lower()
 	for idx, entry in ipairs(nameFilters) do
@@ -613,7 +629,7 @@ local filterHint = Instance.new("TextLabel")
 filterHint.Size = UDim2.new(1, -12, 0, 14)
 filterHint.Position = UDim2.new(0, 6, 0, 4)
 filterHint.BackgroundTransparency = 1
-filterHint.Text = "Pet name + priority (1 = farm first). Empty list = show all."
+filterHint.Text = "Format: Name@priority (1 = farm first). e.g. Orbitfin@1, Phant@3, Pico@2"
 filterHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 filterHint.TextSize = 10
 filterHint.Font = Enum.Font.Gotham
@@ -622,12 +638,12 @@ filterHint.Parent = filterBar
 
 local filterInput = Instance.new("TextBox")
 filterInput.Name = "FilterInput"
-filterInput.Size = UDim2.new(1, -178, 0, 24)
+filterInput.Size = UDim2.new(1, -120, 0, 24)
 filterInput.Position = UDim2.new(0, 6, 0, 20)
 filterInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
 filterInput.BorderSizePixel = 0
 filterInput.ClearTextOnFocus = false
-filterInput.PlaceholderText = "e.g. Orbitfin or Orbitfin@2, Phant"
+filterInput.PlaceholderText = "Orbitfin@1, Phant@3, Pico@2"
 filterInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
 filterInput.Text = ""
 filterInput.TextColor3 = Color3.fromRGB(220, 255, 220)
@@ -643,26 +659,6 @@ filterInputCorner.Parent = filterInput
 local filterInputPad = Instance.new("UIPadding")
 filterInputPad.PaddingLeft = UDim.new(0, 6)
 filterInputPad.Parent = filterInput
-
-local filterPriorityInput = Instance.new("TextBox")
-filterPriorityInput.Name = "FilterPriority"
-filterPriorityInput.Size = UDim2.new(0, 36, 0, 24)
-filterPriorityInput.Position = UDim2.new(1, -168, 0, 20)
-filterPriorityInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
-filterPriorityInput.BorderSizePixel = 0
-filterPriorityInput.ClearTextOnFocus = false
-filterPriorityInput.PlaceholderText = "P"
-filterPriorityInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
-filterPriorityInput.Text = "1"
-filterPriorityInput.TextColor3 = Color3.fromRGB(255, 220, 120)
-filterPriorityInput.TextSize = 12
-filterPriorityInput.Font = Enum.Font.GothamBold
-filterPriorityInput.TextXAlignment = Enum.TextXAlignment.Center
-filterPriorityInput.Parent = filterBar
-
-local filterPriorityCorner = Instance.new("UICorner")
-filterPriorityCorner.CornerRadius = UDim.new(0, 4)
-filterPriorityCorner.Parent = filterPriorityInput
 
 local filterAddBtn = Instance.new("TextButton")
 filterAddBtn.Name = "FilterAdd"
@@ -916,26 +912,25 @@ end
 
 local function addFilterFromInput()
 	local raw = filterInput.Text
-	local priority = parseFilterPriority(filterPriorityInput.Text)
 	filterInput.Text = ""
 	if raw == "" then
 		return
 	end
+	local added = 0
 	for part in string.gmatch(raw, "[^,]+") do
-		local chunk = normalizeFilterName(part)
-		if chunk ~= "" then
-			local namePart, prioPart = chunk:match("^(.+)@(%d+)$")
-			local name = normalizeFilterName(namePart or chunk)
-			local prio = prioPart and parseFilterPriority(prioPart) or priority
-			if name ~= "" then
-				local existingIdx = findFilterIndexByName(name)
-				if existingIdx then
-					nameFilters[existingIdx].priority = prio
-				else
-					table.insert(nameFilters, { name = name, priority = prio })
-				end
+		local name, prio = parseFilterEntry(part)
+		if name and prio then
+			local existingIdx = findFilterIndexByName(name)
+			if existingIdx then
+				nameFilters[existingIdx].priority = prio
+			else
+				table.insert(nameFilters, { name = name, priority = prio })
 			end
+			added = added + 1
 		end
+	end
+	if added == 0 then
+		warn("[BloxMonster] Use format Name@priority, e.g. Orbitfin@1, Phant@3, Pico@2")
 	end
 	rebuildFilterChips()
 	refreshList(false)
@@ -978,7 +973,7 @@ local function populateList(pets, totalUnfiltered)
 		if #nameFilters > 0 and totalUnfiltered and totalUnfiltered > 0 then
 			emptyMsg = "No pets match your filters. Try different names or tap Clear."
 		elseif #nameFilters > 0 then
-			emptyMsg = "No pets match your filters yet. Add names like Orbitfin, Phant, Pico."
+			emptyMsg = "No pets match your filters yet. Add e.g. Orbitfin@1, Phant@3, Pico@2"
 		end
 		empty.Text = emptyMsg
 		empty.TextColor3 = Color3.fromRGB(180, 200, 180)
@@ -1097,7 +1092,7 @@ local function startAutoFarm()
 		return
 	end
 	if #nameFilters == 0 then
-		farmStatusLabel.Text = "Add pets + priority first"
+		farmStatusLabel.Text = "Add pets first (e.g. Orbitfin@1)"
 		return
 	end
 	autoFarmRunning = true
