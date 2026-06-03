@@ -1,0 +1,641 @@
+--[[
+	Blox Monsters – list all wild pets currently in the world.
+	Game: https://www.roblox.com/games/106763540857326/Blox-Monsters
+	UI reference: Zooman / Test scripts.
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Workspace = game:GetService("Workspace")
+
+local VERSION = "1.0.0"
+local AUTO_REFRESH_SEC = 5
+
+-- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
+local WORKSPACE_PREFIX = nil
+
+-- Attribute names that suggest a model is a wild pet / monster.
+local PET_ATTR_KEYS = {
+	"PetId", "PetName", "MonsterName", "Monster", "MonsterId", "NpcId", "NPCId",
+	"Rarity", "Tier", "Mutation", "Shiny", "Level", "Wild", "IsWild", "Catchable",
+}
+
+-- BillboardGui label names to read for display.
+local BILLBOARD_LABELS = { "Name", "PetName", "MonsterName", "Rarity", "Tier", "Level", "Mutation", "Shiny" }
+
+local RARITY_ORDER = {
+	Secret = 1, Mythic = 2, Legendary = 3, Epic = 4, Rare = 5,
+	Uncommon = 6, Common = 7, A = 8, B = 9, C = 10, D = 11, S = 12,
+}
+
+local function getScanRoot()
+	if not WORKSPACE_PREFIX or WORKSPACE_PREFIX == "" then
+		return Workspace
+	end
+	local node = Workspace
+	for part in string.gmatch(WORKSPACE_PREFIX, "[^.]+") do
+		if part ~= "Workspace" then
+			local nextNode = node and node:FindFirstChild(part)
+			if not nextNode then
+				break
+			end
+			node = nextNode
+		end
+	end
+	return node or Workspace
+end
+
+local function isUnderPath(inst, prefix)
+	if not prefix or prefix == "" then
+		return true
+	end
+	local ok, fullName = pcall(function() return inst:GetFullName() end)
+	if not ok or not fullName then
+		return false
+	end
+	return fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. "."
+end
+
+local function isPlayerCharacter(model)
+	if not model or model.ClassName ~= "Model" then
+		return false
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr.Character == model then
+			return true
+		end
+	end
+	return false
+end
+
+local function isEquippedPet(model)
+	local ok, fullName = pcall(function() return model:GetFullName() end)
+	if not ok or not fullName then
+		return false
+	end
+	if fullName:find("Players%.", 1, true) then
+		return true
+	end
+	local lower = fullName:lower()
+	if lower:find("equipped") or lower:find("follower") or lower:find("followpet")
+		or lower:find("playerpet") or lower:find("mypet") or lower:find("backpack") then
+		return true
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if lower:find(plr.Name:lower(), 1, true) and lower:find("pet", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function getAttr(inst, key)
+	if not inst or not inst.GetAttribute then
+		return nil
+	end
+	local ok, val = pcall(function() return inst:GetAttribute(key) end)
+	return ok and val or nil
+end
+
+local function getFirstMatchingAttr(inst, keys)
+	for _, key in ipairs(keys) do
+		local val = getAttr(inst, key)
+		if val ~= nil and tostring(val) ~= "" then
+			return tostring(val), key
+		end
+	end
+	if inst.GetDescendants then
+		for _, desc in ipairs(inst:GetDescendants()) do
+			for _, key in ipairs(keys) do
+				local val = getAttr(desc, key)
+				if val ~= nil and tostring(val) ~= "" then
+					return tostring(val), key .. "@" .. (desc.Name or "?")
+				end
+			end
+		end
+	end
+	return nil, nil
+end
+
+local function getBillboardLabel(model, labelName)
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			local lbl = desc:FindFirstChild(labelName, true)
+			if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text and lbl.Text ~= "" then
+				return lbl.Text
+			end
+		end
+	end
+	return nil
+end
+
+local function getBillboardInfo(model)
+	local info = {}
+	for _, labelName in ipairs(BILLBOARD_LABELS) do
+		local text = getBillboardLabel(model, labelName)
+		if text then
+			info[labelName] = text
+		end
+	end
+	return info
+end
+
+local function hasBillboardGui(model)
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			return true
+		end
+	end
+	return false
+end
+
+local function hasCatchPrompt(model)
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("ProximityPrompt") then
+			local action = (desc.ActionText or ""):lower()
+			local obj = (desc.ObjectText or ""):lower()
+			if action:find("catch", 1, true) or action:find("battle", 1, true)
+				or action:find("fight", 1, true) or obj:find("catch", 1, true) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function countPetSignals(model)
+	local score = 0
+	if model:FindFirstChildOfClass("Humanoid") then
+		score = score + 1
+	end
+	if hasBillboardGui(model) then
+		score = score + 2
+	end
+	if hasCatchPrompt(model) then
+		score = score + 2
+	end
+	for _, key in ipairs(PET_ATTR_KEYS) do
+		if getAttr(model, key) ~= nil then
+			score = score + 1
+			break
+		end
+	end
+	return score
+end
+
+local function looksLikeWildPet(model)
+	if not model or model.ClassName ~= "Model" then
+		return false
+	end
+	if isPlayerCharacter(model) or isEquippedPet(model) then
+		return false
+	end
+	if not isUnderPath(model, WORKSPACE_PREFIX) then
+		return false
+	end
+	return countPetSignals(model) >= 2
+end
+
+local function getModelPosition(model)
+	local ok, pivot = pcall(function() return model:GetPivot() end)
+	if ok and pivot then
+		return pivot.Position
+	end
+	if model.PrimaryPart then
+		return model.PrimaryPart.Position
+	end
+	local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
+	if hrp then
+		return hrp.Position
+	end
+	return nil
+end
+
+local function getDistanceToPlayer(model)
+	local char = LocalPlayer.Character
+	if not char then
+		return nil
+	end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	local pos = getModelPosition(model)
+	if not root or not pos then
+		return nil
+	end
+	return (root.Position - pos).Magnitude
+end
+
+local function buildPetEntry(model)
+	local bb = getBillboardInfo(model)
+	local petName = bb.PetName or bb.MonsterName or bb.Name
+		or select(1, getFirstMatchingAttr(model, { "PetName", "MonsterName", "Monster", "Name" }))
+		or model.Name
+
+	local rarity = bb.Rarity or select(1, getFirstMatchingAttr(model, { "Rarity", "Tier" }))
+	local tier = bb.Tier or getAttr(model, "Tier")
+	local level = bb.Level or getAttr(model, "Level")
+	local mutation = bb.Mutation or getAttr(model, "Mutation")
+	local shiny = bb.Shiny or getAttr(model, "Shiny")
+
+	local rarityKey = rarity and tostring(rarity):gsub("^%s+", ""):gsub("%s+$", "") or ""
+	local sortKey = RARITY_ORDER[rarityKey] or RARITY_ORDER[tostring(tier or "")] or 99
+
+	return {
+		model = model,
+		name = tostring(petName),
+		rarity = rarity and tostring(rarity) or "—",
+		tier = tier and tostring(tier) or "—",
+		level = level and tostring(level) or "—",
+		mutation = mutation and tostring(mutation) or "—",
+		shiny = shiny and tostring(shiny) or "—",
+		distance = getDistanceToPlayer(model),
+		path = (function()
+			local okPath, fullName = pcall(function() return model:GetFullName() end)
+			return (okPath and fullName) or model.Name
+		end)(),
+		sortKey = sortKey,
+	}
+end
+
+local function getWorldPets()
+	local root = getScanRoot()
+	local found = {}
+	local seen = {}
+
+	local function consider(model)
+		if seen[model] then
+			return
+		end
+		if not looksLikeWildPet(model) then
+			return
+		end
+		seen[model] = true
+		local ok, entry = pcall(buildPetEntry, model)
+		if ok and entry then
+			table.insert(found, entry)
+		end
+	end
+
+	if root then
+		for _, desc in ipairs(root:GetDescendants()) do
+			if desc.ClassName == "Model" then
+				consider(desc)
+			end
+		end
+	end
+
+	table.sort(found, function(a, b)
+		if a.sortKey ~= b.sortKey then
+			return a.sortKey < b.sortKey
+		end
+		local da, db = a.distance or math.huge, b.distance or math.huge
+		if da ~= db then
+			return da < db
+		end
+		return a.name < b.name
+	end)
+
+	return found
+end
+
+local function makeDraggable(frame, dragHandles)
+	local dragging = false
+	local dragStart, startPos
+	local function startDrag(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragStart = inp.Position
+			startPos = frame.Position
+		end
+	end
+	for _, handle in ipairs(dragHandles) do
+		handle.InputBegan:Connect(startDrag)
+	end
+	UserInputService.InputChanged:Connect(function(inp)
+		if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = inp.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = false
+		end
+	end)
+end
+
+local function teleportToPet(model)
+	local char = LocalPlayer.Character
+	if not char then
+		return
+	end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	local pos = getModelPosition(model)
+	if not root or not pos then
+		return
+	end
+	root.CFrame = CFrame.new(pos + Vector3.new(0, 0, 6))
+end
+
+-- Remove existing UI
+local existing = PlayerGui:FindFirstChild("BloxMonster")
+if existing then
+	existing:Destroy()
+end
+
+local screen = Instance.new("ScreenGui")
+screen.Name = "BloxMonster"
+screen.ResetOnSpawn = false
+screen.DisplayOrder = 50
+screen.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 480, 0, 400)
+main.Position = UDim2.new(0, 16, 0.5, -200)
+main.AnchorPoint = Vector2.new(0, 0.5)
+main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = screen
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = main
+
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1, 0, 0, 32)
+top.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
+top.BorderSizePixel = 0
+top.Active = true
+top.Parent = main
+
+local topCorner = Instance.new("UICorner")
+topCorner.CornerRadius = UDim.new(0, 10)
+topCorner.Parent = top
+
+local topCover = Instance.new("Frame")
+topCover.Size = UDim2.new(1, 0, 0, 14)
+topCover.Position = UDim2.new(0, 0, 1, -14)
+topCover.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
+topCover.BorderSizePixel = 0
+topCover.Parent = top
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -200, 0, 32)
+title.Position = UDim2.new(0, 10, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "Blox Monsters – World Pets"
+title.TextColor3 = Color3.fromRGB(180, 255, 180)
+title.TextSize = 14
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = top
+
+local countLabel = Instance.new("TextLabel")
+countLabel.Name = "Count"
+countLabel.Size = UDim2.new(0, 80, 0, 32)
+countLabel.Position = UDim2.new(1, -188, 0, 0)
+countLabel.BackgroundTransparency = 1
+countLabel.Text = "0 pets"
+countLabel.TextColor3 = Color3.fromRGB(200, 230, 200)
+countLabel.TextSize = 12
+countLabel.Font = Enum.Font.Gotham
+countLabel.TextXAlignment = Enum.TextXAlignment.Right
+countLabel.Parent = top
+
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Name = "Refresh"
+refreshBtn.Size = UDim2.new(0, 56, 0, 24)
+refreshBtn.Position = UDim2.new(1, -100, 0, 4)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+refreshBtn.BorderSizePixel = 0
+refreshBtn.Text = "Refresh"
+refreshBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+refreshBtn.TextSize = 11
+refreshBtn.Font = Enum.Font.Gotham
+refreshBtn.Parent = top
+
+local refreshCorner = Instance.new("UICorner")
+refreshCorner.CornerRadius = UDim.new(0, 4)
+refreshCorner.Parent = refreshBtn
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 28, 0, 28)
+closeBtn.Position = UDim2.new(1, -30, 0, 2)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "×"
+closeBtn.TextColor3 = Color3.fromRGB(200, 255, 200)
+closeBtn.TextSize = 20
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = top
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Name = "List"
+scroll.Size = UDim2.new(1, -16, 1, -72)
+scroll.Position = UDim2.new(0, 8, 0, 40)
+scroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 8
+scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+scroll.Parent = main
+
+local scrollCorner = Instance.new("UICorner")
+scrollCorner.CornerRadius = UDim.new(0, 6)
+scrollCorner.Parent = scroll
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 4)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = scroll
+
+local bottom = Instance.new("Frame")
+bottom.Size = UDim2.new(1, -16, 0, 28)
+bottom.Position = UDim2.new(0, 8, 1, -36)
+bottom.BackgroundTransparency = 1
+bottom.Parent = main
+
+local autoRefreshBtn = Instance.new("TextButton")
+autoRefreshBtn.Name = "AutoRefresh"
+autoRefreshBtn.Size = UDim2.new(0.5, -4, 1, 0)
+autoRefreshBtn.Position = UDim2.new(0, 0, 0, 0)
+autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
+autoRefreshBtn.BorderSizePixel = 0
+autoRefreshBtn.Text = "Auto refresh: OFF"
+autoRefreshBtn.TextColor3 = Color3.fromRGB(200, 230, 200)
+autoRefreshBtn.TextSize = 11
+autoRefreshBtn.Font = Enum.Font.Gotham
+autoRefreshBtn.Parent = bottom
+
+local autoCorner = Instance.new("UICorner")
+autoCorner.CornerRadius = UDim.new(0, 6)
+autoCorner.Parent = autoRefreshBtn
+
+local versionLabel = Instance.new("TextLabel")
+versionLabel.Size = UDim2.new(0.5, -4, 1, 0)
+versionLabel.Position = UDim2.new(0.5, 4, 0, 0)
+versionLabel.BackgroundTransparency = 1
+versionLabel.Text = "v" .. VERSION
+versionLabel.TextColor3 = Color3.fromRGB(120, 160, 130)
+versionLabel.TextSize = 11
+versionLabel.Font = Enum.Font.Gotham
+versionLabel.TextXAlignment = Enum.TextXAlignment.Right
+versionLabel.Parent = bottom
+
+makeDraggable(main, { top, title, main })
+
+local autoRefreshRunning = false
+local autoRefreshThread = nil
+
+local function populateList(pets)
+	for _, child in ipairs(scroll:GetChildren()) do
+		if child ~= listLayout and not child:IsA("UICorner") then
+			child:Destroy()
+		end
+	end
+
+	countLabel.Text = tostring(#pets) .. " pet" .. (#pets == 1 and "" or "s")
+
+	if #pets == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Size = UDim2.new(1, -8, 0, 40)
+		empty.BackgroundTransparency = 1
+		empty.Text = "No wild pets found. Walk around an adventure zone and tap Refresh."
+		empty.TextColor3 = Color3.fromRGB(180, 200, 180)
+		empty.TextSize = 12
+		empty.Font = Enum.Font.Gotham
+		empty.TextWrapped = true
+		empty.LayoutOrder = 1
+		empty.Parent = scroll
+		return
+	end
+
+	for i, pet in ipairs(pets) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 52)
+		row.BackgroundColor3 = Color3.fromRGB(32, 50, 72)
+		row.LayoutOrder = i
+		row.Parent = scroll
+
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 4)
+		rowCorner.Parent = row
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Size = UDim2.new(1, -70, 0, 18)
+		nameLabel.Position = UDim2.new(0, 8, 0, 4)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Text = pet.name
+		nameLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+		nameLabel.TextSize = 13
+		nameLabel.Font = Enum.Font.GothamBold
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		nameLabel.Parent = row
+
+		local distText = pet.distance and ("%.0f studs"):format(pet.distance) or "?"
+		local infoLabel = Instance.new("TextLabel")
+		infoLabel.Size = UDim2.new(1, -70, 0, 16)
+		infoLabel.Position = UDim2.new(0, 8, 0, 22)
+		infoLabel.BackgroundTransparency = 1
+		infoLabel.Text = ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
+			pet.rarity, pet.tier, pet.level, pet.mutation, distText
+		)
+		infoLabel.TextColor3 = Color3.fromRGB(160, 210, 170)
+		infoLabel.TextSize = 11
+		infoLabel.Font = Enum.Font.Gotham
+		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+		infoLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		infoLabel.Parent = row
+
+		local pathLabel = Instance.new("TextLabel")
+		pathLabel.Size = UDim2.new(1, -70, 0, 14)
+		pathLabel.Position = UDim2.new(0, 8, 0, 36)
+		pathLabel.BackgroundTransparency = 1
+		pathLabel.Text = pet.path
+		pathLabel.TextColor3 = Color3.fromRGB(120, 150, 130)
+		pathLabel.TextSize = 9
+		pathLabel.Font = Enum.Font.Code
+		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		pathLabel.Parent = row
+
+		local tpBtn = Instance.new("TextButton")
+		tpBtn.Size = UDim2.new(0, 56, 0, 24)
+		tpBtn.Position = UDim2.new(1, -62, 0.5, -12)
+		tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+		tpBtn.BorderSizePixel = 0
+		tpBtn.Text = "Go"
+		tpBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+		tpBtn.TextSize = 11
+		tpBtn.Font = Enum.Font.GothamBold
+		tpBtn.Parent = row
+
+		local tpCorner = Instance.new("UICorner")
+		tpCorner.CornerRadius = UDim.new(0, 4)
+		tpCorner.Parent = tpBtn
+
+		local modelRef = pet.model
+		tpBtn.MouseButton1Click:Connect(function()
+			if modelRef and modelRef.Parent then
+				teleportToPet(modelRef)
+			end
+		end)
+	end
+end
+
+local function refreshList()
+	local ok, pets = pcall(getWorldPets)
+	if ok then
+		populateList(pets)
+	else
+		populateList({})
+		warn("[BloxMonster] Scan error:", pets)
+	end
+end
+
+local function stopAutoRefresh()
+	autoRefreshRunning = false
+	autoRefreshBtn.Text = "Auto refresh: OFF"
+	autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
+end
+
+refreshBtn.MouseButton1Click:Connect(refreshList)
+
+closeBtn.MouseButton1Click:Connect(function()
+	stopAutoRefresh()
+	screen:Destroy()
+end)
+
+autoRefreshBtn.MouseButton1Click:Connect(function()
+	if autoRefreshRunning then
+		stopAutoRefresh()
+		return
+	end
+	autoRefreshRunning = true
+	autoRefreshBtn.Text = "Auto refresh: ON"
+	autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 70)
+	if autoRefreshThread then
+		task.cancel(autoRefreshThread)
+	end
+	autoRefreshThread = task.spawn(function()
+		while autoRefreshRunning do
+			refreshList()
+			task.wait(AUTO_REFRESH_SEC)
+		end
+	end)
+end)
+
+refreshList()
+
+print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
