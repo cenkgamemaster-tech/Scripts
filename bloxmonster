@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.2.1"
+local VERSION = "1.2.2"
 local AUTO_REFRESH_SEC = 5
 local PET_DEATH_POLL_SEC = 0.25
 local PET_DEATH_TIMEOUT_SEC = 180
@@ -314,12 +314,28 @@ local function normalizeFilterName(text)
 	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function parseFilterPriority(text)
-	local n = tonumber(normalizeFilterName(text))
-	if not n or n < 1 then
-		return 1
+local FULLWIDTH_DIGITS = {
+	["０"] = "0", ["１"] = "1", ["２"] = "2", ["３"] = "3", ["４"] = "4",
+	["５"] = "5", ["６"] = "6", ["７"] = "7", ["８"] = "8", ["９"] = "9",
+}
+
+local function normalizeFilterRaw(text)
+	text = tostring(text or "")
+	text = text:gsub("\r", ""):gsub("\n", ",")
+	text = text:gsub("＠", "@"):gsub("，", ","):gsub("；", ";")
+	for fw, digit in pairs(FULLWIDTH_DIGITS) do
+		text = text:gsub(fw, digit)
 	end
-	return math.floor(n)
+	return text
+end
+
+local function splitFilterParts(raw)
+	raw = normalizeFilterRaw(raw)
+	local parts = {}
+	for part in string.gmatch(raw, "[^,;]+") do
+		table.insert(parts, part)
+	end
+	return parts
 end
 
 local function getFilterName(entry)
@@ -337,19 +353,24 @@ local function getFilterPriority(entry)
 end
 
 local function parseFilterEntry(chunk)
-	chunk = normalizeFilterName(chunk)
+	chunk = normalizeFilterName(normalizeFilterRaw(chunk))
 	if chunk == "" then
 		return nil
 	end
-	local namePart, prioPart = chunk:match("^(.+)@(%d+)$")
-	if not namePart or not prioPart then
+	local atPos = chunk:find("@", 1, true)
+	if not atPos then
 		return nil
 	end
-	local name = normalizeFilterName(namePart)
-	if name == "" then
+	local name = normalizeFilterName(chunk:sub(1, atPos - 1))
+	local prioStr = normalizeFilterName(chunk:sub(atPos + 1))
+	if name == "" or prioStr == "" then
 		return nil
 	end
-	return name, parseFilterPriority(prioPart)
+	local prio = tonumber(prioStr)
+	if not prio or prio < 1 then
+		return nil
+	end
+	return name, math.floor(prio)
 end
 
 local function findFilterIndexByName(name)
@@ -670,6 +691,9 @@ filterAddBtn.Text = "Add"
 filterAddBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
 filterAddBtn.TextSize = 11
 filterAddBtn.Font = Enum.Font.GothamBold
+filterAddBtn.ZIndex = 3
+filterAddBtn.Active = true
+filterAddBtn.AutoButtonColor = true
 filterAddBtn.Parent = filterBar
 
 local filterAddCorner = Instance.new("UICorner")
@@ -686,6 +710,8 @@ filterClearBtn.Text = "Clear"
 filterClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
 filterClearBtn.TextSize = 11
 filterClearBtn.Font = Enum.Font.Gotham
+filterClearBtn.ZIndex = 3
+filterClearBtn.Active = true
 filterClearBtn.Parent = filterBar
 
 local filterClearCorner = Instance.new("UICorner")
@@ -847,79 +873,49 @@ local function rebuildFilterChips()
 	for i, entry in ipairs(nameFilters) do
 		local filterName = getFilterName(entry)
 		local priority = getFilterPriority(entry)
-		local chip = Instance.new("Frame")
-		chip.Size = UDim2.new(0, 0, 0, 20)
-		chip.AutomaticSize = Enum.AutomaticSize.X
+		local chipText = ("P%s %s"):format(tostring(priority), filterName)
+
+		local chip = Instance.new("TextButton")
+		chip.Size = UDim2.new(0, math.max(80, #chipText * 7 + 24), 0, 22)
 		chip.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
+		chip.BorderSizePixel = 0
 		chip.LayoutOrder = i
+		chip.Text = chipText .. "  ×"
+		chip.TextColor3 = Color3.fromRGB(200, 255, 200)
+		chip.TextSize = 11
+		chip.Font = Enum.Font.Gotham
+		chip.AutoButtonColor = true
 		chip.Parent = filterChipScroll
 
 		local chipCorner = Instance.new("UICorner")
 		chipCorner.CornerRadius = UDim.new(0, 4)
 		chipCorner.Parent = chip
 
-		local chipPad = Instance.new("UIPadding")
-		chipPad.PaddingLeft = UDim.new(0, 6)
-		chipPad.PaddingRight = UDim.new(0, 4)
-		chipPad.Parent = chip
-
-		local chipLayout = Instance.new("UIListLayout")
-		chipLayout.FillDirection = Enum.FillDirection.Horizontal
-		chipLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-		chipLayout.Padding = UDim.new(0, 4)
-		chipLayout.Parent = chip
-
-		local prioLabel = Instance.new("TextLabel")
-		prioLabel.BackgroundTransparency = 1
-		prioLabel.AutomaticSize = Enum.AutomaticSize.X
-		prioLabel.Size = UDim2.new(0, 0, 0, 20)
-		prioLabel.Text = "P" .. tostring(priority)
-		prioLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
-		prioLabel.TextSize = 11
-		prioLabel.Font = Enum.Font.GothamBold
-		prioLabel.Parent = chip
-
-		local chipLabel = Instance.new("TextLabel")
-		chipLabel.BackgroundTransparency = 1
-		chipLabel.AutomaticSize = Enum.AutomaticSize.X
-		chipLabel.Size = UDim2.new(0, 0, 0, 20)
-		chipLabel.Text = filterName
-		chipLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
-		chipLabel.TextSize = 11
-		chipLabel.Font = Enum.Font.Gotham
-		chipLabel.Parent = chip
-
-		local removeBtn = Instance.new("TextButton")
-		removeBtn.Size = UDim2.new(0, 16, 0, 16)
-		removeBtn.BackgroundTransparency = 1
-		removeBtn.Text = "×"
-		removeBtn.TextColor3 = Color3.fromRGB(255, 180, 180)
-		removeBtn.TextSize = 14
-		removeBtn.Font = Enum.Font.GothamBold
-		removeBtn.Parent = chip
-
 		local capturedName = filterName
-		removeBtn.MouseButton1Click:Connect(function()
+		chip.MouseButton1Click:Connect(function()
 			local idx = findFilterIndexByName(capturedName)
 			if idx then
 				table.remove(nameFilters, idx)
 			end
 			rebuildFilterChips()
-			refreshList(false)
+			if refreshList then
+				refreshList(false)
+			end
 		end)
 	end
 end
 
 local function addFilterFromInput()
 	local raw = filterInput.Text
-	filterInput.Text = ""
 	if raw == "" then
+		filterHint.Text = "Type: Orbitfin@1, Phant@3, Pico@2"
 		return
 	end
+
 	local added = 0
-	for part in string.gmatch(raw, "[^,]+") do
+	for _, part in ipairs(splitFilterParts(raw)) do
 		local name, prio = parseFilterEntry(part)
-		if name and prio then
+		if name ~= nil and prio ~= nil then
 			local existingIdx = findFilterIndexByName(name)
 			if existingIdx then
 				nameFilters[existingIdx].priority = prio
@@ -929,11 +925,18 @@ local function addFilterFromInput()
 			added = added + 1
 		end
 	end
-	if added == 0 then
-		warn("[BloxMonster] Use format Name@priority, e.g. Orbitfin@1, Phant@3, Pico@2")
+
+	if added > 0 then
+		filterInput.Text = ""
+		filterHint.Text = ("Added %d filter(s). Empty list = show all."):format(added)
+		rebuildFilterChips()
+		if refreshList then
+			refreshList(false)
+		end
+	else
+		filterHint.Text = "Invalid format – use Name@priority (e.g. Orbitfin@1, Phant@3)"
+		warn("[BloxMonster] Could not parse:", raw)
 	end
-	rebuildFilterChips()
-	refreshList(false)
 end
 
 local function setFilterBarVisible(visible)
@@ -1129,9 +1132,19 @@ end
 
 refreshBtn.MouseButton1Click:Connect(refreshList)
 
-filterAddBtn.MouseButton1Click:Connect(addFilterFromInput)
-filterInput.FocusLost:Connect(function(enterPressed)
-	if enterPressed then
+filterAddBtn.MouseButton1Click:Connect(function()
+	task.defer(addFilterFromInput)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+	if input.KeyCode ~= Enum.KeyCode.Return and input.KeyCode ~= Enum.KeyCode.KeypadEnter then
+		return
+	end
+	local focused = UserInputService:GetFocusedTextBox()
+	if focused == filterInput then
 		addFilterFromInput()
 	end
 end)
