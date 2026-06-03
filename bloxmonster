@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.4.0"
+local VERSION = "1.4.1"
 local AUTO_REFRESH_SEC = 5
 local PET_DEATH_POLL_SEC = 0.35
 local PET_DEATH_TIMEOUT_SEC = 180
@@ -281,9 +281,6 @@ local function getWorldPets()
 		if not looksLikeWildPet(model) then
 			return
 		end
-		if isPetDead(model) then
-			return
-		end
 		seen[model] = true
 		local ok, entry = pcall(buildPetEntry, model)
 		if ok and entry then
@@ -450,27 +447,14 @@ local function isPetDead(model)
 		return true
 	end
 
-	local function checkDeadAttrs(obj)
-		if not obj or not obj.GetAttribute then
-			return false
-		end
+	-- Only check attributes on the model itself (not descendants – avoids false positives).
+	if model.GetAttribute then
 		for _, key in ipairs({ "Dead", "IsDead", "Defeated", "IsDefeated", "KO", "Fainted" }) do
-			local val = obj:GetAttribute(key)
+			local val = model:GetAttribute(key)
 			if val == true or val == 1 or val == "true" then
 				return true
 			end
 		end
-		for _, key in ipairs({ "HP", "Health", "CurrentHealth" }) do
-			local val = obj:GetAttribute(key)
-			if type(val) == "number" and val <= 0 then
-				return true
-			end
-		end
-		return false
-	end
-
-	if checkDeadAttrs(model) then
-		return true
 	end
 
 	local hum = model:FindFirstChildOfClass("Humanoid")
@@ -482,18 +466,12 @@ local function isPetDead(model)
 			end
 		end
 	end
+	if hum and hum.Health <= 0 then
+		return true
+	end
 	if hum then
-		if hum.Health <= 0 then
-			return true
-		end
 		local okState, state = pcall(function() return hum:GetState() end)
 		if okState and state == Enum.HumanoidStateType.Dead then
-			return true
-		end
-	end
-
-	for _, desc in ipairs(model:GetDescendants()) do
-		if checkDeadAttrs(desc) then
 			return true
 		end
 	end
