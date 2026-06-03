@@ -13,14 +13,16 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.3.0"
+local VERSION = "1.4.0"
 local AUTO_REFRESH_SEC = 5
-local PET_DEATH_POLL_SEC = 0.25
+local PET_DEATH_POLL_SEC = 0.35
 local PET_DEATH_TIMEOUT_SEC = 180
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_RETELPORT_SEC = 3
-local FARM_POST_DEATH_WAIT_SEC = 1
+local FARM_POST_DEATH_WAIT_SEC = 0.75
 local FARM_UI_REFRESH_SEC = 3
+local FARM_FIGHT_MAX_SEC = 30
+local FARM_RESCAN_SEC = 0.75
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
@@ -279,6 +281,9 @@ local function getWorldPets()
 		if not looksLikeWildPet(model) then
 			return
 		end
+		if isPetDead(model) then
+			return
+		end
 		seen[model] = true
 		local ok, entry = pcall(buildPetEntry, model)
 		if ok and entry then
@@ -313,6 +318,7 @@ local nameFilters = {}
 local autoFarmRunning = false
 local lastAllPets = {}
 local farmIgnoreModels = {}
+local scanWorldPets
 
 local function normalizeFilterName(text)
 	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -499,59 +505,88 @@ local function isPetAlive(model)
 	return model and model.Parent and not isPetDead(model)
 end
 
-local function waitUntilPetDead(model)
-	local start = tick()
-	local lastTeleport = 0
-	local lastHealth = nil
-	local hum = model and model:FindFirstChildOfClass("Humanoid")
-	if model and not hum then
-		for _, desc in ipairs(model:GetDescendants()) do
-			if desc:IsA("Humanoid") then
-				hum = desc
-				break
-			end
+local function findPetEntryForModel(pets, model)
+	for _, pet in ipairs(pets) do
+		if pet.model == model then
+			return pet
 		end
 	end
-	if hum then
-		lastHealth = hum.Health
-	end
-
-	while autoFarmRunning do
-		if not model or not model.Parent then
-			return true
-		end
-		if isPetDead(model) then
-			return true
-		end
-		if hum and hum.Parent then
-			if lastHealth and hum.Health < lastHealth and hum.Health <= 0 then
-				return true
-			end
-			lastHealth = hum.Health
-		end
-		if tick() - lastTeleport >= FARM_RETELPORT_SEC then
-			teleportToPet(model)
-			lastTeleport = tick()
-		end
-		if tick() - start > PET_DEATH_TIMEOUT_SEC then
-			warn("[BloxMonster] Pet death timeout:", model and model.Name or "?")
-			return false
-		end
-		task.wait(PET_DEATH_POLL_SEC)
-	end
-	return false
+	return nil
 end
 
-local function waitUntilModelGone(model, maxSec)
-	maxSec = maxSec or 8
+-- Fight until target is gone, dead, or no longer in the refreshed pet list.
+local function farmUntilComplete(model, priority, displayName)
+	if not model then
+		return "no_model"
+	end
+
 	local start = tick()
-	while autoFarmRunning and model and model.Parent and tick() - start < maxSec do
-		if isPetDead(model) then
-			return true
+	local lastTeleport = 0
+	local lastRescan = 0
+	local initialParent = model.Parent
+	local initialFullName = (pcall(function() return model:GetFullName() end) and model:GetFullName()) or model.Name
+
+	while autoFarmRunning do
+		if not model.Parent then
+			return "destroyed"
 		end
+		if model.Parent ~= initialParent then
+			return "reparented"
+		end
+		if isPetDead(model) then
+			return "dead"
+		end
+
+		local now = tick()
+		if now - lastRescan >= FARM_RESCAN_SEC then
+			lastRescan = now
+			local pets = scanWorldPets()
+			local filtered = applyNameFilters(pets)
+			local entry = findPetEntryForModel(filtered, model)
+
+			if not entry then
+				return "not_in_scan"
+			end
+
+			-- Same priority name respawned as a new instance → this one is finished.
+			local lowerTarget = tostring(displayName or ""):lower()
+			for _, pet in ipairs(filtered) do
+				if pet.model ~= model and isPetAlive(pet.model) then
+					local p = getPetFilterPriority(pet.name)
+					if p == priority then
+						local lowerName = pet.name:lower()
+						if lowerName:find(lowerTarget, 1, true) or lowerTarget:find(lowerName, 1, true) then
+							return "replaced"
+						end
+					end
+				end
+			end
+
+			local okFull, fullName = pcall(function() return model:GetFullName() end)
+			if okFull and fullName ~= initialFullName then
+				return "moved"
+			end
+		end
+
+		if now - lastTeleport >= FARM_RETELPORT_SEC then
+			if isPetAlive(model) then
+				teleportToPet(model)
+			else
+				return "not_alive"
+			end
+			lastTeleport = now
+		end
+
+		if now - start >= FARM_FIGHT_MAX_SEC then
+			return "timeout"
+		end
+		if now - start >= PET_DEATH_TIMEOUT_SEC then
+			return "timeout"
+		end
+
 		task.wait(PET_DEATH_POLL_SEC)
 	end
-	return not (model and model.Parent)
+	return "stopped"
 end
 
 local function cleanupFarmIgnore(ignoreSet)
@@ -604,7 +639,7 @@ local function pickNextFarmTarget(pets, skipBelowPriority, ignoreSet)
 	return best, bestP
 end
 
-local function scanWorldPets()
+scanWorldPets = function()
 	local ok, pets = pcall(getWorldPets)
 	if ok and pets then
 		lastAllPets = pets
@@ -1259,14 +1294,18 @@ local function startAutoFarm()
 				local prio = targetP or getPetFilterPriority(target.name)
 				farmStatusLabel.Text = ("Farming P%s: %s"):format(tostring(prio), target.name)
 				teleportToPet(model)
-				waitUntilPetDead(model)
-				waitUntilModelGone(model, 8)
+
+				local reason = farmUntilComplete(model, prio, target.name)
 				farmIgnoreModels[model] = true
 				lastFarmPriority = prio
-				farmStatusLabel.Text = ("Done P%s: %s – scanning..."):format(tostring(prio), target.name)
+
+				farmStatusLabel.Text = ("Done P%s: %s (%s) – next..."):format(
+					tostring(prio), target.name, tostring(reason)
+				)
 				task.wait(FARM_POST_DEATH_WAIT_SEC)
-				scanWorldPets()
-				populateList(applyNameFilters(lastAllPets), #lastAllPets)
+
+				pets = scanWorldPets()
+				populateList(applyNameFilters(pets), #pets)
 				lastUiRefresh = tick()
 			end
 		end
