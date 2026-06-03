@@ -13,8 +13,12 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.1.0"
+local VERSION = "1.2.0"
 local AUTO_REFRESH_SEC = 5
+local PET_DEATH_POLL_SEC = 0.25
+local PET_DEATH_TIMEOUT_SEC = 180
+local FARM_NO_TARGET_WAIT_SEC = 2
+local FARM_RETELPORT_SEC = 3
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
@@ -302,24 +306,69 @@ local function getWorldPets()
 	return found
 end
 
--- Pet names to show (case-insensitive partial match). Empty = show all.
+-- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local nameFilters = {}
+local autoFarmRunning = false
 
 local function normalizeFilterName(text)
 	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function parseFilterPriority(text)
+	local n = tonumber(normalizeFilterName(text))
+	if not n or n < 1 then
+		return 1
+	end
+	return math.floor(n)
+end
+
+local function getFilterName(entry)
+	if type(entry) == "table" then
+		return entry.name or ""
+	end
+	return tostring(entry or "")
+end
+
+local function getFilterPriority(entry)
+	if type(entry) == "table" and entry.priority then
+		return entry.priority
+	end
+	return 999
+end
+
+local function findFilterIndexByName(name)
+	local lower = name:lower()
+	for idx, entry in ipairs(nameFilters) do
+		if getFilterName(entry):lower() == lower then
+			return idx
+		end
+	end
+	return nil
+end
+
+local function getPetFilterPriority(petName)
+	if #nameFilters == 0 then
+		return 999
+	end
+	local best = math.huge
+	local lowerName = tostring(petName or ""):lower()
+	for _, entry in ipairs(nameFilters) do
+		local fname = getFilterName(entry)
+		if lowerName:find(fname:lower(), 1, true) then
+			local p = getFilterPriority(entry)
+			if p < best then
+				best = p
+			end
+		end
+	end
+	return best
 end
 
 local function petMatchesFilters(petName)
 	if #nameFilters == 0 then
 		return true
 	end
-	local lowerName = tostring(petName or ""):lower()
-	for _, filterName in ipairs(nameFilters) do
-		if lowerName:find(filterName:lower(), 1, true) then
-			return true
-		end
-	end
-	return false
+	return getPetFilterPriority(petName) < math.huge
 end
 
 local function applyNameFilters(pets)
@@ -332,7 +381,68 @@ local function applyNameFilters(pets)
 			table.insert(out, pet)
 		end
 	end
+	table.sort(out, function(a, b)
+		local pa, pb = getPetFilterPriority(a.name), getPetFilterPriority(b.name)
+		if pa ~= pb then
+			return pa < pb
+		end
+		if a.sortKey ~= b.sortKey then
+			return a.sortKey < b.sortKey
+		end
+		return (a.distance or math.huge) < (b.distance or math.huge)
+	end)
 	return out
+end
+
+local function isPetDead(model)
+	if not model or not model.Parent then
+		return true
+	end
+	local okWs, inWorkspace = pcall(function() return model:IsDescendantOf(Workspace) end)
+	if okWs and not inWorkspace then
+		return true
+	end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if hum then
+		if hum.Health <= 0 then
+			return true
+		end
+		local okState, state = pcall(function() return hum:GetState() end)
+		if okState and state == Enum.HumanoidStateType.Dead then
+			return true
+		end
+	end
+	return false
+end
+
+local function waitUntilPetDead(model)
+	local start = tick()
+	local lastTeleport = 0
+	while autoFarmRunning and model and model.Parent do
+		if isPetDead(model) then
+			return true
+		end
+		if tick() - lastTeleport >= FARM_RETELPORT_SEC then
+			teleportToPet(model)
+			lastTeleport = tick()
+		end
+		if tick() - start > PET_DEATH_TIMEOUT_SEC then
+			warn("[BloxMonster] Pet death timeout:", model and model.Name or "?")
+			return false
+		end
+		task.wait(PET_DEATH_POLL_SEC)
+	end
+	return true
+end
+
+local function pickNextFarmTarget(pets)
+	for _, pet in ipairs(pets) do
+		local model = pet.model
+		if model and model.Parent and not isPetDead(model) then
+			return pet
+		end
+	end
+	return nil
 end
 
 local function makeDraggable(frame, dragHandles)
@@ -391,8 +501,8 @@ screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 480, 0, 448)
-main.Position = UDim2.new(0, 16, 0.5, -224)
+main.Size = UDim2.new(0, 480, 0, 488)
+main.Position = UDim2.new(0, 16, 0.5, -244)
 main.AnchorPoint = Vector2.new(0, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 main.BorderSizePixel = 0
@@ -503,7 +613,7 @@ local filterHint = Instance.new("TextLabel")
 filterHint.Size = UDim2.new(1, -12, 0, 14)
 filterHint.Position = UDim2.new(0, 6, 0, 4)
 filterHint.BackgroundTransparency = 1
-filterHint.Text = "Show only these pets (leave empty = show all):"
+filterHint.Text = "Pet name + priority (1 = farm first). Empty list = show all."
 filterHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 filterHint.TextSize = 10
 filterHint.Font = Enum.Font.Gotham
@@ -512,12 +622,12 @@ filterHint.Parent = filterBar
 
 local filterInput = Instance.new("TextBox")
 filterInput.Name = "FilterInput"
-filterInput.Size = UDim2.new(1, -120, 0, 24)
+filterInput.Size = UDim2.new(1, -178, 0, 24)
 filterInput.Position = UDim2.new(0, 6, 0, 20)
 filterInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
 filterInput.BorderSizePixel = 0
 filterInput.ClearTextOnFocus = false
-filterInput.PlaceholderText = "e.g. Orbitfin, Phant, Pico"
+filterInput.PlaceholderText = "e.g. Orbitfin or Orbitfin@2, Phant"
 filterInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
 filterInput.Text = ""
 filterInput.TextColor3 = Color3.fromRGB(220, 255, 220)
@@ -533,6 +643,26 @@ filterInputCorner.Parent = filterInput
 local filterInputPad = Instance.new("UIPadding")
 filterInputPad.PaddingLeft = UDim.new(0, 6)
 filterInputPad.Parent = filterInput
+
+local filterPriorityInput = Instance.new("TextBox")
+filterPriorityInput.Name = "FilterPriority"
+filterPriorityInput.Size = UDim2.new(0, 36, 0, 24)
+filterPriorityInput.Position = UDim2.new(1, -168, 0, 20)
+filterPriorityInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
+filterPriorityInput.BorderSizePixel = 0
+filterPriorityInput.ClearTextOnFocus = false
+filterPriorityInput.PlaceholderText = "P"
+filterPriorityInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
+filterPriorityInput.Text = "1"
+filterPriorityInput.TextColor3 = Color3.fromRGB(255, 220, 120)
+filterPriorityInput.TextSize = 12
+filterPriorityInput.Font = Enum.Font.GothamBold
+filterPriorityInput.TextXAlignment = Enum.TextXAlignment.Center
+filterPriorityInput.Parent = filterBar
+
+local filterPriorityCorner = Instance.new("UICorner")
+filterPriorityCorner.CornerRadius = UDim.new(0, 4)
+filterPriorityCorner.Parent = filterPriorityInput
 
 local filterAddBtn = Instance.new("TextButton")
 filterAddBtn.Name = "FilterAdd"
@@ -587,7 +717,7 @@ filterChipLayout.Parent = filterChipScroll
 
 local scroll = Instance.new("ScrollingFrame")
 scroll.Name = "List"
-scroll.Size = UDim2.new(1, -16, 1, -148)
+scroll.Size = UDim2.new(1, -16, 1, -188)
 scroll.Position = UDim2.new(0, 8, 0, 112)
 scroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
 scroll.BorderSizePixel = 0
@@ -608,10 +738,65 @@ listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 listLayout.Parent = scroll
 
 local bottom = Instance.new("Frame")
-bottom.Size = UDim2.new(1, -16, 0, 28)
-bottom.Position = UDim2.new(0, 8, 1, -36)
+bottom.Size = UDim2.new(1, -16, 0, 68)
+bottom.Position = UDim2.new(0, 8, 1, -76)
 bottom.BackgroundTransparency = 1
 bottom.Parent = main
+
+local farmRow = Instance.new("Frame")
+farmRow.Size = UDim2.new(1, 0, 0, 28)
+farmRow.BackgroundTransparency = 1
+farmRow.Parent = bottom
+
+local farmStartBtn = Instance.new("TextButton")
+farmStartBtn.Name = "FarmStart"
+farmStartBtn.Size = UDim2.new(0, 72, 1, 0)
+farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+farmStartBtn.BorderSizePixel = 0
+farmStartBtn.Text = "Start farm"
+farmStartBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+farmStartBtn.TextSize = 11
+farmStartBtn.Font = Enum.Font.GothamBold
+farmStartBtn.Parent = farmRow
+
+local farmStartCorner = Instance.new("UICorner")
+farmStartCorner.CornerRadius = UDim.new(0, 6)
+farmStartCorner.Parent = farmStartBtn
+
+local farmStopBtn = Instance.new("TextButton")
+farmStopBtn.Name = "FarmStop"
+farmStopBtn.Size = UDim2.new(0, 72, 1, 0)
+farmStopBtn.Position = UDim2.new(0, 78, 0, 0)
+farmStopBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+farmStopBtn.BorderSizePixel = 0
+farmStopBtn.Text = "Stop farm"
+farmStopBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+farmStopBtn.TextSize = 11
+farmStopBtn.Font = Enum.Font.GothamBold
+farmStopBtn.Parent = farmRow
+
+local farmStopCorner = Instance.new("UICorner")
+farmStopCorner.CornerRadius = UDim.new(0, 6)
+farmStopCorner.Parent = farmStopBtn
+
+local farmStatusLabel = Instance.new("TextLabel")
+farmStatusLabel.Name = "FarmStatus"
+farmStatusLabel.Size = UDim2.new(1, -160, 1, 0)
+farmStatusLabel.Position = UDim2.new(0, 156, 0, 0)
+farmStatusLabel.BackgroundTransparency = 1
+farmStatusLabel.Text = "Farm idle"
+farmStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+farmStatusLabel.TextSize = 11
+farmStatusLabel.Font = Enum.Font.Gotham
+farmStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+farmStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+farmStatusLabel.Parent = farmRow
+
+local bottomRow = Instance.new("Frame")
+bottomRow.Size = UDim2.new(1, 0, 0, 28)
+bottomRow.Position = UDim2.new(0, 0, 0, 36)
+bottomRow.BackgroundTransparency = 1
+bottomRow.Parent = bottom
 
 local autoRefreshBtn = Instance.new("TextButton")
 autoRefreshBtn.Name = "AutoRefresh"
@@ -623,7 +808,7 @@ autoRefreshBtn.Text = "Auto refresh: OFF"
 autoRefreshBtn.TextColor3 = Color3.fromRGB(200, 230, 200)
 autoRefreshBtn.TextSize = 11
 autoRefreshBtn.Font = Enum.Font.Gotham
-autoRefreshBtn.Parent = bottom
+autoRefreshBtn.Parent = bottomRow
 
 local autoCorner = Instance.new("UICorner")
 autoCorner.CornerRadius = UDim.new(0, 6)
@@ -638,14 +823,17 @@ versionLabel.TextColor3 = Color3.fromRGB(120, 160, 130)
 versionLabel.TextSize = 11
 versionLabel.Font = Enum.Font.Gotham
 versionLabel.TextXAlignment = Enum.TextXAlignment.Right
-versionLabel.Parent = bottom
+versionLabel.Parent = bottomRow
 
 makeDraggable(main, { top, title, main })
 
 local autoRefreshRunning = false
 local autoRefreshThread = nil
+local autoFarmThread = nil
 local lastAllPets = {}
 local filterBarVisible = true
+
+local refreshList
 
 local function rebuildFilterChips()
 	for _, child in ipairs(filterChipScroll:GetChildren()) do
@@ -653,7 +841,16 @@ local function rebuildFilterChips()
 			child:Destroy()
 		end
 	end
-	for i, filterName in ipairs(nameFilters) do
+	table.sort(nameFilters, function(a, b)
+		local pa, pb = getFilterPriority(a), getFilterPriority(b)
+		if pa ~= pb then
+			return pa < pb
+		end
+		return getFilterName(a):lower() < getFilterName(b):lower()
+	end)
+	for i, entry in ipairs(nameFilters) do
+		local filterName = getFilterName(entry)
+		local priority = getFilterPriority(entry)
 		local chip = Instance.new("Frame")
 		chip.Size = UDim2.new(0, 0, 0, 20)
 		chip.AutomaticSize = Enum.AutomaticSize.X
@@ -676,6 +873,16 @@ local function rebuildFilterChips()
 		chipLayout.Padding = UDim.new(0, 4)
 		chipLayout.Parent = chip
 
+		local prioLabel = Instance.new("TextLabel")
+		prioLabel.BackgroundTransparency = 1
+		prioLabel.AutomaticSize = Enum.AutomaticSize.X
+		prioLabel.Size = UDim2.new(0, 0, 0, 20)
+		prioLabel.Text = "P" .. tostring(priority)
+		prioLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
+		prioLabel.TextSize = 11
+		prioLabel.Font = Enum.Font.GothamBold
+		prioLabel.Parent = chip
+
 		local chipLabel = Instance.new("TextLabel")
 		chipLabel.BackgroundTransparency = 1
 		chipLabel.AutomaticSize = Enum.AutomaticSize.X
@@ -697,36 +904,36 @@ local function rebuildFilterChips()
 
 		local capturedName = filterName
 		removeBtn.MouseButton1Click:Connect(function()
-			for idx, n in ipairs(nameFilters) do
-				if n == capturedName then
-					table.remove(nameFilters, idx)
-					break
-				end
+			local idx = findFilterIndexByName(capturedName)
+			if idx then
+				table.remove(nameFilters, idx)
 			end
-		rebuildFilterChips()
-		refreshList(false)
+			rebuildFilterChips()
+			refreshList(false)
 		end)
 	end
 end
 
 local function addFilterFromInput()
 	local raw = filterInput.Text
+	local priority = parseFilterPriority(filterPriorityInput.Text)
 	filterInput.Text = ""
 	if raw == "" then
 		return
 	end
 	for part in string.gmatch(raw, "[^,]+") do
-		local name = normalizeFilterName(part)
-		if name ~= "" then
-			local duplicate = false
-			for _, existing in ipairs(nameFilters) do
-				if existing:lower() == name:lower() then
-					duplicate = true
-					break
+		local chunk = normalizeFilterName(part)
+		if chunk ~= "" then
+			local namePart, prioPart = chunk:match("^(.+)@(%d+)$")
+			local name = normalizeFilterName(namePart or chunk)
+			local prio = prioPart and parseFilterPriority(prioPart) or priority
+			if name ~= "" then
+				local existingIdx = findFilterIndexByName(name)
+				if existingIdx then
+					nameFilters[existingIdx].priority = prio
+				else
+					table.insert(nameFilters, { name = name, priority = prio })
 				end
-			end
-			if not duplicate then
-				table.insert(nameFilters, name)
 			end
 		end
 	end
@@ -738,12 +945,12 @@ local function setFilterBarVisible(visible)
 	filterBarVisible = visible
 	filterBar.Visible = visible
 	if visible then
-		scroll.Size = UDim2.new(1, -16, 1, -148)
+		scroll.Size = UDim2.new(1, -16, 1, -188)
 		scroll.Position = UDim2.new(0, 8, 0, 112)
 		filtersBtn.Text = "Filters"
 		filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
 	else
-		scroll.Size = UDim2.new(1, -16, 1, -72)
+		scroll.Size = UDim2.new(1, -16, 1, -112)
 		scroll.Position = UDim2.new(0, 8, 0, 40)
 		filtersBtn.Text = "Filters ▾"
 		filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
@@ -807,11 +1014,15 @@ local function populateList(pets, totalUnfiltered)
 		nameLabel.Parent = row
 
 		local distText = pet.distance and ("%.0f studs"):format(pet.distance) or "?"
+		local prioText = ""
+		if #nameFilters > 0 then
+			prioText = ("P%s | "):format(tostring(getPetFilterPriority(pet.name)))
+		end
 		local infoLabel = Instance.new("TextLabel")
 		infoLabel.Size = UDim2.new(1, -70, 0, 16)
 		infoLabel.Position = UDim2.new(0, 8, 0, 22)
 		infoLabel.BackgroundTransparency = 1
-		infoLabel.Text = ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
+		infoLabel.Text = prioText .. ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
 			pet.rarity, pet.tier, pet.level, pet.mutation, distText
 		)
 		infoLabel.TextColor3 = Color3.fromRGB(160, 210, 170)
@@ -857,7 +1068,7 @@ local function populateList(pets, totalUnfiltered)
 	end
 end
 
-local function refreshList(rescan)
+refreshList = function(rescan)
 	if rescan == false and #lastAllPets > 0 then
 		local filtered = applyNameFilters(lastAllPets)
 		populateList(filtered, #lastAllPets)
@@ -873,6 +1084,46 @@ local function refreshList(rescan)
 		populateList({}, 0)
 		warn("[BloxMonster] Scan error:", pets)
 	end
+end
+
+local function stopAutoFarm()
+	autoFarmRunning = false
+	farmStatusLabel.Text = "Farm idle"
+	farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+end
+
+local function startAutoFarm()
+	if autoFarmRunning then
+		return
+	end
+	if #nameFilters == 0 then
+		farmStatusLabel.Text = "Add pets + priority first"
+		return
+	end
+	autoFarmRunning = true
+	farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
+	farmStatusLabel.Text = "Farm starting..."
+	if autoFarmThread then
+		task.cancel(autoFarmThread)
+	end
+	autoFarmThread = task.spawn(function()
+		while autoFarmRunning do
+			refreshList(true)
+			local targets = applyNameFilters(lastAllPets)
+			local target = pickNextFarmTarget(targets)
+			if not target then
+				farmStatusLabel.Text = "Waiting for pets..."
+				task.wait(FARM_NO_TARGET_WAIT_SEC)
+			else
+				local prio = getPetFilterPriority(target.name)
+				farmStatusLabel.Text = ("Farming P%s: %s"):format(tostring(prio), target.name)
+				teleportToPet(target.model)
+				waitUntilPetDead(target.model)
+				farmStatusLabel.Text = ("Done P%s: %s"):format(tostring(prio), target.name)
+				task.wait(0.5)
+			end
+		end
+	end)
 end
 
 local function stopAutoRefresh()
@@ -899,8 +1150,12 @@ filtersBtn.MouseButton1Click:Connect(function()
 	setFilterBarVisible(not filterBarVisible)
 end)
 
+farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
+farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
+
 closeBtn.MouseButton1Click:Connect(function()
 	stopAutoRefresh()
+	stopAutoFarm()
 	screen:Destroy()
 end)
 
