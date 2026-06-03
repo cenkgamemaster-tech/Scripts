@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.0.0"
+local VERSION = "1.1.0"
 local AUTO_REFRESH_SEC = 5
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
@@ -302,6 +302,39 @@ local function getWorldPets()
 	return found
 end
 
+-- Pet names to show (case-insensitive partial match). Empty = show all.
+local nameFilters = {}
+
+local function normalizeFilterName(text)
+	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function petMatchesFilters(petName)
+	if #nameFilters == 0 then
+		return true
+	end
+	local lowerName = tostring(petName or ""):lower()
+	for _, filterName in ipairs(nameFilters) do
+		if lowerName:find(filterName:lower(), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function applyNameFilters(pets)
+	if #nameFilters == 0 then
+		return pets
+	end
+	local out = {}
+	for _, pet in ipairs(pets) do
+		if petMatchesFilters(pet.name) then
+			table.insert(out, pet)
+		end
+	end
+	return out
+end
+
 local function makeDraggable(frame, dragHandles)
 	local dragging = false
 	local dragStart, startPos
@@ -358,8 +391,8 @@ screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 480, 0, 400)
-main.Position = UDim2.new(0, 16, 0.5, -200)
+main.Size = UDim2.new(0, 480, 0, 448)
+main.Position = UDim2.new(0, 16, 0.5, -224)
 main.AnchorPoint = Vector2.new(0, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 main.BorderSizePixel = 0
@@ -388,8 +421,24 @@ topCover.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
 topCover.BorderSizePixel = 0
 topCover.Parent = top
 
+local filtersBtn = Instance.new("TextButton")
+filtersBtn.Name = "FiltersToggle"
+filtersBtn.Size = UDim2.new(0, 52, 0, 24)
+filtersBtn.Position = UDim2.new(1, -158, 0, 4)
+filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
+filtersBtn.BorderSizePixel = 0
+filtersBtn.Text = "Filters"
+filtersBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+filtersBtn.TextSize = 11
+filtersBtn.Font = Enum.Font.Gotham
+filtersBtn.Parent = top
+
+local filtersBtnCorner = Instance.new("UICorner")
+filtersBtnCorner.CornerRadius = UDim.new(0, 4)
+filtersBtnCorner.Parent = filtersBtn
+
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -200, 0, 32)
+title.Size = UDim2.new(1, -248, 0, 32)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
 title.Text = "Blox Monsters – World Pets"
@@ -402,7 +451,7 @@ title.Parent = top
 local countLabel = Instance.new("TextLabel")
 countLabel.Name = "Count"
 countLabel.Size = UDim2.new(0, 80, 0, 32)
-countLabel.Position = UDim2.new(1, -188, 0, 0)
+countLabel.Position = UDim2.new(1, -218, 0, 0)
 countLabel.BackgroundTransparency = 1
 countLabel.Text = "0 pets"
 countLabel.TextColor3 = Color3.fromRGB(200, 230, 200)
@@ -414,7 +463,7 @@ countLabel.Parent = top
 local refreshBtn = Instance.new("TextButton")
 refreshBtn.Name = "Refresh"
 refreshBtn.Size = UDim2.new(0, 56, 0, 24)
-refreshBtn.Position = UDim2.new(1, -100, 0, 4)
+refreshBtn.Position = UDim2.new(1, -102, 0, 4)
 refreshBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 refreshBtn.BorderSizePixel = 0
 refreshBtn.Text = "Refresh"
@@ -437,10 +486,109 @@ closeBtn.TextSize = 20
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.Parent = top
 
+local filterBar = Instance.new("Frame")
+filterBar.Name = "FilterBar"
+filterBar.Size = UDim2.new(1, -16, 0, 72)
+filterBar.Position = UDim2.new(0, 8, 0, 36)
+filterBar.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
+filterBar.BorderSizePixel = 0
+filterBar.Visible = true
+filterBar.Parent = main
+
+local filterBarCorner = Instance.new("UICorner")
+filterBarCorner.CornerRadius = UDim.new(0, 6)
+filterBarCorner.Parent = filterBar
+
+local filterHint = Instance.new("TextLabel")
+filterHint.Size = UDim2.new(1, -12, 0, 14)
+filterHint.Position = UDim2.new(0, 6, 0, 4)
+filterHint.BackgroundTransparency = 1
+filterHint.Text = "Show only these pets (leave empty = show all):"
+filterHint.TextColor3 = Color3.fromRGB(150, 190, 160)
+filterHint.TextSize = 10
+filterHint.Font = Enum.Font.Gotham
+filterHint.TextXAlignment = Enum.TextXAlignment.Left
+filterHint.Parent = filterBar
+
+local filterInput = Instance.new("TextBox")
+filterInput.Name = "FilterInput"
+filterInput.Size = UDim2.new(1, -120, 0, 24)
+filterInput.Position = UDim2.new(0, 6, 0, 20)
+filterInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
+filterInput.BorderSizePixel = 0
+filterInput.ClearTextOnFocus = false
+filterInput.PlaceholderText = "e.g. Orbitfin, Phant, Pico"
+filterInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
+filterInput.Text = ""
+filterInput.TextColor3 = Color3.fromRGB(220, 255, 220)
+filterInput.TextSize = 12
+filterInput.Font = Enum.Font.Gotham
+filterInput.TextXAlignment = Enum.TextXAlignment.Left
+filterInput.Parent = filterBar
+
+local filterInputCorner = Instance.new("UICorner")
+filterInputCorner.CornerRadius = UDim.new(0, 4)
+filterInputCorner.Parent = filterInput
+
+local filterInputPad = Instance.new("UIPadding")
+filterInputPad.PaddingLeft = UDim.new(0, 6)
+filterInputPad.Parent = filterInput
+
+local filterAddBtn = Instance.new("TextButton")
+filterAddBtn.Name = "FilterAdd"
+filterAddBtn.Size = UDim2.new(0, 44, 0, 24)
+filterAddBtn.Position = UDim2.new(1, -98, 0, 20)
+filterAddBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+filterAddBtn.BorderSizePixel = 0
+filterAddBtn.Text = "Add"
+filterAddBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+filterAddBtn.TextSize = 11
+filterAddBtn.Font = Enum.Font.GothamBold
+filterAddBtn.Parent = filterBar
+
+local filterAddCorner = Instance.new("UICorner")
+filterAddCorner.CornerRadius = UDim.new(0, 4)
+filterAddCorner.Parent = filterAddBtn
+
+local filterClearBtn = Instance.new("TextButton")
+filterClearBtn.Name = "FilterClear"
+filterClearBtn.Size = UDim2.new(0, 44, 0, 24)
+filterClearBtn.Position = UDim2.new(1, -50, 0, 20)
+filterClearBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 45)
+filterClearBtn.BorderSizePixel = 0
+filterClearBtn.Text = "Clear"
+filterClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+filterClearBtn.TextSize = 11
+filterClearBtn.Font = Enum.Font.Gotham
+filterClearBtn.Parent = filterBar
+
+local filterClearCorner = Instance.new("UICorner")
+filterClearCorner.CornerRadius = UDim.new(0, 4)
+filterClearCorner.Parent = filterClearBtn
+
+local filterChipScroll = Instance.new("ScrollingFrame")
+filterChipScroll.Name = "FilterChips"
+filterChipScroll.Size = UDim2.new(1, -12, 0, 22)
+filterChipScroll.Position = UDim2.new(0, 6, 0, 48)
+filterChipScroll.BackgroundTransparency = 1
+filterChipScroll.BorderSizePixel = 0
+filterChipScroll.ScrollBarThickness = 4
+filterChipScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
+filterChipScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+filterChipScroll.AutomaticCanvasSize = Enum.AutomaticSize.X
+filterChipScroll.ScrollingDirection = Enum.ScrollingDirection.X
+filterChipScroll.Parent = filterBar
+
+local filterChipLayout = Instance.new("UIListLayout")
+filterChipLayout.FillDirection = Enum.FillDirection.Horizontal
+filterChipLayout.Padding = UDim.new(0, 4)
+filterChipLayout.SortOrder = Enum.SortOrder.LayoutOrder
+filterChipLayout.Parent = filterChipScroll
+
 local scroll = Instance.new("ScrollingFrame")
 scroll.Name = "List"
-scroll.Size = UDim2.new(1, -16, 1, -72)
-scroll.Position = UDim2.new(0, 8, 0, 40)
+scroll.Size = UDim2.new(1, -16, 1, -148)
+scroll.Position = UDim2.new(0, 8, 0, 112)
 scroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 8
@@ -496,21 +644,136 @@ makeDraggable(main, { top, title, main })
 
 local autoRefreshRunning = false
 local autoRefreshThread = nil
+local lastAllPets = {}
+local filterBarVisible = true
 
-local function populateList(pets)
+local function rebuildFilterChips()
+	for _, child in ipairs(filterChipScroll:GetChildren()) do
+		if child ~= filterChipLayout then
+			child:Destroy()
+		end
+	end
+	for i, filterName in ipairs(nameFilters) do
+		local chip = Instance.new("Frame")
+		chip.Size = UDim2.new(0, 0, 0, 20)
+		chip.AutomaticSize = Enum.AutomaticSize.X
+		chip.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
+		chip.LayoutOrder = i
+		chip.Parent = filterChipScroll
+
+		local chipCorner = Instance.new("UICorner")
+		chipCorner.CornerRadius = UDim.new(0, 4)
+		chipCorner.Parent = chip
+
+		local chipPad = Instance.new("UIPadding")
+		chipPad.PaddingLeft = UDim.new(0, 6)
+		chipPad.PaddingRight = UDim.new(0, 4)
+		chipPad.Parent = chip
+
+		local chipLayout = Instance.new("UIListLayout")
+		chipLayout.FillDirection = Enum.FillDirection.Horizontal
+		chipLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		chipLayout.Padding = UDim.new(0, 4)
+		chipLayout.Parent = chip
+
+		local chipLabel = Instance.new("TextLabel")
+		chipLabel.BackgroundTransparency = 1
+		chipLabel.AutomaticSize = Enum.AutomaticSize.X
+		chipLabel.Size = UDim2.new(0, 0, 0, 20)
+		chipLabel.Text = filterName
+		chipLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+		chipLabel.TextSize = 11
+		chipLabel.Font = Enum.Font.Gotham
+		chipLabel.Parent = chip
+
+		local removeBtn = Instance.new("TextButton")
+		removeBtn.Size = UDim2.new(0, 16, 0, 16)
+		removeBtn.BackgroundTransparency = 1
+		removeBtn.Text = "×"
+		removeBtn.TextColor3 = Color3.fromRGB(255, 180, 180)
+		removeBtn.TextSize = 14
+		removeBtn.Font = Enum.Font.GothamBold
+		removeBtn.Parent = chip
+
+		local capturedName = filterName
+		removeBtn.MouseButton1Click:Connect(function()
+			for idx, n in ipairs(nameFilters) do
+				if n == capturedName then
+					table.remove(nameFilters, idx)
+					break
+				end
+			end
+		rebuildFilterChips()
+		refreshList(false)
+		end)
+	end
+end
+
+local function addFilterFromInput()
+	local raw = filterInput.Text
+	filterInput.Text = ""
+	if raw == "" then
+		return
+	end
+	for part in string.gmatch(raw, "[^,]+") do
+		local name = normalizeFilterName(part)
+		if name ~= "" then
+			local duplicate = false
+			for _, existing in ipairs(nameFilters) do
+				if existing:lower() == name:lower() then
+					duplicate = true
+					break
+				end
+			end
+			if not duplicate then
+				table.insert(nameFilters, name)
+			end
+		end
+	end
+	rebuildFilterChips()
+	refreshList(false)
+end
+
+local function setFilterBarVisible(visible)
+	filterBarVisible = visible
+	filterBar.Visible = visible
+	if visible then
+		scroll.Size = UDim2.new(1, -16, 1, -148)
+		scroll.Position = UDim2.new(0, 8, 0, 112)
+		filtersBtn.Text = "Filters"
+		filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
+	else
+		scroll.Size = UDim2.new(1, -16, 1, -72)
+		scroll.Position = UDim2.new(0, 8, 0, 40)
+		filtersBtn.Text = "Filters ▾"
+		filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
+	end
+end
+
+local function populateList(pets, totalUnfiltered)
 	for _, child in ipairs(scroll:GetChildren()) do
 		if child ~= listLayout and not child:IsA("UICorner") then
 			child:Destroy()
 		end
 	end
 
-	countLabel.Text = tostring(#pets) .. " pet" .. (#pets == 1 and "" or "s")
+	local countText = tostring(#pets) .. " pet" .. (#pets == 1 and "" or "s")
+	if #nameFilters > 0 and totalUnfiltered then
+		countText = countText .. " / " .. tostring(totalUnfiltered)
+	end
+	countLabel.Text = countText
 
 	if #pets == 0 then
 		local empty = Instance.new("TextLabel")
 		empty.Size = UDim2.new(1, -8, 0, 40)
 		empty.BackgroundTransparency = 1
-		empty.Text = "No wild pets found. Walk around an adventure zone and tap Refresh."
+		local emptyMsg = "No wild pets found. Walk around an adventure zone and tap Refresh."
+		if #nameFilters > 0 and totalUnfiltered and totalUnfiltered > 0 then
+			emptyMsg = "No pets match your filters. Try different names or tap Clear."
+		elseif #nameFilters > 0 then
+			emptyMsg = "No pets match your filters yet. Add names like Orbitfin, Phant, Pico."
+		end
+		empty.Text = emptyMsg
 		empty.TextColor3 = Color3.fromRGB(180, 200, 180)
 		empty.TextSize = 12
 		empty.Font = Enum.Font.Gotham
@@ -594,12 +857,20 @@ local function populateList(pets)
 	end
 end
 
-local function refreshList()
+local function refreshList(rescan)
+	if rescan == false and #lastAllPets > 0 then
+		local filtered = applyNameFilters(lastAllPets)
+		populateList(filtered, #lastAllPets)
+		return
+	end
 	local ok, pets = pcall(getWorldPets)
 	if ok then
-		populateList(pets)
+		lastAllPets = pets
+		local filtered = applyNameFilters(pets)
+		populateList(filtered, #pets)
 	else
-		populateList({})
+		lastAllPets = {}
+		populateList({}, 0)
 		warn("[BloxMonster] Scan error:", pets)
 	end
 end
@@ -611,6 +882,22 @@ local function stopAutoRefresh()
 end
 
 refreshBtn.MouseButton1Click:Connect(refreshList)
+
+filterAddBtn.MouseButton1Click:Connect(addFilterFromInput)
+filterInput.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		addFilterFromInput()
+	end
+end)
+filterClearBtn.MouseButton1Click:Connect(function()
+	table.clear(nameFilters)
+	filterInput.Text = ""
+	rebuildFilterChips()
+	refreshList(false)
+end)
+filtersBtn.MouseButton1Click:Connect(function()
+	setFilterBarVisible(not filterBarVisible)
+end)
 
 closeBtn.MouseButton1Click:Connect(function()
 	stopAutoRefresh()
