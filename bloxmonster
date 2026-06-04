@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.17"
+local VERSION = "1.7.18"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -21,8 +21,13 @@ local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
 local WORLD_TELEPORT_SETTLE_SEC = 3
-local WORLD_CYCLE_BONUS_SEC = 60
+local WORLD_CYCLE_BONUS_P3_SEC = 60
+local WORLD_CYCLE_BONUS_PRIORITY_SEC = 60
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
+
+local function nowSeconds()
+	return time()
+end
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
 local WORLD_ZONES = {
@@ -394,7 +399,7 @@ local function getCachedWorldPets(scanMode)
 			return refreshCachedPetsLight()
 		end
 	end
-	local now = os.clock()
+	local now = nowSeconds()
 	if scanMode ~= "full" and #lastAllPets > 0 and (now - lastScanClock) < SCAN_CACHE_SEC then
 		return refreshCachedPetsLight()
 	end
@@ -2872,7 +2877,30 @@ local function pickBonusPhaseTarget(pets, lastBonusPriority)
 	return pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
 end
 
-local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
+local function pickHighPriorityTarget(pets, lastSkipPriority)
+	local highFilters = collectHighPriorityFarmFilters()
+	if #highFilters == 0 then
+		return nil
+	end
+	local targets = applyNameFilters(pets, highFilters)
+	return pickNextFarmTarget(targets, lastSkipPriority or 0, highFilters)
+end
+
+local function pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
+	if nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
+		return pickBonusPhaseTarget(pets, lastBonusPriority)
+	end
+	return pickHighPriorityTarget(pets, 0)
+end
+
+local function getBonusPhaseLabel(bonusStart)
+	if nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
+		return "P3+"
+	end
+	return "Priority"
+end
+
+local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId, bonusStart)
 	if not shouldFarmContinue(runId) then
 		return nil, nil, {}
 	end
@@ -2881,7 +2909,7 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
 		return nil, nil, pets
 	end
 	applyListsFromPets(pets, nil, nil)
-	local target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
+	local target, targetP = pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
 	if target then
 		return target, targetP, pets
 	end
@@ -2898,12 +2926,12 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
 		end
 		selectedWorldId = world.id
 		highlightWorldButtons()
-		pets = getCachedWorldPets("auto")
+		pets = getCachedWorldPets("full")
 		if not shouldFarmContinue(runId) then
 			break
 		end
 		applyListsFromPets(pets, world, worldPetFilters[world.id] or {})
-		target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
+		target, targetP = pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
 		if target then
 			return target, targetP, pets
 		end
@@ -2914,44 +2942,49 @@ end
 
 local function runPostCycleBonusFarm(runId)
 	local bonusFilters = collectBonusFarmFilters()
-	if #bonusFilters == 0 then
-		setFarmStatus("Cycle bonus: no P3+ pets configured – skipping")
+	local highFilters = collectHighPriorityFarmFilters()
+	if #bonusFilters == 0 and #highFilters == 0 then
+		setFarmStatus("Cycle bonus: no bonus pets configured – skipping")
 		return
 	end
 
-	local endTime = os.clock() + WORLD_CYCLE_BONUS_SEC
+	local bonusStart = nowSeconds()
+	local bonusEnd = bonusStart + WORLD_CYCLE_BONUS_P3_SEC + WORLD_CYCLE_BONUS_PRIORITY_SEC
 	local lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
 	local worldsToCheck = getWorldsWithFarmFilters()
 	if #worldsToCheck == 0 then
 		worldsToCheck = getWorldsWithBonusFilters()
 	end
 
-	while shouldFarmContinue(runId) and os.clock() < endTime do
-		local timeLeft = math.ceil(endTime - os.clock())
-		setFarmStatus(("Cycle bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
+	while shouldFarmContinue(runId) and nowSeconds() < bonusEnd do
+		local timeLeft = math.ceil(bonusEnd - nowSeconds())
+		local phaseLabel = getBonusPhaseLabel(bonusStart)
+		setFarmStatus(("Cycle bonus %s (%s left) – scanning..."):format(phaseLabel, formatBonusTimeLeft(timeLeft)))
 
 		local target, targetP
-		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
+		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck, runId, bonusStart)
 
 		if not shouldFarmContinue(runId) then
 			break
 		end
 
 		if not target then
-			timeLeft = math.ceil(endTime - os.clock())
-			setFarmStatus(("Cycle bonus P3+ (%s left) – no targets, retrying..."):format(formatBonusTimeLeft(timeLeft)))
+			timeLeft = math.ceil(bonusEnd - nowSeconds())
+			setFarmStatus(("Cycle bonus %s (%s left) – no targets, retrying..."):format(phaseLabel, formatBonusTimeLeft(timeLeft)))
 			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
 				break
 			end
 		else
+			local inP3Phase = nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC
 			local prio = targetP or getPetFilterPriority(target.name, collectAllFarmFilters())
 			local waitComplete = false
 
-			while shouldFarmContinue(runId) and os.clock() < endTime and not waitComplete do
-				timeLeft = math.ceil(endTime - os.clock())
-				local phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
+			while shouldFarmContinue(runId) and nowSeconds() < bonusEnd and not waitComplete do
+				timeLeft = math.ceil(bonusEnd - nowSeconds())
+				phaseLabel = getBonusPhaseLabel(bonusStart)
+				local roleLabel = (inP3Phase and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY) and "Bonus" or "Priority"
 				setFarmStatus(("%s P%s: %s (%s left)"):format(
-					phaseLabel,
+					roleLabel,
 					tostring(prio),
 					target.name,
 					formatBonusTimeLeft(timeLeft)
@@ -2960,22 +2993,26 @@ local function runPostCycleBonusFarm(runId)
 				tickFarmLists(runId, nil, nil, "auto")
 
 				local waitResult = farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
-					timeLeft = math.ceil(endTime - os.clock())
-					local phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
+					timeLeft = math.ceil(bonusEnd - nowSeconds())
+					phaseLabel = getBonusPhaseLabel(bonusStart)
+					roleLabel = (nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY) and "Bonus" or "Priority"
 					setFarmStatus(("%s P%s: %s – %ds (%s left)"):format(
-						phaseLabel,
+						roleLabel,
 						tostring(prio),
 						target.name,
 						sec,
 						formatBonusTimeLeft(timeLeft)
 					))
 				end, nil, nil, function()
-					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("light"), prio)
+					if nowSeconds() >= bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
+						return false
+					end
+					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("auto"), prio)
 					if better then
 						target = better
 						targetP = betterP
 						prio = betterP
-						timeLeft = math.ceil(endTime - os.clock())
+						timeLeft = math.ceil(bonusEnd - nowSeconds())
 						setFarmStatus(("Switching to P%s: %s (%s left)"):format(
 							tostring(prio),
 							target.name,
@@ -2985,7 +3022,7 @@ local function runPostCycleBonusFarm(runId)
 					end
 					return false
 				end, function()
-					return shouldFarmContinue(runId) and os.clock() < endTime
+					return shouldFarmContinue(runId) and nowSeconds() < bonusEnd
 				end)
 
 				if waitResult == "interrupt" then
@@ -3002,7 +3039,7 @@ local function runPostCycleBonusFarm(runId)
 				break
 			end
 
-			if prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
+			if inP3Phase and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
 				lastBonusPriority = prio
 			else
 				lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
