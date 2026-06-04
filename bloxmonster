@@ -13,34 +13,34 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.6.0"
+local VERSION = "1.6.2"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
-local WORLD_TELEPORT_SETTLE_SEC = 2
+local WORLD_TELEPORT_SETTLE_SEC = 3
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
 local WORLD_ZONES = {
 	{
 		id = "misty_forest",
 		name = "Misty Forest",
-		keywords = { "misty", "forest" },
+		keywords = { "misty", "forest", "mistyforest" },
 	},
 	{
 		id = "lava_volcano",
 		name = "Lava Volcano",
-		keywords = { "lava", "volcano" },
+		keywords = { "lava", "volcano", "lavavolcano" },
 	},
 	{
 		id = "iceberg",
 		name = "Iceberg",
-		keywords = { "iceberg", "ice" },
+		keywords = { "iceberg" },
 	},
 	{
 		id = "astral_grove",
 		name = "Astral Grove",
-		keywords = { "astral", "grove" },
+		keywords = { "astral", "grove", "astralgrove" },
 	},
 }
 
@@ -346,6 +346,17 @@ local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
 local worldHuntThread = nil
 local activeTab = "pets"
+
+local function anyWorldPetsConfigured()
+	for _, world in ipairs(WORLD_ZONES) do
+		local filters = worldPetFilters[world.id]
+		if filters and #filters > 0 then
+			return true
+		end
+	end
+	return false
+end
+
 local scanWorldPets
 
 local function normalizeFilterName(text)
@@ -504,12 +515,63 @@ local function pickNextFarmTarget(pets, skipBelowPriority, filters)
 	return best, bestP
 end
 
+local function compactName(text)
+	return tostring(text or ""):lower():gsub("[%s_%-]", "")
+end
+
+local function instanceWorldScore(inst, worldConfig)
+	if not inst or not worldConfig then
+		return 0
+	end
+	local nameLower = inst.Name:lower()
+	local nameCompact = compactName(inst.Name)
+	local fullLower = ""
+	local fullCompact = ""
+	pcall(function()
+		fullLower = inst:GetFullName():lower()
+		fullCompact = compactName(fullLower)
+	end)
+
+	local worldCompact = compactName(worldConfig.name)
+	local worldIdCompact = compactName(worldConfig.id)
+	local score = 0
+
+	for _, kw in ipairs(worldConfig.keywords) do
+		local k = kw:lower()
+		local kCompact = compactName(k)
+		if nameLower == k or nameCompact == kCompact then
+			score = score + 3
+		elseif nameLower:find(k, 1, true) or fullLower:find(k, 1, true)
+			or nameCompact:find(kCompact, 1, true) or fullCompact:find(kCompact, 1, true) then
+			score = score + 1
+		end
+	end
+	if worldCompact ~= "" then
+		if nameCompact == worldCompact or fullCompact:find("." .. worldCompact, 1, true) then
+			score = score + 4
+		elseif nameCompact:find(worldCompact, 1, true) or fullCompact:find(worldCompact, 1, true) then
+			score = score + 2
+		end
+	end
+	if worldIdCompact ~= "" and (nameCompact:find(worldIdCompact, 1, true) or fullCompact:find(worldIdCompact, 1, true)) then
+		score = score + 1
+	end
+	return score
+end
+
 local function pathMatchesWorld(path, worldConfig)
 	local lower = tostring(path or ""):lower()
+	local compact = compactName(path)
 	for _, kw in ipairs(worldConfig.keywords) do
-		if lower:find(kw:lower(), 1, true) then
+		local k = kw:lower()
+		local kCompact = compactName(k)
+		if lower:find(k, 1, true) or compact:find(kCompact, 1, true) then
 			return true
 		end
+	end
+	local worldCompact = compactName(worldConfig.name)
+	if worldCompact ~= "" and compact:find(worldCompact, 1, true) then
+		return true
 	end
 	return false
 end
@@ -523,6 +585,14 @@ local function getPetsInWorld(worldConfig)
 		end
 	end
 	return out
+end
+
+local function getWorldHuntTargets(worldConfig, filters)
+	local inWorld = applyNameFilters(getPetsInWorld(worldConfig), filters)
+	if #inWorld > 0 then
+		return inWorld
+	end
+	return applyNameFilters(scanWorldPets(), filters)
 end
 
 local function getInstancePosition(inst)
@@ -544,25 +614,207 @@ local function getInstancePosition(inst)
 	return nil
 end
 
-local function findWorldTeleportPosition(worldConfig)
-	local bestPos, bestScore = nil, 0
-	for _, inst in ipairs(Workspace:GetDescendants()) do
-		local nameLower = inst.Name:lower()
-		local fullLower = ""
-		pcall(function() fullLower = inst:GetFullName():lower() end)
+local WORLD_REMOTE_KEYWORDS = {
+	"teleport", "travel", "zone", "world", "warp", "portal", "area", "map", "adventure", "visit", "enter",
+}
+local cachedWorldRemotes = nil
 
-		local score = 0
-		for _, kw in ipairs(worldConfig.keywords) do
-			local k = kw:lower()
-			if nameLower:find(k, 1, true) or fullLower:find(k, 1, true) then
-				score = score + 1
+local function getWorldRemotes()
+	if cachedWorldRemotes then
+		return cachedWorldRemotes
+	end
+	cachedWorldRemotes = {}
+	for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
+		if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+			local n = inst.Name:lower()
+			for _, kw in ipairs(WORLD_REMOTE_KEYWORDS) do
+				if n:find(kw, 1, true) then
+					table.insert(cachedWorldRemotes, inst)
+					break
+				end
 			end
 		end
+	end
+	if #cachedWorldRemotes > 0 then
+		print(("[BloxMonster] Found %d world-related remote(s)"):format(#cachedWorldRemotes))
+		for _, remote in ipairs(cachedWorldRemotes) do
+			print("  ", remote:GetFullName())
+		end
+	end
+	return cachedWorldRemotes
+end
+
+local function fireRemote(remote, ...)
+	local args = { ... }
+	if remote:IsA("RemoteEvent") then
+		remote:FireServer(table.unpack(args))
+	else
+		remote:InvokeServer(table.unpack(args))
+	end
+end
+
+local function tryFireWorldRemotes(worldConfig)
+	local remotes = getWorldRemotes()
+	if #remotes == 0 then
+		return false
+	end
+	local argSets = {
+		{ worldConfig.name },
+		{ worldConfig.id },
+		{ compactName(worldConfig.name) },
+		{ worldConfig.name, true },
+		{ worldConfig.id, true },
+	}
+	for _, remote in ipairs(remotes) do
+		for _, args in ipairs(argSets) do
+			local ok = pcall(function()
+				fireRemote(remote, table.unpack(args))
+			end)
+			if ok then
+				print(("[BloxMonster] World remote %s(%s)"):format(remote.Name, table.concat(args, ", ")))
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function tryWorldProximityPrompts(worldConfig)
+	for _, prompt in ipairs(Workspace:GetDescendants()) do
+		if prompt:IsA("ProximityPrompt") then
+			local current = prompt
+			for _ = 1, 10 do
+				if not current then
+					break
+				end
+				if instanceWorldScore(current, worldConfig) >= 2 then
+					local ok = pcall(function()
+						if typeof(fireproximityprompt) == "function" then
+							fireproximityprompt(prompt, prompt.HoldDuration or 0)
+						else
+							prompt:InputHoldBegin()
+							task.wait(prompt.HoldDuration > 0 and prompt.HoldDuration or 0.5)
+							prompt:InputHoldEnd()
+						end
+					end)
+					if ok then
+						print(("[BloxMonster] Fired portal prompt at %s"):format(prompt:GetFullName()))
+						return true
+					end
+				end
+				current = current.Parent
+			end
+		end
+	end
+	return false
+end
+
+local function findWorldZoneFolder(worldConfig)
+	local bestFolder, bestScore = nil, 0
+	local zoneRoots = {}
+
+	local map = Workspace:FindFirstChild("Map")
+	if map then
+		table.insert(zoneRoots, map)
+		for _, name in ipairs({ "Zones", "Worlds", "Areas", "Locations", "Adventures", "Regions" }) do
+			local node = map:FindFirstChild(name)
+			if node then
+				table.insert(zoneRoots, node)
+			end
+		end
+	end
+	for _, name in ipairs({ "Zones", "Worlds", "Areas", "Locations" }) do
+		local node = Workspace:FindFirstChild(name)
+		if node then
+			table.insert(zoneRoots, node)
+		end
+	end
+
+	local seen = {}
+	for _, root in ipairs(zoneRoots) do
+		if root and not seen[root] then
+			seen[root] = true
+			for _, child in ipairs(root:GetChildren()) do
+				local score = instanceWorldScore(child, worldConfig)
+				if score > bestScore then
+					bestScore = score
+					bestFolder = child
+				end
+			end
+		end
+	end
+
+	if bestScore >= 2 then
+		return bestFolder
+	end
+
+	for _, inst in ipairs(Workspace:GetDescendants()) do
+		if inst:IsA("Folder") or inst:IsA("Model") then
+			local score = instanceWorldScore(inst, worldConfig)
+			if score >= 4 and score > bestScore then
+				bestScore = score
+				bestFolder = inst
+			end
+		end
+	end
+	return bestFolder
+end
+
+local function getFolderCenterPosition(folder)
+	if not folder then
+		return nil
+	end
+
+	for _, desc in ipairs(folder:GetDescendants()) do
+		if desc:IsA("SpawnLocation") then
+			return desc.Position
+		end
+		local n = desc.Name:lower()
+		if (n:find("spawn", 1, true) or n:find("center", 1, true) or n == "origin") and desc:IsA("BasePart") then
+			return desc.Position
+		end
+	end
+
+	local sum = Vector3.zero
+	local count = 0
+	for _, desc in ipairs(folder:GetDescendants()) do
+		if desc:IsA("BasePart") then
+			sum = sum + desc.Position
+			count = count + 1
+		end
+	end
+	if count > 0 then
+		return sum / count
+	end
+	return getInstancePosition(folder)
+end
+
+local function findWorldTeleportPosition(worldConfig)
+	local bestPos, bestScore = nil, 0
+	local roots = { Workspace }
+	pcall(function()
+		local map = Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("World") or Workspace:FindFirstChild("Zones")
+		if map then
+			table.insert(roots, map)
+		end
+	end)
+
+	local seen = {}
+	local function consider(inst)
+		if seen[inst] then
+			return
+		end
+		seen[inst] = true
+
+		local score = instanceWorldScore(inst, worldConfig)
 		if score > 0 then
+			local nameLower = inst.Name:lower()
 			if inst:IsA("SpawnLocation") then
 				score = score + 4
 			elseif nameLower:find("spawn", 1, true) or nameLower:find("teleport", 1, true) or nameLower:find("portal", 1, true) then
 				score = score + 3
+			elseif nameLower:find("zone", 1, true) or nameLower:find("area", 1, true) or nameLower:find("region", 1, true) then
+				score = score + 2
 			elseif inst:IsA("BasePart") then
 				score = score + 2
 			elseif inst:IsA("Model") then
@@ -575,10 +827,19 @@ local function findWorldTeleportPosition(worldConfig)
 			end
 		end
 	end
-	return bestPos
+
+	for _, root in ipairs(roots) do
+		if root:IsA("Instance") then
+			consider(root)
+			for _, inst in ipairs(root:GetDescendants()) do
+				consider(inst)
+			end
+		end
+	end
+	return bestPos, bestScore
 end
 
-local function teleportPlayerToPosition(pos)
+local function robustTeleportToPosition(pos)
 	local char = LocalPlayer.Character
 	if not char or not pos then
 		return false
@@ -587,16 +848,66 @@ local function teleportPlayerToPosition(pos)
 	if not root then
 		return false
 	end
-	root.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))
+
+	local target = CFrame.new(pos + Vector3.new(0, 5, 0))
+	pcall(function()
+		char:PivotTo(target)
+	end)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.CFrame = target
+
+	for _ = 1, 5 do
+		task.wait(0.08)
+		if not root.Parent then
+			return false
+		end
+		root.CFrame = target
+	end
 	return true
 end
 
+local function teleportPlayerToPosition(pos)
+	return robustTeleportToPosition(pos)
+end
+
 local function teleportToWorld(worldConfig)
-	local pos = findWorldTeleportPosition(worldConfig)
-	if pos then
-		return teleportPlayerToPosition(pos)
+	local filters = worldPetFilters[worldConfig.id]
+
+	if tryFireWorldRemotes(worldConfig) then
+		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		return true, "remote"
 	end
-	return false
+
+	if tryWorldProximityPrompts(worldConfig) then
+		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		return true, "portal"
+	end
+
+	local zoneFolder = findWorldZoneFolder(worldConfig)
+	if zoneFolder then
+		local pos = getFolderCenterPosition(zoneFolder)
+		if pos and robustTeleportToPosition(pos) then
+			print(("[BloxMonster] Teleported to zone %s"):format(zoneFolder:GetFullName()))
+			return true, "zone"
+		end
+	end
+
+	local pos, score = findWorldTeleportPosition(worldConfig)
+	if pos and score >= 2 and robustTeleportToPosition(pos) then
+		return true, "part"
+	end
+
+	if filters and #filters > 0 then
+		local targets = getWorldHuntTargets(worldConfig, filters)
+		if #targets > 0 and targets[1].model then
+			teleportToPet(targets[1].model)
+			print(("[BloxMonster] Teleported to pet %s (world travel fallback)"):format(targets[1].name))
+			return true, "pet"
+		end
+	end
+
+	return false, nil
 end
 
 scanWorldPets = function()
@@ -648,7 +959,13 @@ local function teleportToPet(model)
 	if not root or not pos then
 		return
 	end
-	root.CFrame = CFrame.new(pos + Vector3.new(0, 0, 6))
+	local target = CFrame.new(pos + Vector3.new(0, 0, 6))
+	pcall(function()
+		char:PivotTo(target)
+	end)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.CFrame = target
 end
 
 -- Remove existing UI
@@ -1690,9 +2007,13 @@ local function selectWorld(worldId, teleport)
 		local world = getWorldConfigById(worldId)
 		if world then
 			worldHuntStatusLabel.Text = "Teleporting to " .. world.name .. "..."
-			local ok = teleportToWorld(world)
-			worldHuntStatusLabel.Text = ok and ("At " .. world.name) or ("Could not find " .. world.name .. " spawn")
-			task.wait(WORLD_TELEPORT_SETTLE_SEC)
+			local ok, method = teleportToWorld(world)
+			worldHuntStatusLabel.Text = ok
+				and ("At " .. world.name .. " (" .. tostring(method) .. ")")
+				or ("Could not travel to " .. world.name)
+			if ok then
+				task.wait(WORLD_TELEPORT_SETTLE_SEC)
+			end
 		end
 	end
 	refreshWorldList(true)
@@ -1718,90 +2039,137 @@ local function setActiveTab(tabName)
 	end
 end
 
-local function stopWorldHunt()
-	worldHuntRunning = false
-	worldHuntStatusLabel.Text = "World hunt idle"
-	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+local function setFarmStatus(text)
+	farmStatusLabel.Text = text
+	worldHuntStatusLabel.Text = text
 end
 
-local function startWorldHunt()
-	if worldHuntRunning then
-		return
+local function isAnyFarmRunning()
+	return autoFarmRunning or worldHuntRunning
+end
+
+local function stopAllFarm()
+	autoFarmRunning = false
+	worldHuntRunning = false
+	farmStatusLabel.Text = "Farm idle"
+	worldHuntStatusLabel.Text = "World hunt idle"
+	farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+	if autoFarmThread then
+		task.cancel(autoFarmThread)
+		autoFarmThread = nil
 	end
+	if worldHuntThread and worldHuntThread ~= autoFarmThread then
+		task.cancel(worldHuntThread)
+	end
+	worldHuntThread = nil
+end
+
+local function stopWorldHunt()
+	stopAllFarm()
+end
+
+local function runWorldFarmLoop()
+	while autoFarmRunning do
+		for _, world in ipairs(WORLD_ZONES) do
+			if not autoFarmRunning then
+				break
+			end
+			local filters = worldPetFilters[world.id]
+			if filters and #filters > 0 then
+				selectedWorldId = world.id
+				highlightWorldButtons()
+				rebuildWorldFilterChips()
+
+				setFarmStatus("Going to " .. world.name .. "...")
+				local tpOk, tpMethod = teleportToWorld(world)
+				if not tpOk then
+					setFarmStatus("No travel to " .. world.name .. ", trying pets anyway...")
+					task.wait(FARM_NO_TARGET_WAIT_SEC)
+				else
+					setFarmStatus(("At %s (%s)"):format(world.name, tostring(tpMethod)))
+					task.wait(WORLD_TELEPORT_SETTLE_SEC)
+					scanWorldPets()
+				end
+
+				local lastWorldPriority = 0
+				while autoFarmRunning do
+					local targets = getWorldHuntTargets(world, filters)
+					if activeTab == "worlds" then
+						populateWorldList(targets, #targets)
+					end
+
+					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
+					if not target then
+						break
+					end
+
+					local prio = targetP or getPetFilterPriority(target.name, filters)
+					setFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
+					teleportToPet(target.model)
+
+					for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
+						if not autoFarmRunning then
+							break
+						end
+						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
+						task.wait(1)
+					end
+
+					lastWorldPriority = prio
+					scanWorldPets()
+				end
+			end
+		end
+		if autoFarmRunning then
+			setFarmStatus("World cycle complete – restarting...")
+			task.wait(FARM_NO_TARGET_WAIT_SEC)
+		end
+	end
+end
+
+local function startWorldFarm()
+	if isAnyFarmRunning() then
+		return false
+	end
+	if not anyWorldPetsConfigured() then
+		setFarmStatus("Configure pets on Worlds tab first")
+		return false
+	end
+	autoFarmRunning = true
 	worldHuntRunning = true
+	farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
 	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
-	worldHuntStatusLabel.Text = "World hunt starting..."
+	setFarmStatus("World farm starting...")
+	if autoFarmThread then
+		task.cancel(autoFarmThread)
+	end
 	if worldHuntThread then
 		task.cancel(worldHuntThread)
 	end
-	worldHuntThread = task.spawn(function()
-		while worldHuntRunning do
-			for _, world in ipairs(WORLD_ZONES) do
-				if not worldHuntRunning then
-					break
-				end
-				local filters = worldPetFilters[world.id]
-				if filters and #filters > 0 then
-					selectedWorldId = world.id
-					highlightWorldButtons()
-					rebuildWorldFilterChips()
+	autoFarmThread = task.spawn(runWorldFarmLoop)
+	worldHuntThread = autoFarmThread
+	return true
+end
 
-					worldHuntStatusLabel.Text = "Going to " .. world.name .. "..."
-					local tpOk = teleportToWorld(world)
-					if not tpOk then
-						worldHuntStatusLabel.Text = "No spawn for " .. world.name .. ", skipping..."
-						task.wait(FARM_NO_TARGET_WAIT_SEC)
-					else
-						task.wait(WORLD_TELEPORT_SETTLE_SEC)
-					end
-
-					local lastWorldPriority = 0
-					while worldHuntRunning do
-						local pets = getPetsInWorld(world)
-						refreshWorldList(false, world)
-
-						local targets = applyNameFilters(pets, filters)
-						local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
-						if not target then
-							break
-						end
-
-						local prio = targetP or getPetFilterPriority(target.name, filters)
-						worldHuntStatusLabel.Text = ("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name)
-						teleportToPet(target.model)
-
-						for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
-							if not worldHuntRunning then
-								break
-							end
-							worldHuntStatusLabel.Text = ("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec)
-							task.wait(1)
-						end
-
-						lastWorldPriority = prio
-					end
-				end
-			end
-			if worldHuntRunning then
-				worldHuntStatusLabel.Text = "Cycle complete – restarting..."
-				task.wait(FARM_NO_TARGET_WAIT_SEC)
-			end
-		end
-	end)
+local function startWorldHunt()
+	startWorldFarm()
 end
 
 local function stopAutoFarm()
-	autoFarmRunning = false
-	farmStatusLabel.Text = "Farm idle"
-	farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+	stopAllFarm()
 end
 
 local function startAutoFarm()
-	if autoFarmRunning then
+	if isAnyFarmRunning() then
 		return
 	end
 	if #nameFilters == 0 then
-		farmStatusLabel.Text = "Add pets first (e.g. Orbitfin@1)"
+		if anyWorldPetsConfigured() then
+			startWorldFarm()
+		else
+			farmStatusLabel.Text = "Add pets on Pets tab or Worlds tab"
+		end
 		return
 	end
 	autoFarmRunning = true
@@ -1923,8 +2291,7 @@ farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
 closeBtn.MouseButton1Click:Connect(function()
 	stopAutoRefresh()
-	stopAutoFarm()
-	stopWorldHunt()
+	stopAllFarm()
 	screen:Destroy()
 end)
 
@@ -1955,3 +2322,4 @@ rebuildWorldFilterChips()
 refreshList()
 
 print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
+task.defer(getWorldRemotes)
