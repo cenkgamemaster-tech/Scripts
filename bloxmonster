@@ -47,10 +47,10 @@ local WORLD_ZONES = {
 -- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
 -- Session Save overrides these until you re-run the script.
 local WORLD_SPAWN_LOCATIONS = {
-	-- misty_forest = { x = 0.0, y = 0.0, z = 0.0 },
-	-- lava_volcano = { x = 0.0, y = 0.0, z = 0.0 },
-	-- iceberg = { x = 0.0, y = 0.0, z = 0.0 },
-	-- astral_grove = { x = 0.0, y = 0.0, z = 0.0 },
+	misty_forest = { x = -195.687, y = 38.874, z = 453.118 },
+	lava_volcano = { x = 1213.983, y = 20.386, z = 1672.345 },
+	iceberg = { x = 1595.256, y = 7.501, z = 238.040 },
+	astral_grove = { x = 903.178, y = 5.082, z = -847.432 },
 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
