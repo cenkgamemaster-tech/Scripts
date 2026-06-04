@@ -13,12 +13,13 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.5"
+local VERSION = "1.7.6"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
 local WORLD_TELEPORT_SETTLE_SEC = 3
+local WORLD_CYCLE_WAIT_SEC = 120
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
 local WORLD_ZONES = {
@@ -2606,8 +2607,16 @@ local function runWorldFarmLoop()
 			end
 		end
 		if autoFarmRunning then
-			setFarmStatus("World cycle complete – restarting...")
-			task.wait(FARM_NO_TARGET_WAIT_SEC)
+			for sec = WORLD_CYCLE_WAIT_SEC, 1, -1 do
+				if not autoFarmRunning then
+					break
+				end
+				setFarmStatus(("World cycle complete – next cycle in %dm %ds"):format(
+					math.floor(sec / 60),
+					sec % 60
+				))
+				task.wait(1)
+			end
 		end
 	end
 end
