@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.4"
+local VERSION = "1.7.5"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -2546,6 +2546,16 @@ local function stopWorldHunt()
 	stopAllFarm()
 end
 
+local function refreshWorldFarmList(world, statusText)
+	if statusText then
+		setFarmStatus(statusText)
+	end
+	refreshWorldList(true, world)
+	if activeTab == "pets" then
+		refreshList(true)
+	end
+end
+
 local function runWorldFarmLoop()
 	while autoFarmRunning do
 		for _, world in ipairs(WORLD_ZONES) do
@@ -2566,15 +2576,12 @@ local function runWorldFarmLoop()
 				else
 					setFarmStatus(("At %s (%s)"):format(world.name, tostring(tpMethod)))
 					task.wait(WORLD_TELEPORT_SETTLE_SEC)
-					scanWorldPets()
 				end
 
 				local lastWorldPriority = 0
 				while autoFarmRunning do
+					refreshWorldFarmList(world, "Refreshing list...")
 					local targets = getWorldHuntTargets(world, filters)
-					if activeTab == "worlds" then
-						populateWorldList(targets, #targets)
-					end
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
 					if not target then
@@ -2594,7 +2601,7 @@ local function runWorldFarmLoop()
 					end
 
 					lastWorldPriority = prio
-					scanWorldPets()
+					refreshWorldFarmList(world, "Refreshing list...")
 				end
 			end
 		end
