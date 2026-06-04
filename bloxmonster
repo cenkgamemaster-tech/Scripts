@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.9"
+local VERSION = "1.7.11"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -359,6 +359,30 @@ local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
 local worldHuntThread = nil
 local activeTab = "pets"
+local farmRunId = 0
+
+local function shouldFarmContinue(runId)
+	return autoFarmRunning and farmRunId == runId
+end
+
+local function farmWait(seconds, runId)
+	local elapsed = 0
+	while elapsed < seconds do
+		if runId and not shouldFarmContinue(runId) then
+			return false
+		end
+		if not runId and not autoFarmRunning then
+			return false
+		end
+		local step = math.min(0.25, seconds - elapsed)
+		task.wait(step)
+		elapsed = elapsed + step
+	end
+	if runId then
+		return shouldFarmContinue(runId)
+	end
+	return autoFarmRunning
+end
 
 local function anyWorldPetsConfigured()
 	for _, world in ipairs(WORLD_ZONES) do
@@ -443,6 +467,10 @@ local function findFilterIndexByName(name)
 		end
 	end
 	return nil
+end
+
+local function compactName(text)
+	return tostring(text or ""):lower():gsub("[%s_%-]", "")
 end
 
 local function resolvePetIdentity(petOrName)
@@ -554,10 +582,6 @@ local function pickNextFarmTarget(pets, skipBelowPriority, filters)
 		end
 	end
 	return best, bestP
-end
-
-local function compactName(text)
-	return tostring(text or ""):lower():gsub("[%s_%-]", "")
 end
 
 local function instanceWorldScore(inst, worldConfig)
@@ -2474,54 +2498,64 @@ local function addFilterFromInput()
 end
 
 refreshList = function(rescan)
-	if rescan == false and #lastAllPets > 0 then
-		local filtered = applyNameFilters(lastAllPets)
-		populateList(filtered, #lastAllPets)
-		return
-	end
-	local ok, pets = pcall(getWorldPets)
-	if ok then
-		lastAllPets = pets
-		local filtered = applyNameFilters(pets)
-		populateList(filtered, #pets)
-	else
-		lastAllPets = {}
-		populateList({}, 0)
-		warn("[BloxMonster] Scan error:", pets)
+	local ok, err = pcall(function()
+		if rescan == false and #lastAllPets > 0 then
+			local filtered = applyNameFilters(lastAllPets)
+			populateList(filtered, #lastAllPets)
+			return
+		end
+		local scanOk, pets = pcall(getWorldPets)
+		if scanOk then
+			lastAllPets = pets
+			local filtered = applyNameFilters(pets)
+			populateList(filtered, #pets)
+		else
+			lastAllPets = {}
+			populateList({}, 0)
+			warn("[BloxMonster] Scan error:", pets)
+		end
+	end)
+	if not ok then
+		warn("[BloxMonster] Refresh error:", err)
 	end
 end
 
 refreshWorldList = function(rescan, worldConfig)
-	worldConfig = worldConfig or getSelectedWorldConfig()
-	if not worldConfig then
-		populateWorldList({}, 0, 0)
-		return
-	end
-
-	local filters = getSelectedWorldFilters()
-
-	local function showPets(visiblePets, allPets)
-		local filtered = applyNameFilters(visiblePets, filters)
-		populateWorldList(filtered, #visiblePets, #allPets)
-	end
-
-	local allPets = lastAllPets
-	if rescan ~= false or #allPets == 0 then
-		local ok, pets = pcall(getWorldPets)
-		if ok then
-			lastAllPets = pets
-			allPets = pets
-		else
-			lastAllPets = {}
-			allPets = {}
+	local ok, err = pcall(function()
+		worldConfig = worldConfig or getSelectedWorldConfig()
+		if not worldConfig then
 			populateWorldList({}, 0, 0)
-			warn("[BloxMonster] World scan error:", pets)
 			return
 		end
-	end
 
-	local visiblePets, scannedPets = getWorldVisiblePets(worldConfig, filters, allPets)
-	showPets(visiblePets, scannedPets)
+		local filters = getSelectedWorldFilters()
+
+		local function showPets(visiblePets, allPets)
+			local filtered = applyNameFilters(visiblePets, filters)
+			populateWorldList(filtered, #visiblePets, #allPets)
+		end
+
+		local allPets = lastAllPets
+		if rescan ~= false or #allPets == 0 then
+			local scanOk, pets = pcall(getWorldPets)
+			if scanOk then
+				lastAllPets = pets
+				allPets = pets
+			else
+				lastAllPets = {}
+				allPets = {}
+				populateWorldList({}, 0, 0)
+				warn("[BloxMonster] World scan error:", pets)
+				return
+			end
+		end
+
+		local visiblePets, scannedPets = getWorldVisiblePets(worldConfig, filters, allPets)
+		showPets(visiblePets, scannedPets)
+	end)
+	if not ok then
+		warn("[BloxMonster] World refresh error:", err)
+	end
 end
 
 local function selectWorld(worldId, teleport)
@@ -2580,6 +2614,7 @@ local function isAnyFarmRunning()
 end
 
 local function stopAllFarm()
+	farmRunId = farmRunId + 1
 	autoFarmRunning = false
 	worldHuntRunning = false
 	UI.farmStatusLabel.Text = "Farm idle"
@@ -2587,11 +2622,11 @@ local function stopAllFarm()
 	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
 	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
 	if autoFarmThread then
-		task.cancel(autoFarmThread)
+		pcall(task.cancel, autoFarmThread)
 		autoFarmThread = nil
 	end
 	if worldHuntThread and worldHuntThread ~= autoFarmThread then
-		task.cancel(worldHuntThread)
+		pcall(task.cancel, worldHuntThread)
 	end
 	worldHuntThread = nil
 end
@@ -2600,7 +2635,10 @@ local function stopWorldHunt()
 	stopAllFarm()
 end
 
-local function refreshWorldFarmList(world, statusText)
+local function refreshWorldFarmList(world, statusText, runId)
+	if runId and not shouldFarmContinue(runId) then
+		return false
+	end
 	if statusText then
 		setFarmStatus(statusText)
 	end
@@ -2608,6 +2646,7 @@ local function refreshWorldFarmList(world, statusText)
 	if activeTab == "pets" then
 		refreshList(true)
 	end
+	return runId == nil or shouldFarmContinue(runId)
 end
 
 local function collectAllFarmFilters()
@@ -2728,8 +2767,14 @@ local function pickBonusPhaseTarget(pets, lastBonusPriority)
 	return pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
 end
 
-local function scanForBonusTarget(lastBonusPriority, worldsToCheck)
+local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
+	if not shouldFarmContinue(runId) then
+		return nil, nil, {}
+	end
 	local pets = scanWorldPets()
+	if not shouldFarmContinue(runId) then
+		return nil, nil, pets
+	end
 	refreshList(true)
 	local target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
 	if target then
@@ -2737,16 +2782,21 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck)
 	end
 
 	for _, world in ipairs(worldsToCheck) do
-		if not autoFarmRunning then
+		if not shouldFarmContinue(runId) then
 			break
 		end
 		local tpOk = teleportToWorld(world)
 		if tpOk then
-			task.wait(WORLD_TELEPORT_SETTLE_SEC)
+			if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
+				break
+			end
 		end
 		selectedWorldId = world.id
 		highlightWorldButtons()
 		pets = scanWorldPets()
+		if not shouldFarmContinue(runId) then
+			break
+		end
 		refreshWorldList(true, world)
 		if activeTab == "pets" then
 			refreshList(true)
@@ -2760,7 +2810,7 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck)
 	return nil, nil, pets
 end
 
-local function runPostCycleBonusFarm()
+local function runPostCycleBonusFarm(runId)
 	local bonusFilters = collectBonusFarmFilters()
 	if #bonusFilters == 0 then
 		setFarmStatus("Cycle bonus: no P3+ pets configured – skipping")
@@ -2774,22 +2824,28 @@ local function runPostCycleBonusFarm()
 		worldsToCheck = getWorldsWithBonusFilters()
 	end
 
-	while autoFarmRunning and os.clock() < endTime do
+	while shouldFarmContinue(runId) and os.clock() < endTime do
 		local timeLeft = math.ceil(endTime - os.clock())
 		setFarmStatus(("Cycle bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
 
 		local target, targetP
-		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck)
+		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
+
+		if not shouldFarmContinue(runId) then
+			break
+		end
 
 		if not target then
 			timeLeft = math.ceil(endTime - os.clock())
 			setFarmStatus(("Cycle bonus P3+ (%s left) – no targets, retrying..."):format(formatBonusTimeLeft(timeLeft)))
-			task.wait(FARM_NO_TARGET_WAIT_SEC)
+			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
+				break
+			end
 		else
 			local prio = targetP or getPetFilterPriority(target.name, collectAllFarmFilters())
 			local waitComplete = false
 
-			while autoFarmRunning and os.clock() < endTime and not waitComplete do
+			while shouldFarmContinue(runId) and os.clock() < endTime and not waitComplete do
 				timeLeft = math.ceil(endTime - os.clock())
 				local phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
 				setFarmStatus(("%s P%s: %s (%s left)"):format(
@@ -2802,7 +2858,7 @@ local function runPostCycleBonusFarm()
 
 				local interrupted = false
 				for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
-					if not autoFarmRunning or os.clock() >= endTime then
+					if not shouldFarmContinue(runId) or os.clock() >= endTime then
 						waitComplete = true
 						break
 					end
@@ -2829,12 +2885,19 @@ local function runPostCycleBonusFarm()
 						sec,
 						formatBonusTimeLeft(timeLeft)
 					))
-					task.wait(1)
+					if not farmWait(1, runId) then
+						waitComplete = true
+						break
+					end
 				end
 
 				if not interrupted then
 					waitComplete = true
 				end
+			end
+
+			if not shouldFarmContinue(runId) then
+				break
 			end
 
 			if prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
@@ -2848,10 +2911,10 @@ local function runPostCycleBonusFarm()
 	end
 end
 
-local function runWorldFarmLoop()
-	while autoFarmRunning do
+local function runWorldFarmLoop(runId)
+	while shouldFarmContinue(runId) do
 		for _, world in ipairs(WORLD_ZONES) do
-			if not autoFarmRunning then
+			if not shouldFarmContinue(runId) then
 				break
 			end
 			local filters = worldPetFilters[world.id]
@@ -2864,15 +2927,21 @@ local function runWorldFarmLoop()
 				local tpOk, tpMethod = teleportToWorld(world)
 				if not tpOk then
 					setFarmStatus("No travel to " .. world.name .. ", trying pets anyway...")
-					task.wait(FARM_NO_TARGET_WAIT_SEC)
+					if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
+						break
+					end
 				else
 					setFarmStatus(("At %s (%s)"):format(world.name, tostring(tpMethod)))
-					task.wait(WORLD_TELEPORT_SETTLE_SEC)
+					if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
+						break
+					end
 				end
 
 				local lastWorldPriority = 0
-				while autoFarmRunning do
-					refreshWorldFarmList(world, "Refreshing list...")
+				while shouldFarmContinue(runId) do
+					if not refreshWorldFarmList(world, "Refreshing list...", runId) then
+						break
+					end
 					local targets = getWorldHuntTargets(world, filters)
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
@@ -2885,20 +2954,28 @@ local function runWorldFarmLoop()
 					teleportToPet(target.model)
 
 					for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
-						if not autoFarmRunning then
+						if not shouldFarmContinue(runId) then
 							break
 						end
 						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
-						task.wait(1)
+						if not farmWait(1, runId) then
+							break
+						end
+					end
+
+					if not shouldFarmContinue(runId) then
+						break
 					end
 
 					lastWorldPriority = prio
-					refreshWorldFarmList(world, "Refreshing list...")
+					if not refreshWorldFarmList(world, "Refreshing list...", runId) then
+						break
+					end
 				end
 			end
 		end
-		if autoFarmRunning then
-			runPostCycleBonusFarm()
+		if shouldFarmContinue(runId) then
+			runPostCycleBonusFarm(runId)
 		end
 	end
 end
@@ -2911,18 +2988,31 @@ local function startWorldFarm()
 		setFarmStatus("Configure pets on Worlds tab first")
 		return false
 	end
+	farmRunId = farmRunId + 1
+	local myRunId = farmRunId
 	autoFarmRunning = true
 	worldHuntRunning = true
 	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
 	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
 	setFarmStatus("World farm starting...")
 	if autoFarmThread then
-		task.cancel(autoFarmThread)
+		pcall(task.cancel, autoFarmThread)
 	end
 	if worldHuntThread then
-		task.cancel(worldHuntThread)
+		pcall(task.cancel, worldHuntThread)
 	end
-	autoFarmThread = task.spawn(runWorldFarmLoop)
+	autoFarmThread = task.spawn(function()
+		local ok, err = pcall(function()
+			runWorldFarmLoop(myRunId)
+		end)
+		if not ok and not tostring(err):find("cancelled", 1, true) then
+			warn("[BloxMonster] World farm error:", err)
+		end
+		if farmRunId == myRunId then
+			autoFarmRunning = false
+			worldHuntRunning = false
+		end
+	end)
 	worldHuntThread = autoFarmThread
 	return true
 end
@@ -2947,43 +3037,64 @@ local function startAutoFarm()
 		end
 		return
 	end
+	farmRunId = farmRunId + 1
+	local myRunId = farmRunId
 	autoFarmRunning = true
 	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
 	UI.farmStatusLabel.Text = "Farm starting..."
 	if autoFarmThread then
-		task.cancel(autoFarmThread)
+		pcall(task.cancel, autoFarmThread)
 	end
 	autoFarmThread = task.spawn(function()
 		local lastFarmPriority = 0
-		while autoFarmRunning do
-			local pets = scanWorldPets()
-			populateList(applyNameFilters(pets), #pets)
+		local ok, err = pcall(function()
+			while shouldFarmContinue(myRunId) do
+				local pets = scanWorldPets()
+				if not shouldFarmContinue(myRunId) then
+					break
+				end
+				populateList(applyNameFilters(pets), #pets)
 
-			local targets = applyNameFilters(pets)
-			local target, targetP = pickNextFarmTarget(targets, lastFarmPriority)
-			if not target then
-				lastFarmPriority = 0
-				UI.farmStatusLabel.Text = "Waiting for pets..."
-				task.wait(FARM_NO_TARGET_WAIT_SEC)
-			else
-				local model = target.model
-				local prio = targetP or getPetFilterPriority(target.name)
-				UI.farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
-				teleportToPet(model)
-
-				for sec = FARM_WAIT_SEC, 1, -1 do
-					if not autoFarmRunning then
+				local targets = applyNameFilters(pets)
+				local target, targetP = pickNextFarmTarget(targets, lastFarmPriority)
+				if not target then
+					lastFarmPriority = 0
+					UI.farmStatusLabel.Text = "Waiting for pets..."
+					if not farmWait(FARM_NO_TARGET_WAIT_SEC, myRunId) then
 						break
 					end
-					UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
-					task.wait(1)
-				end
+				else
+					local model = target.model
+					local prio = targetP or getPetFilterPriority(target.name)
+					UI.farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
+					teleportToPet(model)
 
-				lastFarmPriority = prio
-				UI.farmStatusLabel.Text = "Refreshing list..."
-				pets = scanWorldPets()
-				populateList(applyNameFilters(pets), #pets)
+					for sec = FARM_WAIT_SEC, 1, -1 do
+						if not shouldFarmContinue(myRunId) then
+							break
+						end
+						UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
+						if not farmWait(1, myRunId) then
+							break
+						end
+					end
+
+					if not shouldFarmContinue(myRunId) then
+						break
+					end
+
+					lastFarmPriority = prio
+					UI.farmStatusLabel.Text = "Refreshing list..."
+					pets = scanWorldPets()
+					populateList(applyNameFilters(pets), #pets)
+				end
 			end
+		end)
+		if not ok and not tostring(err):find("cancelled", 1, true) then
+			warn("[BloxMonster] Farm error:", err)
+		end
+		if farmRunId == myRunId then
+			autoFarmRunning = false
 		end
 	end)
 end
@@ -3063,7 +3174,9 @@ UI.worldFilterClearBtn.MouseButton1Click:Connect(function()
 end)
 
 UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
-UI.worldHuntStopBtn.MouseButton1Click:Connect(stopWorldHunt)
+UI.worldHuntStopBtn.MouseButton1Click:Connect(function()
+	stopWorldHunt()
+end)
 
 UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
 UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
