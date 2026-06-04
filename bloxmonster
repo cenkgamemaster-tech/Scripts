@@ -13,10 +13,10 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.14"
-local AUTO_REFRESH_SEC = 3
-local SCAN_CACHE_SEC = 0.5
-local FARM_LIST_REFRESH_SEC = 1
+local VERSION = "1.7.16"
+local AUTO_REFRESH_SEC = 5
+local SCAN_CACHE_SEC = 5
+local FARM_LIST_REFRESH_SEC = 3
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
@@ -370,6 +370,19 @@ local nameFilters = {}
 local autoFarmRunning = false
 local lastAllPets = {}
 local lastScanClock = 0
+local lastPetsListSig = ""
+local lastWorldListSig = ""
+
+local function petsListSignature(pets)
+	local parts = { tostring(#pets) }
+	for i, pet in ipairs(pets) do
+		if i > 30 then
+			break
+		end
+		parts[#parts + 1] = tostring(pet.name) .. ":" .. tostring(pet.model)
+	end
+	return table.concat(parts, "|")
+end
 
 local function refreshCachedPetsLight()
 	local out = {}
@@ -2552,22 +2565,34 @@ refreshList = function(rescan)
 		elseif rescan == false then
 			scanMode = "light"
 		end
+		if scanMode == "full" then
+			lastPetsListSig = ""
+		end
 		local pets = getCachedWorldPets(scanMode)
 		local filtered = applyNameFilters(pets)
 		populateList(filtered, #pets)
+		lastPetsListSig = petsListSignature(filtered)
 	end)
 	if not ok then
 		warn("[BloxMonster] Refresh error:", err)
 	end
 end
 
-local function applyListsFromPets(pets, worldConfig, worldFilters)
+local function applyListsFromPets(pets, worldConfig, worldFilters, forceUi)
 	local filteredPets = applyNameFilters(pets)
-	populateList(filteredPets, #pets)
+	local petsSig = petsListSignature(filteredPets)
+	if forceUi or petsSig ~= lastPetsListSig then
+		populateList(filteredPets, #pets)
+		lastPetsListSig = petsSig
+	end
 	if worldConfig then
 		local visiblePets = getWorldVisiblePets(worldConfig, worldFilters, pets)
 		local filteredWorld = applyNameFilters(visiblePets, worldFilters)
-		populateWorldList(filteredWorld, #visiblePets, #pets)
+		local worldSig = petsListSignature(filteredWorld)
+		if forceUi or worldSig ~= lastWorldListSig then
+			populateWorldList(filteredWorld, #visiblePets, #pets)
+			lastWorldListSig = worldSig
+		end
 	end
 end
 
@@ -2575,11 +2600,17 @@ local function tickFarmLists(runId, world, filters, scanMode)
 	if runId and not shouldFarmContinue(runId) then
 		return false
 	end
-	local pets = getCachedWorldPets(scanMode or "auto")
+	scanMode = scanMode or "light"
+	local pets = getCachedWorldPets(scanMode)
 	if world then
-		applyListsFromPets(pets, world, filters or worldPetFilters[world.id] or {})
+		applyListsFromPets(pets, world, filters or worldPetFilters[world.id] or {}, scanMode == "full")
 	else
-		populateList(applyNameFilters(pets, nameFilters), #pets)
+		local filteredPets = applyNameFilters(pets, nameFilters)
+		local sig = petsListSignature(filteredPets)
+		if scanMode == "full" or sig ~= lastPetsListSig then
+			populateList(filteredPets, #pets)
+			lastPetsListSig = sig
+		end
 	end
 	return runId == nil or shouldFarmContinue(runId)
 end
@@ -2600,7 +2631,7 @@ local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, o
 			onTick(sec)
 		end
 		if nextRefreshIn <= 0 then
-			tickFarmLists(runId, world, filters, "auto")
+			tickFarmLists(runId, world, filters, "light")
 			nextRefreshIn = FARM_LIST_REFRESH_SEC
 		end
 		nextRefreshIn = nextRefreshIn - 1
@@ -2725,7 +2756,7 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 		return false
 	end
 	local filters = worldPetFilters[world.id] or {}
-	applyListsFromPets(pets, world, filters)
+	applyListsFromPets(pets, world, filters, scanMode == "full")
 	return runId == nil or shouldFarmContinue(runId)
 end
 
@@ -2945,7 +2976,7 @@ local function runPostCycleBonusFarm(runId)
 						formatBonusTimeLeft(timeLeft)
 					))
 				end, nil, nil, function()
-					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("auto"), prio)
+					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("light"), prio)
 					if better then
 						target = better
 						targetP = betterP
@@ -3271,10 +3302,12 @@ UI.autoRefreshBtn.MouseButton1Click:Connect(function()
 	end
 	autoRefreshThread = task.spawn(function()
 		while autoRefreshRunning do
-			if activeTab == "worlds" then
-				refreshWorldList(true)
-			else
-				refreshList(true)
+			if not autoFarmRunning and not worldHuntRunning then
+				if activeTab == "worlds" then
+					refreshWorldList(false)
+				else
+					refreshList(false)
+				end
 			end
 			task.wait(AUTO_REFRESH_SEC)
 		end
