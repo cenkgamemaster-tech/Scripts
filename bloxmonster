@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.0"
+local VERSION = "1.7.1"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -42,6 +42,15 @@ local WORLD_ZONES = {
 		name = "Astral Grove",
 		keywords = { "astral", "grove", "astralgrove" },
 	},
+}
+
+-- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
+-- Session Save overrides these until you re-run the script.
+local WORLD_SPAWN_LOCATIONS = {
+	-- misty_forest = { x = 0.0, y = 0.0, z = 0.0 },
+	-- lava_volcano = { x = 0.0, y = 0.0, z = 0.0 },
+	-- iceberg = { x = 0.0, y = 0.0, z = 0.0 },
+	-- astral_grove = { x = 0.0, y = 0.0, z = 0.0 },
 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
@@ -342,7 +351,7 @@ local worldPetFilters = {
 		{ name = "Phant", priority = 3 },
 	},
 }
--- Saved player positions per world (set on Locations tab).
+-- Session overrides from Locations tab Save (falls back to WORLD_SPAWN_LOCATIONS).
 local worldSavedLocations = {}
 local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
@@ -851,12 +860,49 @@ local function getPlayerPosition()
 	return root and root.Position or nil
 end
 
+local function resolveWorldLocation(worldId)
+	local session = worldSavedLocations[worldId]
+	if session then
+		return session
+	end
+	local baked = WORLD_SPAWN_LOCATIONS[worldId]
+	if baked then
+		return baked
+	end
+	return nil
+end
+
 local function getSavedWorldPosition(worldId)
-	local saved = worldSavedLocations[worldId]
-	if not saved then
+	local loc = resolveWorldLocation(worldId)
+	if not loc then
 		return nil
 	end
-	return Vector3.new(saved.x, saved.y, saved.z)
+	return Vector3.new(loc.x, loc.y, loc.z)
+end
+
+local function formatHardcodeEntry(worldId, loc)
+	return ('\t%s = { x = %.3f, y = %.3f, z = %.3f },'):format(worldId, loc.x, loc.y, loc.z)
+end
+
+local function formatHardcodeBlock()
+	local lines = { "local WORLD_SPAWN_LOCATIONS = {" }
+	for _, world in ipairs(WORLD_ZONES) do
+		local loc = resolveWorldLocation(world.id)
+		if loc then
+			table.insert(lines, formatHardcodeEntry(world.id, loc))
+		end
+	end
+	table.insert(lines, "}" )
+	return table.concat(lines, "\n")
+end
+
+local function copyText(text)
+	if typeof(setclipboard) == "function" then
+		setclipboard(text)
+		return true, "clipboard"
+	end
+	print("[BloxMonster] Copy this into WORLD_SPAWN_LOCATIONS at top of script:\n" .. text)
+	return false, "output"
 end
 
 local function saveWorldLocation(worldId)
@@ -1550,7 +1596,7 @@ local locationsHint = Instance.new("TextLabel")
 locationsHint.Size = UDim2.new(1, -8, 0, 28)
 locationsHint.Position = UDim2.new(0, 4, 0, 2)
 locationsHint.BackgroundTransparency = 1
-locationsHint.Text = "Walk to each world in-game, then tap Save. Farm/hunt uses saved spots first."
+locationsHint.Text = "Save each world once, then Copy → paste into WORLD_SPAWN_LOCATIONS in the script."
 locationsHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 locationsHint.TextSize = 10
 locationsHint.Font = Enum.Font.Gotham
@@ -1559,7 +1605,7 @@ locationsHint.TextWrapped = true
 locationsHint.Parent = locationsPanel
 
 local locationsScroll = Instance.new("ScrollingFrame")
-locationsScroll.Size = UDim2.new(1, 0, 1, -58)
+locationsScroll.Size = UDim2.new(1, 0, 1, -82)
 locationsScroll.Position = UDim2.new(0, 0, 0, 32)
 locationsScroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
 locationsScroll.BorderSizePixel = 0
@@ -1579,12 +1625,13 @@ locationsListLayout.Padding = UDim.new(0, 6)
 locationsListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 locationsListLayout.Parent = locationsScroll
 
-local locationCoordLabels = {}
+local locationCoordBoxes = {}
+local locationHardcodeLabels = {}
 local locationSaveButtons = {}
 
 for i, world in ipairs(WORLD_ZONES) do
 	local row = Instance.new("Frame")
-	row.Size = UDim2.new(1, -8, 0, 58)
+	row.Size = UDim2.new(1, -8, 0, 72)
 	row.BackgroundColor3 = Color3.fromRGB(32, 50, 72)
 	row.LayoutOrder = i
 	row.Parent = locationsScroll
@@ -1594,7 +1641,7 @@ for i, world in ipairs(WORLD_ZONES) do
 	rowCorner.Parent = row
 
 	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Size = UDim2.new(1, -8, 0, 16)
+	nameLabel.Size = UDim2.new(1, -196, 0, 18)
 	nameLabel.Position = UDim2.new(0, 8, 0, 4)
 	nameLabel.BackgroundTransparency = 1
 	nameLabel.Text = world.name
@@ -1604,22 +1651,9 @@ for i, world in ipairs(WORLD_ZONES) do
 	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
 	nameLabel.Parent = row
 
-	local coordLabel = Instance.new("TextLabel")
-	coordLabel.Size = UDim2.new(1, -170, 0, 14)
-	coordLabel.Position = UDim2.new(0, 8, 0, 22)
-	coordLabel.BackgroundTransparency = 1
-	coordLabel.Text = "Not saved"
-	coordLabel.TextColor3 = Color3.fromRGB(140, 170, 150)
-	coordLabel.TextSize = 10
-	coordLabel.Font = Enum.Font.Code
-	coordLabel.TextXAlignment = Enum.TextXAlignment.Left
-	coordLabel.TextTruncate = Enum.TextTruncate.AtEnd
-	coordLabel.Parent = row
-	locationCoordLabels[world.id] = coordLabel
-
 	local saveBtn = Instance.new("TextButton")
-	saveBtn.Size = UDim2.new(0, 44, 0, 22)
-	saveBtn.Position = UDim2.new(1, -154, 0, 30)
+	saveBtn.Size = UDim2.new(0, 40, 0, 20)
+	saveBtn.Position = UDim2.new(1, -188, 0, 4)
 	saveBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 	saveBtn.BorderSizePixel = 0
 	saveBtn.Text = "Save"
@@ -1634,8 +1668,8 @@ for i, world in ipairs(WORLD_ZONES) do
 	locationSaveButtons[world.id] = saveBtn
 
 	local goBtn = Instance.new("TextButton")
-	goBtn.Size = UDim2.new(0, 36, 0, 22)
-	goBtn.Position = UDim2.new(1, -106, 0, 30)
+	goBtn.Size = UDim2.new(0, 32, 0, 20)
+	goBtn.Position = UDim2.new(1, -144, 0, 4)
 	goBtn.BackgroundColor3 = Color3.fromRGB(45, 80, 100)
 	goBtn.BorderSizePixel = 0
 	goBtn.Text = "Go"
@@ -1648,9 +1682,24 @@ for i, world in ipairs(WORLD_ZONES) do
 	goCorner.CornerRadius = UDim.new(0, 4)
 	goCorner.Parent = goBtn
 
+	local copyBtn = Instance.new("TextButton")
+	copyBtn.Size = UDim2.new(0, 40, 0, 20)
+	copyBtn.Position = UDim2.new(1, -108, 0, 4)
+	copyBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
+	copyBtn.BorderSizePixel = 0
+	copyBtn.Text = "Copy"
+	copyBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
+	copyBtn.TextSize = 10
+	copyBtn.Font = Enum.Font.GothamBold
+	copyBtn.Parent = row
+
+	local copyCorner = Instance.new("UICorner")
+	copyCorner.CornerRadius = UDim.new(0, 4)
+	copyCorner.Parent = copyBtn
+
 	local clearBtn = Instance.new("TextButton")
-	clearBtn.Size = UDim2.new(0, 44, 0, 22)
-	clearBtn.Position = UDim2.new(1, -54, 0, 30)
+	clearBtn.Size = UDim2.new(0, 40, 0, 20)
+	clearBtn.Position = UDim2.new(1, -64, 0, 4)
 	clearBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 45)
 	clearBtn.BorderSizePixel = 0
 	clearBtn.Text = "Clear"
@@ -1663,10 +1712,53 @@ for i, world in ipairs(WORLD_ZONES) do
 	clearCorner.CornerRadius = UDim.new(0, 4)
 	clearCorner.Parent = clearBtn
 
+	local coordBox = Instance.new("TextBox")
+	coordBox.Size = UDim2.new(1, -16, 0, 26)
+	coordBox.Position = UDim2.new(0, 8, 0, 26)
+	coordBox.BackgroundColor3 = Color3.fromRGB(18, 28, 42)
+	coordBox.BorderSizePixel = 0
+	coordBox.ClearTextOnFocus = false
+	coordBox.TextEditable = true
+	coordBox.Text = "x = ?, y = ?, z = ?  (not set)"
+	coordBox.PlaceholderText = "Save or paste coords here"
+	coordBox.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
+	coordBox.TextColor3 = Color3.fromRGB(255, 245, 160)
+	coordBox.TextSize = 12
+	coordBox.Font = Enum.Font.Code
+	coordBox.TextXAlignment = Enum.TextXAlignment.Left
+	coordBox.TextWrapped = true
+	coordBox.MultiLine = false
+	coordBox.Parent = row
+	locationCoordBoxes[world.id] = coordBox
+
+	local coordBoxCorner = Instance.new("UICorner")
+	coordBoxCorner.CornerRadius = UDim.new(0, 4)
+	coordBoxCorner.Parent = coordBox
+
+	local coordBoxPad = Instance.new("UIPadding")
+	coordBoxPad.PaddingLeft = UDim.new(0, 6)
+	coordBoxPad.PaddingRight = UDim.new(0, 4)
+	coordBoxPad.Parent = coordBox
+
+	local hardcodeLabel = Instance.new("TextLabel")
+	hardcodeLabel.Size = UDim2.new(1, -16, 0, 14)
+	hardcodeLabel.Position = UDim2.new(0, 8, 0, 54)
+	hardcodeLabel.BackgroundTransparency = 1
+	hardcodeLabel.Text = ""
+	hardcodeLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
+	hardcodeLabel.TextSize = 9
+	hardcodeLabel.Font = Enum.Font.Code
+	hardcodeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	hardcodeLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	hardcodeLabel.Parent = row
+	locationHardcodeLabels[world.id] = hardcodeLabel
+
 	saveBtn.MouseButton1Click:Connect(function()
 		local ok, pos = saveWorldLocation(world.id)
 		if ok then
-			locationsStatusLabel.Text = ("Saved %s at %s"):format(world.name, formatPosition(pos))
+			local line = formatHardcodeEntry(world.id, worldSavedLocations[world.id])
+			locationsStatusLabel.Text = ("Saved %s – tap Copy to paste into script"):format(world.name)
+			print("[BloxMonster] " .. world.name .. " → " .. line)
 			if refreshLocationRows then
 				refreshLocationRows()
 			end
@@ -1678,7 +1770,7 @@ for i, world in ipairs(WORLD_ZONES) do
 	goBtn.MouseButton1Click:Connect(function()
 		local pos = getSavedWorldPosition(world.id)
 		if not pos then
-			locationsStatusLabel.Text = ("No saved location for %s yet"):format(world.name)
+			locationsStatusLabel.Text = ("No location for %s – Save or paste into script"):format(world.name)
 			return
 		end
 		if robustTeleportToPosition(pos, true) then
@@ -1688,18 +1780,59 @@ for i, world in ipairs(WORLD_ZONES) do
 		end
 	end)
 
+	copyBtn.MouseButton1Click:Connect(function()
+		local loc = resolveWorldLocation(world.id)
+		if not loc then
+			locationsStatusLabel.Text = ("Nothing to copy for %s"):format(world.name)
+			return
+		end
+		local line = formatHardcodeEntry(world.id, loc)
+		local copied, where = copyText(line)
+		locationsStatusLabel.Text = copied
+			and ("Copied " .. world.name .. " to clipboard")
+			or ("Printed " .. world.name .. " to Output (F9)")
+	end)
+
 	clearBtn.MouseButton1Click:Connect(function()
 		clearWorldLocation(world.id)
-		locationsStatusLabel.Text = ("Cleared saved location for %s"):format(world.name)
+		locationsStatusLabel.Text = ("Cleared session save for %s (hardcoded coords still used)"):format(world.name)
 		if refreshLocationRows then
 			refreshLocationRows()
 		end
 	end)
 end
 
+local locationsBottomRow = Instance.new("Frame")
+locationsBottomRow.Size = UDim2.new(1, -8, 0, 24)
+locationsBottomRow.Position = UDim2.new(0, 4, 1, -48)
+locationsBottomRow.BackgroundTransparency = 1
+locationsBottomRow.Parent = locationsPanel
+
+local copyAllBtn = Instance.new("TextButton")
+copyAllBtn.Size = UDim2.new(0, 88, 1, 0)
+copyAllBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
+copyAllBtn.BorderSizePixel = 0
+copyAllBtn.Text = "Copy all"
+copyAllBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
+copyAllBtn.TextSize = 10
+copyAllBtn.Font = Enum.Font.GothamBold
+copyAllBtn.Parent = locationsBottomRow
+
+local copyAllCorner = Instance.new("UICorner")
+copyAllCorner.CornerRadius = UDim.new(0, 4)
+copyAllCorner.Parent = copyAllBtn
+
+copyAllBtn.MouseButton1Click:Connect(function()
+	local block = formatHardcodeBlock()
+	local copied = copyText(block)
+	locationsStatusLabel.Text = copied
+		and "Copied all locations to clipboard"
+		or "Printed all locations to Output (F9) – paste into script"
+end)
+
 local locationsStatusLabel = Instance.new("TextLabel")
-locationsStatusLabel.Size = UDim2.new(1, -8, 0, 22)
-locationsStatusLabel.Position = UDim2.new(0, 4, 1, -24)
+locationsStatusLabel.Size = UDim2.new(1, -96, 0, 22)
+locationsStatusLabel.Position = UDim2.new(0, 92, 0, 1)
 locationsStatusLabel.BackgroundTransparency = 1
 locationsStatusLabel.Text = "Save a spot in each world you farm"
 locationsStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
@@ -2252,15 +2385,24 @@ end
 
 refreshLocationRows = function()
 	for _, world in ipairs(WORLD_ZONES) do
-		local label = locationCoordLabels[world.id]
-		if label then
-			local saved = worldSavedLocations[world.id]
-			if saved then
-				label.Text = formatPosition(Vector3.new(saved.x, saved.y, saved.z))
-				label.TextColor3 = Color3.fromRGB(160, 220, 170)
+		local box = locationCoordBoxes[world.id]
+		local hint = locationHardcodeLabels[world.id]
+		if box then
+			local loc = resolveWorldLocation(world.id)
+			local isBaked = loc and WORLD_SPAWN_LOCATIONS[world.id] ~= nil and worldSavedLocations[world.id] == nil
+			if loc then
+				box.Text = ("x = %.3f,  y = %.3f,  z = %.3f"):format(loc.x, loc.y, loc.z)
+				box.TextColor3 = Color3.fromRGB(255, 245, 160)
+				if hint then
+					hint.Text = isBaked and ("hardcoded: " .. formatHardcodeEntry(world.id, loc))
+						or ("session: " .. formatHardcodeEntry(world.id, loc))
+				end
 			else
-				label.Text = "Not saved – walk there and tap Save"
-				label.TextColor3 = Color3.fromRGB(140, 170, 150)
+				box.Text = "x = ?,  y = ?,  z = ?  (not set)"
+				box.TextColor3 = Color3.fromRGB(140, 170, 150)
+				if hint then
+					hint.Text = "Save in-game, then Copy → paste into WORLD_SPAWN_LOCATIONS"
+				end
 			end
 		end
 	end
