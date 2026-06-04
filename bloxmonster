@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.3"
+local VERSION = "1.7.4"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -1129,9 +1129,13 @@ local existing = PlayerGui:FindFirstChild("BloxMonster")
 if existing then
 	existing:Destroy()
 end
-PlayerGui:FindFirstChild("BloxMonsterError") and PlayerGui.BloxMonsterError:Destroy()
+local errExisting = PlayerGui:FindFirstChild("BloxMonsterError")
+if errExisting then
+	errExisting:Destroy()
+end
 
-local buildOk, buildErr = pcall(function()
+local UI
+do
 local screen = Instance.new("ScreenGui")
 screen.Name = "BloxMonster"
 screen.ResetOnSpawn = false
@@ -1994,6 +1998,48 @@ versionLabel.Parent = bottomRow
 
 makeDraggable(main, { top, title, main })
 
+	UI = {
+		screen = screen,
+		countLabel = countLabel,
+		refreshBtn = refreshBtn,
+		closeBtn = closeBtn,
+		tabPetsBtn = tabPetsBtn,
+		tabWorldsBtn = tabWorldsBtn,
+		tabLocationsBtn = tabLocationsBtn,
+		petsPanel = petsPanel,
+		worldsPanel = worldsPanel,
+		locationsPanel = locationsPanel,
+		filterBar = filterBar,
+		filterHint = filterHint,
+		filterInput = filterInput,
+		filterAddBtn = filterAddBtn,
+		filterClearBtn = filterClearBtn,
+		filtersBtn = filtersBtn,
+		filterChipScroll = filterChipScroll,
+		filterChipLayout = filterChipLayout,
+		scroll = scroll,
+		listLayout = listLayout,
+		worldButtons = worldButtons,
+		worldSelectedLabel = worldSelectedLabel,
+		worldFilterHint = worldFilterHint,
+		worldFilterInput = worldFilterInput,
+		worldFilterAddBtn = worldFilterAddBtn,
+		worldFilterClearBtn = worldFilterClearBtn,
+		worldFilterChipScroll = worldFilterChipScroll,
+		worldFilterChipLayout = worldFilterChipLayout,
+		worldScroll = worldScroll,
+		worldListLayout = worldListLayout,
+		worldHuntStartBtn = worldHuntStartBtn,
+		worldHuntStopBtn = worldHuntStopBtn,
+		worldHuntStatusLabel = worldHuntStatusLabel,
+		farmStartBtn = farmStartBtn,
+		farmStopBtn = farmStopBtn,
+		farmStatusLabel = farmStatusLabel,
+		autoRefreshBtn = autoRefreshBtn,
+	}
+end
+
+
 local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
@@ -2001,7 +2047,6 @@ local filterBarVisible = true
 
 local refreshList
 local refreshWorldList
-local refreshLocationRows
 
 local function getWorldConfigById(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
@@ -2042,11 +2087,11 @@ local function updateWorldSelectedLabel()
 		table.insert(names, getFilterName(entry) .. "@" .. tostring(getFilterPriority(entry)))
 	end
 	local petText = #names > 0 and table.concat(names, ", ") or "no pets configured"
-	worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
+	UI.worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
 end
 
 local function highlightWorldButtons()
-	for worldId, btn in pairs(worldButtons) do
+	for worldId, btn in pairs(UI.worldButtons) do
 		if worldId == selectedWorldId then
 			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 		else
@@ -2056,8 +2101,8 @@ local function highlightWorldButtons()
 end
 
 local function rebuildWorldFilterChips()
-	for _, child in ipairs(worldFilterChipScroll:GetChildren()) do
-		if child ~= worldFilterChipLayout then
+	for _, child in ipairs(UI.worldFilterChipScroll:GetChildren()) do
+		if child ~= UI.worldFilterChipLayout then
 			child:Destroy()
 		end
 	end
@@ -2084,7 +2129,7 @@ local function rebuildWorldFilterChips()
 		chip.TextSize = 11
 		chip.Font = Enum.Font.Gotham
 		chip.AutoButtonColor = true
-		chip.Parent = worldFilterChipScroll
+		chip.Parent = UI.worldFilterChipScroll
 
 		local chipCorner = Instance.new("UICorner")
 		chipCorner.CornerRadius = UDim.new(0, 4)
@@ -2107,9 +2152,9 @@ local function rebuildWorldFilterChips()
 end
 
 local function addWorldFilterFromInput()
-	local raw = worldFilterInput.Text
+	local raw = UI.worldFilterInput.Text
 	if raw == "" then
-		worldFilterHint.Text = "Type: Thornshade@1"
+		UI.worldFilterHint.Text = "Type: Thornshade@1"
 		return
 	end
 
@@ -2129,30 +2174,30 @@ local function addWorldFilterFromInput()
 	end
 
 	if added > 0 then
-		worldFilterInput.Text = ""
-		worldFilterHint.Text = ("Added %d pet(s) for this world."):format(added)
+		UI.worldFilterInput.Text = ""
+		UI.worldFilterHint.Text = ("Added %d pet(s) for this world."):format(added)
 		rebuildWorldFilterChips()
 		if refreshWorldList then
 			refreshWorldList(false)
 		end
 	else
-		worldFilterHint.Text = "Invalid format – use Name@priority (e.g. Thornshade@1)"
+		UI.worldFilterHint.Text = "Invalid format – use Name@priority (e.g. Thornshade@1)"
 	end
 end
 
 local function setFilterBarVisible(visible)
 	filterBarVisible = visible
-	filterBar.Visible = visible
+	UI.filterBar.Visible = visible
 	if visible then
-		scroll.Size = UDim2.new(1, 0, 1, -76)
-		scroll.Position = UDim2.new(0, 0, 0, 76)
-		filtersBtn.Text = "Filters"
-		filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
+		UI.scroll.Size = UDim2.new(1, 0, 1, -76)
+		UI.scroll.Position = UDim2.new(0, 0, 0, 76)
+		UI.filtersBtn.Text = "Filters"
+		UI.filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
 	else
-		scroll.Size = UDim2.new(1, 0, 1, -4)
-		scroll.Position = UDim2.new(0, 0, 0, 4)
-		filtersBtn.Text = "Filters ▾"
-		filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
+		UI.scroll.Size = UDim2.new(1, 0, 1, -4)
+		UI.scroll.Position = UDim2.new(0, 0, 0, 4)
+		UI.filtersBtn.Text = "Filters ▾"
+		UI.filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
 	end
 end
 
@@ -2176,7 +2221,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 		empty.Size = UDim2.new(1, -8, 0, 40)
 		empty.BackgroundTransparency = 1
 		local emptyMsg
-		if targetScroll == worldScroll then
+		if targetScroll == UI.worldScroll then
 			emptyMsg = "No wild pets found in this zone. Teleport to the world and tap Refresh."
 			if #filters > 0 and totalUnfiltered and totalUnfiltered > 0 then
 				emptyMsg = "No pets match your world filters. Try different names or tap Clear."
@@ -2280,17 +2325,17 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 end
 
 local function populateList(pets, totalUnfiltered)
-	populatePetScroll(scroll, listLayout, pets, totalUnfiltered, nameFilters, countLabel)
+	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
 local function populateWorldList(pets, totalUnfiltered)
 	local filters = getSelectedWorldFilters()
-	populatePetScroll(worldScroll, worldListLayout, pets, totalUnfiltered, filters, nil)
+	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil)
 end
 
 local function rebuildFilterChips()
-	for _, child in ipairs(filterChipScroll:GetChildren()) do
-		if child ~= filterChipLayout then
+	for _, child in ipairs(UI.filterChipScroll:GetChildren()) do
+		if child ~= UI.filterChipLayout then
 			child:Destroy()
 		end
 	end
@@ -2316,7 +2361,7 @@ local function rebuildFilterChips()
 		chip.TextSize = 11
 		chip.Font = Enum.Font.Gotham
 		chip.AutoButtonColor = true
-		chip.Parent = filterChipScroll
+		chip.Parent = UI.filterChipScroll
 
 		local chipCorner = Instance.new("UICorner")
 		chipCorner.CornerRadius = UDim.new(0, 4)
@@ -2337,9 +2382,9 @@ local function rebuildFilterChips()
 end
 
 local function addFilterFromInput()
-	local raw = filterInput.Text
+	local raw = UI.filterInput.Text
 	if raw == "" then
-		filterHint.Text = "Type: Orbitfin@1, Phant@3, Pico@2"
+		UI.filterHint.Text = "Type: Orbitfin@1, Phant@3, Pico@2"
 		return
 	end
 
@@ -2358,14 +2403,14 @@ local function addFilterFromInput()
 	end
 
 	if added > 0 then
-		filterInput.Text = ""
-		filterHint.Text = ("Added %d filter(s). Empty list = show all."):format(added)
+		UI.filterInput.Text = ""
+		UI.filterHint.Text = ("Added %d filter(s). Empty list = show all."):format(added)
 		rebuildFilterChips()
 		if refreshList then
 			refreshList(false)
 		end
 	else
-		filterHint.Text = "Invalid format – use Name@priority (e.g. Orbitfin@1, Phant@3)"
+		UI.filterHint.Text = "Invalid format – use Name@priority (e.g. Orbitfin@1, Phant@3)"
 		warn("[BloxMonster] Could not parse:", raw)
 	end
 end
@@ -2432,9 +2477,9 @@ local function selectWorld(worldId, teleport)
 	if teleport then
 		local world = getWorldConfigById(worldId)
 		if world then
-			worldHuntStatusLabel.Text = "Teleporting to " .. world.name .. "..."
+			UI.worldHuntStatusLabel.Text = "Teleporting to " .. world.name .. "..."
 			local ok, method = teleportToWorld(world)
-			worldHuntStatusLabel.Text = ok
+			UI.worldHuntStatusLabel.Text = ok
 				and ("At " .. world.name .. " (" .. tostring(method) .. ")")
 				or ("Could not travel to " .. world.name)
 			if ok then
@@ -2445,31 +2490,6 @@ local function selectWorld(worldId, teleport)
 	refreshWorldList(true)
 end
 
-refreshLocationRows = function()
-	for _, world in ipairs(WORLD_ZONES) do
-		local box = locationCoordBoxes[world.id]
-		local hint = locationHardcodeLabels[world.id]
-		if box then
-			local loc = resolveWorldLocation(world.id)
-			local isBaked = loc and WORLD_SPAWN_LOCATIONS[world.id] ~= nil and worldSavedLocations[world.id] == nil
-			if loc then
-				box.Text = ("x = %.3f,  y = %.3f,  z = %.3f"):format(loc.x, loc.y, loc.z)
-				box.TextColor3 = Color3.fromRGB(255, 245, 160)
-				if hint then
-					hint.Text = isBaked and ("hardcoded: " .. formatHardcodeEntry(world.id, loc))
-						or ("session: " .. formatHardcodeEntry(world.id, loc))
-				end
-			else
-				box.Text = "x = ?,  y = ?,  z = ?  (not set)"
-				box.TextColor3 = Color3.fromRGB(140, 170, 150)
-				if hint then
-					hint.Text = "Save in-game, then Copy → paste into WORLD_SPAWN_LOCATIONS"
-				end
-			end
-		end
-	end
-end
-
 local function styleTabButton(btn, active)
 	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
 	btn.TextColor3 = active and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
@@ -2477,14 +2497,14 @@ end
 
 local function setActiveTab(tabName)
 	activeTab = tabName
-	petsPanel.Visible = tabName == "pets"
-	worldsPanel.Visible = tabName == "worlds"
-	locationsPanel.Visible = tabName == "locations"
-	filtersBtn.Visible = tabName == "pets"
+	UI.petsPanel.Visible = tabName == "pets"
+	UI.worldsPanel.Visible = tabName == "worlds"
+	UI.locationsPanel.Visible = tabName == "locations"
+	UI.filtersBtn.Visible = tabName == "pets"
 
-	styleTabButton(tabPetsBtn, tabName == "pets")
-	styleTabButton(tabWorldsBtn, tabName == "worlds")
-	styleTabButton(tabLocationsBtn, tabName == "locations")
+	styleTabButton(UI.tabPetsBtn, tabName == "pets")
+	styleTabButton(UI.tabWorldsBtn, tabName == "worlds")
+	styleTabButton(UI.tabLocationsBtn, tabName == "locations")
 
 	if tabName == "pets" then
 		refreshList(false)
@@ -2497,8 +2517,8 @@ local function setActiveTab(tabName)
 end
 
 local function setFarmStatus(text)
-	farmStatusLabel.Text = text
-	worldHuntStatusLabel.Text = text
+	UI.farmStatusLabel.Text = text
+	UI.worldHuntStatusLabel.Text = text
 end
 
 local function isAnyFarmRunning()
@@ -2508,10 +2528,10 @@ end
 local function stopAllFarm()
 	autoFarmRunning = false
 	worldHuntRunning = false
-	farmStatusLabel.Text = "Farm idle"
-	worldHuntStatusLabel.Text = "World hunt idle"
-	farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
-	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+	UI.farmStatusLabel.Text = "Farm idle"
+	UI.worldHuntStatusLabel.Text = "World hunt idle"
+	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
 	if autoFarmThread then
 		task.cancel(autoFarmThread)
 		autoFarmThread = nil
@@ -2595,8 +2615,8 @@ local function startWorldFarm()
 	end
 	autoFarmRunning = true
 	worldHuntRunning = true
-	farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
-	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
+	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
+	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
 	setFarmStatus("World farm starting...")
 	if autoFarmThread then
 		task.cancel(autoFarmThread)
@@ -2625,13 +2645,13 @@ local function startAutoFarm()
 		if anyWorldPetsConfigured() then
 			startWorldFarm()
 		else
-			farmStatusLabel.Text = "Add pets on Pets tab or Worlds tab"
+			UI.farmStatusLabel.Text = "Add pets on Pets tab or Worlds tab"
 		end
 		return
 	end
 	autoFarmRunning = true
-	farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
-	farmStatusLabel.Text = "Farm starting..."
+	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
+	UI.farmStatusLabel.Text = "Farm starting..."
 	if autoFarmThread then
 		task.cancel(autoFarmThread)
 	end
@@ -2645,24 +2665,24 @@ local function startAutoFarm()
 			local target, targetP = pickNextFarmTarget(targets, lastFarmPriority)
 			if not target then
 				lastFarmPriority = 0
-				farmStatusLabel.Text = "Waiting for pets..."
+				UI.farmStatusLabel.Text = "Waiting for pets..."
 				task.wait(FARM_NO_TARGET_WAIT_SEC)
 			else
 				local model = target.model
 				local prio = targetP or getPetFilterPriority(target.name)
-				farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
+				UI.farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
 				teleportToPet(model)
 
 				for sec = FARM_WAIT_SEC, 1, -1 do
 					if not autoFarmRunning then
 						break
 					end
-					farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
+					UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
 					task.wait(1)
 				end
 
 				lastFarmPriority = prio
-				farmStatusLabel.Text = "Refreshing list..."
+				UI.farmStatusLabel.Text = "Refreshing list..."
 				pets = scanWorldPets()
 				populateList(applyNameFilters(pets), #pets)
 			end
@@ -2672,11 +2692,11 @@ end
 
 local function stopAutoRefresh()
 	autoRefreshRunning = false
-	autoRefreshBtn.Text = "Auto refresh: OFF"
-	autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
+	UI.autoRefreshBtn.Text = "Auto refresh: OFF"
+	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
 end
 
-refreshBtn.MouseButton1Click:Connect(function()
+UI.refreshBtn.MouseButton1Click:Connect(function()
 	if activeTab == "worlds" then
 		refreshWorldList(true)
 	else
@@ -2684,7 +2704,7 @@ refreshBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
-filterAddBtn.MouseButton1Click:Connect(function()
+UI.filterAddBtn.MouseButton1Click:Connect(function()
 	task.defer(addFilterFromInput)
 end)
 
@@ -2696,36 +2716,36 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 	local focused = UserInputService:GetFocusedTextBox()
-	if focused == filterInput then
+	if focused == UI.filterInput then
 		addFilterFromInput()
-	elseif focused == worldFilterInput then
+	elseif focused == UI.worldFilterInput then
 		addWorldFilterFromInput()
 	end
 end)
-filterClearBtn.MouseButton1Click:Connect(function()
+UI.filterClearBtn.MouseButton1Click:Connect(function()
 	table.clear(nameFilters)
-	filterInput.Text = ""
+	UI.filterInput.Text = ""
 	rebuildFilterChips()
 	refreshList(false)
 end)
-filtersBtn.MouseButton1Click:Connect(function()
+UI.filtersBtn.MouseButton1Click:Connect(function()
 	setFilterBarVisible(not filterBarVisible)
 end)
 
-tabPetsBtn.MouseButton1Click:Connect(function()
+UI.tabPetsBtn.MouseButton1Click:Connect(function()
 	setActiveTab("pets")
 end)
 
-tabWorldsBtn.MouseButton1Click:Connect(function()
+UI.tabWorldsBtn.MouseButton1Click:Connect(function()
 	setActiveTab("worlds")
 end)
 
-tabLocationsBtn.MouseButton1Click:Connect(function()
+UI.tabLocationsBtn.MouseButton1Click:Connect(function()
 	setActiveTab("locations")
 end)
 
 for _, world in ipairs(WORLD_ZONES) do
-	local btn = worldButtons[world.id]
+	local btn = UI.worldButtons[world.id]
 	if btn then
 		btn.MouseButton1Click:Connect(function()
 			selectWorld(world.id, true)
@@ -2733,37 +2753,37 @@ for _, world in ipairs(WORLD_ZONES) do
 	end
 end
 
-worldFilterAddBtn.MouseButton1Click:Connect(function()
+UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
 	task.defer(addWorldFilterFromInput)
 end)
 
-worldFilterClearBtn.MouseButton1Click:Connect(function()
+UI.worldFilterClearBtn.MouseButton1Click:Connect(function()
 	table.clear(getSelectedWorldFilters())
-	worldFilterInput.Text = ""
+	UI.worldFilterInput.Text = ""
 	rebuildWorldFilterChips()
 	refreshWorldList(false)
 end)
 
-worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
-worldHuntStopBtn.MouseButton1Click:Connect(stopWorldHunt)
+UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
+UI.worldHuntStopBtn.MouseButton1Click:Connect(stopWorldHunt)
 
-farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
-farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
+UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
+UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
-closeBtn.MouseButton1Click:Connect(function()
+UI.closeBtn.MouseButton1Click:Connect(function()
 	stopAutoRefresh()
 	stopAllFarm()
-	screen:Destroy()
+	UI.screen:Destroy()
 end)
 
-autoRefreshBtn.MouseButton1Click:Connect(function()
+UI.autoRefreshBtn.MouseButton1Click:Connect(function()
 	if autoRefreshRunning then
 		stopAutoRefresh()
 		return
 	end
 	autoRefreshRunning = true
-	autoRefreshBtn.Text = "Auto refresh: ON"
-	autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 70)
+	UI.autoRefreshBtn.Text = "Auto refresh: ON"
+	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 70)
 	if autoRefreshThread then
 		task.cancel(autoRefreshThread)
 	end
@@ -2779,17 +2799,15 @@ autoRefreshBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
-rebuildWorldFilterChips()
-
-local initOk, initErr = pcall(function()
-	if refreshLocationRows then
+task.defer(function()
+	local initOk, initErr = pcall(function()
+		rebuildWorldFilterChips()
 		refreshLocationRows()
+		refreshList()
+	end)
+	if not initOk then
+		warn("[BloxMonster] Init error:", initErr)
 	end
-	refreshList()
+	print(("[BloxMonster] v%s loaded"):format(VERSION))
+	task.defer(getWorldRemotes)
 end)
-if not initOk then
-	warn("[BloxMonster] UI init error:", initErr)
-end
-
-print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
-task.defer(getWorldRemotes)
