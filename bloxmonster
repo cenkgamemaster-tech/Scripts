@@ -13,13 +13,14 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.6"
+local VERSION = "1.7.9"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
 local WORLD_TELEPORT_SETTLE_SEC = 3
-local WORLD_CYCLE_WAIT_SEC = 120
+local WORLD_CYCLE_BONUS_SEC = 120
+local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
 local WORLD_ZONES = {
@@ -349,7 +350,7 @@ local worldPetFilters = {
 	astral_grove = {
 		{ name = "Orbitfin", priority = 1 },
 		{ name = "Pico", priority = 2 },
-		{ name = "Phant", priority = 3 },
+		{ name = "Pufflare", priority = 3 },
 	},
 }
 -- Session overrides from Locations tab Save (falls back to WORLD_SPAWN_LOCATIONS).
@@ -444,16 +445,44 @@ local function findFilterIndexByName(name)
 	return nil
 end
 
-local function getPetFilterPriority(petName, filters)
+local function resolvePetIdentity(petOrName)
+	if type(petOrName) == "table" then
+		return petOrName
+	end
+	return { name = tostring(petOrName or "") }
+end
+
+local function nameMatchesFilter(filterName, pet)
+	local fname = tostring(filterName or ""):lower()
+	local fcompact = compactName(filterName)
+	if fname == "" or fcompact == "" then
+		return false
+	end
+	local texts = {
+		tostring(pet.name or ""),
+		pet.model and pet.model.Name or "",
+		tostring(pet.path or ""),
+	}
+	for _, text in ipairs(texts) do
+		local lower = text:lower()
+		local comp = compactName(text)
+		if lower:find(fname, 1, true) or comp:find(fcompact, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function getPetFilterPriority(petOrName, filters)
 	filters = filters or nameFilters
 	if #filters == 0 then
 		return 999
 	end
+	local pet = resolvePetIdentity(petOrName)
 	local best = math.huge
-	local lowerName = tostring(petName or ""):lower()
 	for _, entry in ipairs(filters) do
 		local fname = getFilterName(entry)
-		if lowerName:find(fname:lower(), 1, true) then
+		if nameMatchesFilter(fname, pet) then
 			local p = getFilterPriority(entry)
 			if p < best then
 				best = p
@@ -463,12 +492,12 @@ local function getPetFilterPriority(petName, filters)
 	return best
 end
 
-local function petMatchesFilters(petName, filters)
+local function petMatchesFilters(petOrName, filters)
 	filters = filters or nameFilters
 	if #filters == 0 then
 		return true
 	end
-	return getPetFilterPriority(petName, filters) < math.huge
+	return getPetFilterPriority(petOrName, filters) < math.huge
 end
 
 local function applyNameFilters(pets, filters)
@@ -478,12 +507,12 @@ local function applyNameFilters(pets, filters)
 	end
 	local out = {}
 	for _, pet in ipairs(pets) do
-		if petMatchesFilters(pet.name, filters) then
+		if petMatchesFilters(pet, filters) then
 			table.insert(out, pet)
 		end
 	end
 	table.sort(out, function(a, b)
-		local pa, pb = getPetFilterPriority(a.name, filters), getPetFilterPriority(b.name, filters)
+		local pa, pb = getPetFilterPriority(a, filters), getPetFilterPriority(b, filters)
 		if pa ~= pb then
 			return pa < pb
 		end
@@ -503,7 +532,7 @@ local function pickNextFarmTarget(pets, skipBelowPriority, filters)
 	local best, bestP = nil, math.huge
 	for _, pet in ipairs(pets) do
 		if isValid(pet) then
-			local p = getPetFilterPriority(pet.name, filters)
+			local p = getPetFilterPriority(pet, filters)
 			if p > (skipBelowPriority or 0) and p < bestP then
 				bestP = p
 				best = pet
@@ -517,7 +546,7 @@ local function pickNextFarmTarget(pets, skipBelowPriority, filters)
 	bestP = math.huge
 	for _, pet in ipairs(pets) do
 		if isValid(pet) then
-			local p = getPetFilterPriority(pet.name, filters)
+			local p = getPetFilterPriority(pet, filters)
 			if p < bestP then
 				bestP = p
 				best = pet
@@ -588,10 +617,10 @@ local function pathMatchesWorld(path, worldConfig)
 	return false
 end
 
-local function getPetsInWorld(worldConfig)
-	local pets = getWorldPets()
+local function getPetsInWorld(worldConfig, allPets)
+	allPets = allPets or getWorldPets()
 	local out = {}
-	for _, pet in ipairs(pets) do
+	for _, pet in ipairs(allPets) do
 		if pathMatchesWorld(pet.path, worldConfig) then
 			table.insert(out, pet)
 		end
@@ -599,20 +628,46 @@ local function getPetsInWorld(worldConfig)
 	return out
 end
 
+-- Pets for a world: path match first, then filter-matched pets from full scan (spawn paths often omit zone names).
+local function getWorldVisiblePets(worldConfig, filters, allPets)
+	allPets = allPets or lastAllPets
+	if #allPets == 0 then
+		allPets = getWorldPets()
+	end
+
+	local byPath = getPetsInWorld(worldConfig, allPets)
+	if #byPath > 0 then
+		return byPath, allPets
+	end
+
+	if filters and #filters > 0 then
+		local byFilter = {}
+		for _, pet in ipairs(allPets) do
+			if petMatchesFilters(pet, filters) then
+				table.insert(byFilter, pet)
+			end
+		end
+		if #byFilter > 0 then
+			return byFilter, allPets
+		end
+	end
+
+	return {}, allPets
+end
+
 local function getWorldHuntTargets(worldConfig, filters)
-	local inWorld = applyNameFilters(getPetsInWorld(worldConfig), filters)
-	if #inWorld > 0 then
-		return inWorld
+	local allPets = lastAllPets
+	if #allPets == 0 then
+		local ok, pets = pcall(getWorldPets)
+		if ok and pets then
+			lastAllPets = pets
+			allPets = pets
+		else
+			allPets = {}
+		end
 	end
-	if #lastAllPets > 0 then
-		return applyNameFilters(lastAllPets, filters)
-	end
-	local ok, pets = pcall(getWorldPets)
-	if ok and pets then
-		lastAllPets = pets
-		return applyNameFilters(pets, filters)
-	end
-	return {}
+	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
+	return applyNameFilters(visible, filters)
 end
 
 local function getInstancePosition(inst)
@@ -2202,7 +2257,7 @@ local function setFilterBarVisible(visible)
 	end
 end
 
-local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfiltered, filters, countLbl)
+local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfiltered, filters, countLbl, totalScanned)
 	for _, child in ipairs(targetScroll:GetChildren()) do
 		if child ~= targetLayout and not child:IsA("UICorner") then
 			child:Destroy()
@@ -2226,8 +2281,10 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 			emptyMsg = "No wild pets found in this zone. Teleport to the world and tap Refresh."
 			if #filters > 0 and totalUnfiltered and totalUnfiltered > 0 then
 				emptyMsg = "No pets match your world filters. Try different names or tap Clear."
+			elseif #filters > 0 and totalScanned and totalScanned > 0 then
+				emptyMsg = "No pets match your world filters. Try different names or tap Clear."
 			elseif #filters > 0 then
-				emptyMsg = "No pets match your filters yet. Add e.g. Thornshade@1"
+				emptyMsg = "No matching pets nearby. Teleport to the world and tap Refresh."
 			end
 		else
 			emptyMsg = "No wild pets found. Walk around an adventure zone and tap Refresh."
@@ -2329,9 +2386,9 @@ local function populateList(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
-local function populateWorldList(pets, totalUnfiltered)
+local function populateWorldList(pets, totalUnfiltered, totalScanned)
 	local filters = getSelectedWorldFilters()
-	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil)
+	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
 
 local function rebuildFilterChips()
@@ -2437,38 +2494,34 @@ end
 refreshWorldList = function(rescan, worldConfig)
 	worldConfig = worldConfig or getSelectedWorldConfig()
 	if not worldConfig then
-		populateWorldList({}, 0)
+		populateWorldList({}, 0, 0)
 		return
 	end
 
-	local function showPets(allInWorld)
-		local filters = getSelectedWorldFilters()
-		local filtered = applyNameFilters(allInWorld, filters)
-		populateWorldList(filtered, #allInWorld)
+	local filters = getSelectedWorldFilters()
+
+	local function showPets(visiblePets, allPets)
+		local filtered = applyNameFilters(visiblePets, filters)
+		populateWorldList(filtered, #visiblePets, #allPets)
 	end
 
-	if rescan == false then
-		local cached = {}
-		for _, pet in ipairs(lastAllPets) do
-			if pathMatchesWorld(pet.path, worldConfig) then
-				table.insert(cached, pet)
-			end
-		end
-		if #cached > 0 then
-			showPets(cached)
+	local allPets = lastAllPets
+	if rescan ~= false or #allPets == 0 then
+		local ok, pets = pcall(getWorldPets)
+		if ok then
+			lastAllPets = pets
+			allPets = pets
+		else
+			lastAllPets = {}
+			allPets = {}
+			populateWorldList({}, 0, 0)
+			warn("[BloxMonster] World scan error:", pets)
 			return
 		end
 	end
 
-	local ok, pets = pcall(getWorldPets)
-	if ok then
-		lastAllPets = pets
-		local inWorld = getPetsInWorld(worldConfig)
-		showPets(inWorld)
-	else
-		populateWorldList({}, 0)
-		warn("[BloxMonster] World scan error:", pets)
-	end
+	local visiblePets, scannedPets = getWorldVisiblePets(worldConfig, filters, allPets)
+	showPets(visiblePets, scannedPets)
 end
 
 local function selectWorld(worldId, teleport)
@@ -2557,6 +2610,244 @@ local function refreshWorldFarmList(world, statusText)
 	end
 end
 
+local function collectAllFarmFilters()
+	local out = {}
+	local seen = {}
+	local function addFrom(filters)
+		if not filters then
+			return
+		end
+		for _, entry in ipairs(filters) do
+			local key = getFilterName(entry):lower()
+			if key ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(out, entry)
+			end
+		end
+	end
+	for _, world in ipairs(WORLD_ZONES) do
+		addFrom(worldPetFilters[world.id])
+	end
+	addFrom(nameFilters)
+	return out
+end
+
+local function collectBonusFarmFilters()
+	local out = {}
+	local seen = {}
+	local function addFrom(filters)
+		if not filters then
+			return
+		end
+		for _, entry in ipairs(filters) do
+			if getFilterPriority(entry) >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
+				local key = getFilterName(entry):lower()
+				if not seen[key] then
+					seen[key] = true
+					table.insert(out, entry)
+				end
+			end
+		end
+	end
+	for _, world in ipairs(WORLD_ZONES) do
+		addFrom(worldPetFilters[world.id])
+	end
+	addFrom(nameFilters)
+	return out
+end
+
+local function collectHighPriorityFarmFilters()
+	local out = {}
+	for _, entry in ipairs(collectAllFarmFilters()) do
+		if getFilterPriority(entry) < WORLD_CYCLE_BONUS_MIN_PRIORITY then
+			table.insert(out, entry)
+		end
+	end
+	return out
+end
+
+local function getWorldsWithFarmFilters()
+	local out = {}
+	for _, world in ipairs(WORLD_ZONES) do
+		local filters = worldPetFilters[world.id]
+		if filters and #filters > 0 then
+			table.insert(out, world)
+		end
+	end
+	return out
+end
+
+local function getWorldsWithBonusFilters()
+	local out = {}
+	for _, world in ipairs(WORLD_ZONES) do
+		local filters = worldPetFilters[world.id]
+		if filters then
+			for _, entry in ipairs(filters) do
+				if getFilterPriority(entry) >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
+					table.insert(out, world)
+					break
+				end
+			end
+		end
+	end
+	return out
+end
+
+local function formatBonusTimeLeft(secondsLeft)
+	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
+end
+
+local function findBetterPriorityTarget(pets, currentPrio)
+	local highFilters = collectHighPriorityFarmFilters()
+	if #highFilters == 0 then
+		return nil
+	end
+	local targets = applyNameFilters(pets, highFilters)
+	local best, bestP = pickNextFarmTarget(targets, 0, highFilters)
+	if best and bestP < currentPrio then
+		return best, bestP
+	end
+	return nil
+end
+
+local function pickBonusPhaseTarget(pets, lastBonusPriority)
+	local highFilters = collectHighPriorityFarmFilters()
+	if #highFilters > 0 then
+		local highTargets = applyNameFilters(pets, highFilters)
+		local target, targetP = pickNextFarmTarget(highTargets, 0, highFilters)
+		if target then
+			return target, targetP
+		end
+	end
+
+	local bonusFilters = collectBonusFarmFilters()
+	if #bonusFilters == 0 then
+		return nil
+	end
+	local targets = applyNameFilters(pets, bonusFilters)
+	return pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
+end
+
+local function scanForBonusTarget(lastBonusPriority, worldsToCheck)
+	local pets = scanWorldPets()
+	refreshList(true)
+	local target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
+	if target then
+		return target, targetP, pets
+	end
+
+	for _, world in ipairs(worldsToCheck) do
+		if not autoFarmRunning then
+			break
+		end
+		local tpOk = teleportToWorld(world)
+		if tpOk then
+			task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		end
+		selectedWorldId = world.id
+		highlightWorldButtons()
+		pets = scanWorldPets()
+		refreshWorldList(true, world)
+		if activeTab == "pets" then
+			refreshList(true)
+		end
+		target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
+		if target then
+			return target, targetP, pets
+		end
+	end
+
+	return nil, nil, pets
+end
+
+local function runPostCycleBonusFarm()
+	local bonusFilters = collectBonusFarmFilters()
+	if #bonusFilters == 0 then
+		setFarmStatus("Cycle bonus: no P3+ pets configured – skipping")
+		return
+	end
+
+	local endTime = os.clock() + WORLD_CYCLE_BONUS_SEC
+	local lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
+	local worldsToCheck = getWorldsWithFarmFilters()
+	if #worldsToCheck == 0 then
+		worldsToCheck = getWorldsWithBonusFilters()
+	end
+
+	while autoFarmRunning and os.clock() < endTime do
+		local timeLeft = math.ceil(endTime - os.clock())
+		setFarmStatus(("Cycle bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
+
+		local target, targetP
+		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck)
+
+		if not target then
+			timeLeft = math.ceil(endTime - os.clock())
+			setFarmStatus(("Cycle bonus P3+ (%s left) – no targets, retrying..."):format(formatBonusTimeLeft(timeLeft)))
+			task.wait(FARM_NO_TARGET_WAIT_SEC)
+		else
+			local prio = targetP or getPetFilterPriority(target.name, collectAllFarmFilters())
+			local waitComplete = false
+
+			while autoFarmRunning and os.clock() < endTime and not waitComplete do
+				timeLeft = math.ceil(endTime - os.clock())
+				local phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
+				setFarmStatus(("%s P%s: %s (%s left)"):format(
+					phaseLabel,
+					tostring(prio),
+					target.name,
+					formatBonusTimeLeft(timeLeft)
+				))
+				teleportToPet(target.model)
+
+				local interrupted = false
+				for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
+					if not autoFarmRunning or os.clock() >= endTime then
+						waitComplete = true
+						break
+					end
+					local better, betterP = findBetterPriorityTarget(scanWorldPets(), prio)
+					if better then
+						target = better
+						targetP = betterP
+						prio = betterP
+						timeLeft = math.ceil(endTime - os.clock())
+						setFarmStatus(("Switching to P%s: %s (%s left)"):format(
+							tostring(prio),
+							target.name,
+							formatBonusTimeLeft(timeLeft)
+						))
+						interrupted = true
+						break
+					end
+					timeLeft = math.ceil(endTime - os.clock())
+					phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
+					setFarmStatus(("%s P%s: %s – %ds (%s left)"):format(
+						phaseLabel,
+						tostring(prio),
+						target.name,
+						sec,
+						formatBonusTimeLeft(timeLeft)
+					))
+					task.wait(1)
+				end
+
+				if not interrupted then
+					waitComplete = true
+				end
+			end
+
+			if prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
+				lastBonusPriority = prio
+			else
+				lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
+			end
+			scanWorldPets()
+			refreshList(true)
+		end
+	end
+end
+
 local function runWorldFarmLoop()
 	while autoFarmRunning do
 		for _, world in ipairs(WORLD_ZONES) do
@@ -2607,16 +2898,7 @@ local function runWorldFarmLoop()
 			end
 		end
 		if autoFarmRunning then
-			for sec = WORLD_CYCLE_WAIT_SEC, 1, -1 do
-				if not autoFarmRunning then
-					break
-				end
-				setFarmStatus(("World cycle complete – next cycle in %dm %ds"):format(
-					math.floor(sec / 60),
-					sec % 60
-				))
-				task.wait(1)
-			end
+			runPostCycleBonusFarm()
 		end
 	end
 end
