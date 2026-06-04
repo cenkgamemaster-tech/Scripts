@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.1"
+local VERSION = "1.7.2"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -1625,6 +1625,38 @@ locationsListLayout.Padding = UDim.new(0, 6)
 locationsListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 locationsListLayout.Parent = locationsScroll
 
+local locationsStatusLabel = Instance.new("TextLabel")
+locationsStatusLabel.Size = UDim2.new(1, -8, 0, 22)
+locationsStatusLabel.Position = UDim2.new(0, 4, 1, -24)
+locationsStatusLabel.BackgroundTransparency = 1
+locationsStatusLabel.Text = "Save a spot in each world you farm"
+locationsStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+locationsStatusLabel.TextSize = 10
+locationsStatusLabel.Font = Enum.Font.Gotham
+locationsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+locationsStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+locationsStatusLabel.Parent = locationsPanel
+
+local locationsBottomRow = Instance.new("Frame")
+locationsBottomRow.Size = UDim2.new(1, -8, 0, 24)
+locationsBottomRow.Position = UDim2.new(0, 4, 1, -48)
+locationsBottomRow.BackgroundTransparency = 1
+locationsBottomRow.Parent = locationsPanel
+
+local copyAllBtn = Instance.new("TextButton")
+copyAllBtn.Size = UDim2.new(0, 88, 1, 0)
+copyAllBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
+copyAllBtn.BorderSizePixel = 0
+copyAllBtn.Text = "Copy all"
+copyAllBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
+copyAllBtn.TextSize = 10
+copyAllBtn.Font = Enum.Font.GothamBold
+copyAllBtn.Parent = locationsBottomRow
+
+local copyAllCorner = Instance.new("UICorner")
+copyAllCorner.CornerRadius = UDim.new(0, 4)
+copyAllCorner.Parent = copyAllBtn
+
 local locationCoordBoxes = {}
 local locationHardcodeLabels = {}
 local locationSaveButtons = {}
@@ -1726,8 +1758,6 @@ for i, world in ipairs(WORLD_ZONES) do
 	coordBox.TextSize = 12
 	coordBox.Font = Enum.Font.Code
 	coordBox.TextXAlignment = Enum.TextXAlignment.Left
-	coordBox.TextWrapped = true
-	coordBox.MultiLine = false
 	coordBox.Parent = row
 	locationCoordBoxes[world.id] = coordBox
 
@@ -1802,26 +1832,6 @@ for i, world in ipairs(WORLD_ZONES) do
 	end)
 end
 
-local locationsBottomRow = Instance.new("Frame")
-locationsBottomRow.Size = UDim2.new(1, -8, 0, 24)
-locationsBottomRow.Position = UDim2.new(0, 4, 1, -48)
-locationsBottomRow.BackgroundTransparency = 1
-locationsBottomRow.Parent = locationsPanel
-
-local copyAllBtn = Instance.new("TextButton")
-copyAllBtn.Size = UDim2.new(0, 88, 1, 0)
-copyAllBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
-copyAllBtn.BorderSizePixel = 0
-copyAllBtn.Text = "Copy all"
-copyAllBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
-copyAllBtn.TextSize = 10
-copyAllBtn.Font = Enum.Font.GothamBold
-copyAllBtn.Parent = locationsBottomRow
-
-local copyAllCorner = Instance.new("UICorner")
-copyAllCorner.CornerRadius = UDim.new(0, 4)
-copyAllCorner.Parent = copyAllBtn
-
 copyAllBtn.MouseButton1Click:Connect(function()
 	local block = formatHardcodeBlock()
 	local copied = copyText(block)
@@ -1829,18 +1839,6 @@ copyAllBtn.MouseButton1Click:Connect(function()
 		and "Copied all locations to clipboard"
 		or "Printed all locations to Output (F9) – paste into script"
 end)
-
-local locationsStatusLabel = Instance.new("TextLabel")
-locationsStatusLabel.Size = UDim2.new(1, -96, 0, 22)
-locationsStatusLabel.Position = UDim2.new(0, 92, 0, 1)
-locationsStatusLabel.BackgroundTransparency = 1
-locationsStatusLabel.Text = "Save a spot in each world you farm"
-locationsStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
-locationsStatusLabel.TextSize = 10
-locationsStatusLabel.Font = Enum.Font.Gotham
-locationsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-locationsStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
-locationsStatusLabel.Parent = locationsPanel
 
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
@@ -2718,8 +2716,16 @@ autoRefreshBtn.MouseButton1Click:Connect(function()
 end)
 
 rebuildWorldFilterChips()
-refreshLocationRows()
-refreshList()
+
+local initOk, initErr = pcall(function()
+	if refreshLocationRows then
+		refreshLocationRows()
+	end
+	refreshList()
+end)
+if not initOk then
+	warn("[BloxMonster] UI init error:", initErr)
+end
 
 print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
 task.defer(getWorldRemotes)
