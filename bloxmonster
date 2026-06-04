@@ -13,9 +13,10 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.13"
+local VERSION = "1.7.14"
 local AUTO_REFRESH_SEC = 3
 local SCAN_CACHE_SEC = 0.5
+local FARM_LIST_REFRESH_SEC = 1
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
@@ -2570,6 +2571,46 @@ local function applyListsFromPets(pets, worldConfig, worldFilters)
 	end
 end
 
+local function tickFarmLists(runId, world, filters, scanMode)
+	if runId and not shouldFarmContinue(runId) then
+		return false
+	end
+	local pets = getCachedWorldPets(scanMode or "auto")
+	if world then
+		applyListsFromPets(pets, world, filters or worldPetFilters[world.id] or {})
+	else
+		populateList(applyNameFilters(pets, nameFilters), #pets)
+	end
+	return runId == nil or shouldFarmContinue(runId)
+end
+
+local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting)
+	local nextRefreshIn = 0
+	for sec = waitSec, 1, -1 do
+		if keepWaiting and not keepWaiting() then
+			return false
+		end
+		if runId and not shouldFarmContinue(runId) then
+			return false
+		end
+		if onEachSecond and onEachSecond(sec) then
+			return "interrupt"
+		end
+		if onTick then
+			onTick(sec)
+		end
+		if nextRefreshIn <= 0 then
+			tickFarmLists(runId, world, filters, "auto")
+			nextRefreshIn = FARM_LIST_REFRESH_SEC
+		end
+		nextRefreshIn = nextRefreshIn - 1
+		if not farmWait(1, runId) then
+			return false
+		end
+	end
+	return true
+end
+
 refreshWorldList = function(rescan, worldConfig)
 	local ok, err = pcall(function()
 		worldConfig = worldConfig or getSelectedWorldConfig()
@@ -2891,14 +2932,20 @@ local function runPostCycleBonusFarm(runId)
 					formatBonusTimeLeft(timeLeft)
 				))
 				teleportToPet(target.model)
+				tickFarmLists(runId, nil, nil, "auto")
 
-				local interrupted = false
-				for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
-					if not shouldFarmContinue(runId) or os.clock() >= endTime then
-						waitComplete = true
-						break
-					end
-					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("light"), prio)
+				local waitResult = farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
+					timeLeft = math.ceil(endTime - os.clock())
+					local phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
+					setFarmStatus(("%s P%s: %s – %ds (%s left)"):format(
+						phaseLabel,
+						tostring(prio),
+						target.name,
+						sec,
+						formatBonusTimeLeft(timeLeft)
+					))
+				end, nil, nil, function()
+					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("auto"), prio)
 					if better then
 						target = better
 						targetP = betterP
@@ -2909,25 +2956,19 @@ local function runPostCycleBonusFarm(runId)
 							target.name,
 							formatBonusTimeLeft(timeLeft)
 						))
-						interrupted = true
-						break
+						return true
 					end
-					timeLeft = math.ceil(endTime - os.clock())
-					phaseLabel = prio < WORLD_CYCLE_BONUS_MIN_PRIORITY and "Priority" or "Bonus"
-					setFarmStatus(("%s P%s: %s – %ds (%s left)"):format(
-						phaseLabel,
-						tostring(prio),
-						target.name,
-						sec,
-						formatBonusTimeLeft(timeLeft)
-					))
-					if not farmWait(1, runId) then
-						waitComplete = true
-						break
-					end
-				end
+					return false
+				end, function()
+					return shouldFarmContinue(runId) and os.clock() < endTime
+				end)
 
-				if not interrupted then
+				if waitResult == "interrupt" then
+					-- switch to higher-priority pet and restart wait
+				elseif not waitResult then
+					waitComplete = true
+					break
+				else
 					waitComplete = true
 				end
 			end
@@ -2988,15 +3029,12 @@ local function runWorldFarmLoop(runId)
 					local prio = targetP or getPetFilterPriority(target.name, filters)
 					setFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
 					teleportToPet(target.model)
+					tickFarmLists(runId, world, filters, "auto")
 
-					for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
-						if not shouldFarmContinue(runId) then
-							break
-						end
+					if not farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
 						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
-						if not farmWait(1, runId) then
-							break
-						end
+					end, world, filters) then
+						break
 					end
 
 					if not shouldFarmContinue(runId) then
@@ -3004,7 +3042,7 @@ local function runWorldFarmLoop(runId)
 					end
 
 					lastWorldPriority = prio
-					if not refreshWorldFarmList(world, "Refreshing list...", runId) then
+					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
 						break
 					end
 				end
@@ -3104,15 +3142,12 @@ local function startAutoFarm()
 					local prio = targetP or getPetFilterPriority(target.name)
 					UI.farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
 					teleportToPet(model)
+					tickFarmLists(myRunId, nil, nil, "auto")
 
-					for sec = FARM_WAIT_SEC, 1, -1 do
-						if not shouldFarmContinue(myRunId) then
-							break
-						end
+					if not farmWaitWithListRefresh(FARM_WAIT_SEC, myRunId, function(sec)
 						UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
-						if not farmWait(1, myRunId) then
-							break
-						end
+					end, nil, nameFilters) then
+						break
 					end
 
 					if not shouldFarmContinue(myRunId) then
@@ -3121,7 +3156,7 @@ local function startAutoFarm()
 
 					lastFarmPriority = prio
 					UI.farmStatusLabel.Text = "Refreshing list..."
-					pets = getCachedWorldPets("auto")
+					pets = getCachedWorldPets("full")
 					populateList(applyNameFilters(pets), #pets)
 				end
 			end
