@@ -13,10 +13,36 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.5.0"
+local VERSION = "1.6.0"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
+local WORLD_HUNT_WAIT_SEC = 20
+local WORLD_TELEPORT_SETTLE_SEC = 2
+
+-- World zones: keywords match workspace paths; add pets per world on Worlds tab.
+local WORLD_ZONES = {
+	{
+		id = "misty_forest",
+		name = "Misty Forest",
+		keywords = { "misty", "forest" },
+	},
+	{
+		id = "lava_volcano",
+		name = "Lava Volcano",
+		keywords = { "lava", "volcano" },
+	},
+	{
+		id = "iceberg",
+		name = "Iceberg",
+		keywords = { "iceberg", "ice" },
+	},
+	{
+		id = "astral_grove",
+		name = "Astral Grove",
+		keywords = { "astral", "grove" },
+	},
+}
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
@@ -308,6 +334,18 @@ end
 local nameFilters = {}
 local autoFarmRunning = false
 local lastAllPets = {}
+local worldPetFilters = {
+	lava_volcano = { { name = "Thornshade", priority = 1 } },
+	astral_grove = {
+		{ name = "Orbitfin", priority = 1 },
+		{ name = "Pico", priority = 2 },
+		{ name = "Phant", priority = 3 },
+	},
+}
+local selectedWorldId = "lava_volcano"
+local worldHuntRunning = false
+local worldHuntThread = nil
+local activeTab = "pets"
 local scanWorldPets
 
 local function normalizeFilterName(text)
@@ -383,13 +421,14 @@ local function findFilterIndexByName(name)
 	return nil
 end
 
-local function getPetFilterPriority(petName)
-	if #nameFilters == 0 then
+local function getPetFilterPriority(petName, filters)
+	filters = filters or nameFilters
+	if #filters == 0 then
 		return 999
 	end
 	local best = math.huge
 	local lowerName = tostring(petName or ""):lower()
-	for _, entry in ipairs(nameFilters) do
+	for _, entry in ipairs(filters) do
 		local fname = getFilterName(entry)
 		if lowerName:find(fname:lower(), 1, true) then
 			local p = getFilterPriority(entry)
@@ -401,25 +440,27 @@ local function getPetFilterPriority(petName)
 	return best
 end
 
-local function petMatchesFilters(petName)
-	if #nameFilters == 0 then
+local function petMatchesFilters(petName, filters)
+	filters = filters or nameFilters
+	if #filters == 0 then
 		return true
 	end
-	return getPetFilterPriority(petName) < math.huge
+	return getPetFilterPriority(petName, filters) < math.huge
 end
 
-local function applyNameFilters(pets)
-	if #nameFilters == 0 then
+local function applyNameFilters(pets, filters)
+	filters = filters or nameFilters
+	if #filters == 0 then
 		return pets
 	end
 	local out = {}
 	for _, pet in ipairs(pets) do
-		if petMatchesFilters(pet.name) then
+		if petMatchesFilters(pet.name, filters) then
 			table.insert(out, pet)
 		end
 	end
 	table.sort(out, function(a, b)
-		local pa, pb = getPetFilterPriority(a.name), getPetFilterPriority(b.name)
+		local pa, pb = getPetFilterPriority(a.name, filters), getPetFilterPriority(b.name, filters)
 		if pa ~= pb then
 			return pa < pb
 		end
@@ -431,8 +472,7 @@ local function applyNameFilters(pets)
 	return out
 end
 
--- Pick next pet: prefer priority > skipBelowPriority, then wrap to P1.
-local function pickNextFarmTarget(pets, skipBelowPriority)
+local function pickNextFarmTarget(pets, skipBelowPriority, filters)
 	local function isValid(pet)
 		return pet.model and pet.model.Parent
 	end
@@ -440,7 +480,7 @@ local function pickNextFarmTarget(pets, skipBelowPriority)
 	local best, bestP = nil, math.huge
 	for _, pet in ipairs(pets) do
 		if isValid(pet) then
-			local p = getPetFilterPriority(pet.name)
+			local p = getPetFilterPriority(pet.name, filters)
 			if p > (skipBelowPriority or 0) and p < bestP then
 				bestP = p
 				best = pet
@@ -454,7 +494,7 @@ local function pickNextFarmTarget(pets, skipBelowPriority)
 	bestP = math.huge
 	for _, pet in ipairs(pets) do
 		if isValid(pet) then
-			local p = getPetFilterPriority(pet.name)
+			local p = getPetFilterPriority(pet.name, filters)
 			if p < bestP then
 				bestP = p
 				best = pet
@@ -462,6 +502,101 @@ local function pickNextFarmTarget(pets, skipBelowPriority)
 		end
 	end
 	return best, bestP
+end
+
+local function pathMatchesWorld(path, worldConfig)
+	local lower = tostring(path or ""):lower()
+	for _, kw in ipairs(worldConfig.keywords) do
+		if lower:find(kw:lower(), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function getPetsInWorld(worldConfig)
+	local pets = getWorldPets()
+	local out = {}
+	for _, pet in ipairs(pets) do
+		if pathMatchesWorld(pet.path, worldConfig) then
+			table.insert(out, pet)
+		end
+	end
+	return out
+end
+
+local function getInstancePosition(inst)
+	if not inst then
+		return nil
+	end
+	if inst:IsA("BasePart") then
+		return inst.Position
+	end
+	if inst:IsA("Model") then
+		local ok, pivot = pcall(function() return inst:GetPivot() end)
+		if ok and pivot then
+			return pivot.Position
+		end
+		if inst.PrimaryPart then
+			return inst.PrimaryPart.Position
+		end
+	end
+	return nil
+end
+
+local function findWorldTeleportPosition(worldConfig)
+	local bestPos, bestScore = nil, 0
+	for _, inst in ipairs(Workspace:GetDescendants()) do
+		local nameLower = inst.Name:lower()
+		local fullLower = ""
+		pcall(function() fullLower = inst:GetFullName():lower() end)
+
+		local score = 0
+		for _, kw in ipairs(worldConfig.keywords) do
+			local k = kw:lower()
+			if nameLower:find(k, 1, true) or fullLower:find(k, 1, true) then
+				score = score + 1
+			end
+		end
+		if score > 0 then
+			if inst:IsA("SpawnLocation") then
+				score = score + 4
+			elseif nameLower:find("spawn", 1, true) or nameLower:find("teleport", 1, true) or nameLower:find("portal", 1, true) then
+				score = score + 3
+			elseif inst:IsA("BasePart") then
+				score = score + 2
+			elseif inst:IsA("Model") then
+				score = score + 1
+			end
+			local pos = getInstancePosition(inst)
+			if pos and score > bestScore then
+				bestScore = score
+				bestPos = pos
+			end
+		end
+	end
+	return bestPos
+end
+
+local function teleportPlayerToPosition(pos)
+	local char = LocalPlayer.Character
+	if not char or not pos then
+		return false
+	end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return false
+	end
+	root.CFrame = CFrame.new(pos + Vector3.new(0, 4, 0))
+	return true
+end
+
+local function teleportToWorld(worldConfig)
+	local pos = findWorldTeleportPosition(worldConfig)
+	if pos then
+		return teleportPlayerToPosition(pos)
+	end
+	return false
 end
 
 scanWorldPets = function()
@@ -625,14 +760,62 @@ closeBtn.TextSize = 20
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.Parent = top
 
+local CONTENT_TOP = 60
+local CONTENT_HEIGHT = 352
+
+local tabBar = Instance.new("Frame")
+tabBar.Name = "TabBar"
+tabBar.Size = UDim2.new(1, -16, 0, 28)
+tabBar.Position = UDim2.new(0, 8, 0, 32)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = main
+
+local tabPetsBtn = Instance.new("TextButton")
+tabPetsBtn.Name = "TabPets"
+tabPetsBtn.Size = UDim2.new(0.5, -2, 1, 0)
+tabPetsBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+tabPetsBtn.BorderSizePixel = 0
+tabPetsBtn.Text = "Pets"
+tabPetsBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+tabPetsBtn.TextSize = 12
+tabPetsBtn.Font = Enum.Font.GothamBold
+tabPetsBtn.Parent = tabBar
+
+local tabPetsCorner = Instance.new("UICorner")
+tabPetsCorner.CornerRadius = UDim.new(0, 6)
+tabPetsCorner.Parent = tabPetsBtn
+
+local tabWorldsBtn = Instance.new("TextButton")
+tabWorldsBtn.Name = "TabWorlds"
+tabWorldsBtn.Size = UDim2.new(0.5, -2, 1, 0)
+tabWorldsBtn.Position = UDim2.new(0.5, 2, 0, 0)
+tabWorldsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+tabWorldsBtn.BorderSizePixel = 0
+tabWorldsBtn.Text = "Worlds"
+tabWorldsBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+tabWorldsBtn.TextSize = 12
+tabWorldsBtn.Font = Enum.Font.GothamBold
+tabWorldsBtn.Parent = tabBar
+
+local tabWorldsCorner = Instance.new("UICorner")
+tabWorldsCorner.CornerRadius = UDim.new(0, 6)
+tabWorldsCorner.Parent = tabWorldsBtn
+
+local petsPanel = Instance.new("Frame")
+petsPanel.Name = "PetsPanel"
+petsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
+petsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+petsPanel.BackgroundTransparency = 1
+petsPanel.Parent = main
+
 local filterBar = Instance.new("Frame")
 filterBar.Name = "FilterBar"
-filterBar.Size = UDim2.new(1, -16, 0, 72)
-filterBar.Position = UDim2.new(0, 8, 0, 36)
+filterBar.Size = UDim2.new(1, 0, 0, 72)
+filterBar.Position = UDim2.new(0, 0, 0, 0)
 filterBar.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
 filterBar.BorderSizePixel = 0
 filterBar.Visible = true
-filterBar.Parent = main
+filterBar.Parent = petsPanel
 
 local filterBarCorner = Instance.new("UICorner")
 filterBarCorner.CornerRadius = UDim.new(0, 6)
@@ -731,8 +914,8 @@ filterChipLayout.Parent = filterChipScroll
 
 local scroll = Instance.new("ScrollingFrame")
 scroll.Name = "List"
-scroll.Size = UDim2.new(1, -16, 1, -188)
-scroll.Position = UDim2.new(0, 8, 0, 112)
+scroll.Size = UDim2.new(1, 0, 1, -76)
+scroll.Position = UDim2.new(0, 0, 0, 76)
 scroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 8
@@ -740,7 +923,7 @@ scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
 scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 scroll.ScrollingDirection = Enum.ScrollingDirection.Y
-scroll.Parent = main
+scroll.Parent = petsPanel
 
 local scrollCorner = Instance.new("UICorner")
 scrollCorner.CornerRadius = UDim.new(0, 6)
@@ -750,6 +933,234 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 4)
 listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 listLayout.Parent = scroll
+
+local worldsPanel = Instance.new("Frame")
+worldsPanel.Name = "WorldsPanel"
+worldsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
+worldsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+worldsPanel.BackgroundTransparency = 1
+worldsPanel.Visible = false
+worldsPanel.Parent = main
+
+local worldHint = Instance.new("TextLabel")
+worldHint.Size = UDim2.new(1, -8, 0, 14)
+worldHint.Position = UDim2.new(0, 4, 0, 2)
+worldHint.BackgroundTransparency = 1
+worldHint.Text = "Pick a world, add pets (e.g. Thornshade@1), teleport & hunt"
+worldHint.TextColor3 = Color3.fromRGB(150, 190, 160)
+worldHint.TextSize = 10
+worldHint.Font = Enum.Font.Gotham
+worldHint.TextXAlignment = Enum.TextXAlignment.Left
+worldHint.Parent = worldsPanel
+
+local worldBtnGrid = Instance.new("Frame")
+worldBtnGrid.Size = UDim2.new(1, 0, 0, 56)
+worldBtnGrid.Position = UDim2.new(0, 0, 0, 18)
+worldBtnGrid.BackgroundTransparency = 1
+worldBtnGrid.Parent = worldsPanel
+
+local worldBtnLayout = Instance.new("UIGridLayout")
+worldBtnLayout.CellSize = UDim2.new(0.5, -4, 0, 26)
+worldBtnLayout.CellPadding = UDim2.new(0, 4, 0, 4)
+worldBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+worldBtnLayout.Parent = worldBtnGrid
+
+local worldButtons = {}
+for i, world in ipairs(WORLD_ZONES) do
+	local btn = Instance.new("TextButton")
+	btn.Name = world.id
+	btn.LayoutOrder = i
+	btn.BackgroundColor3 = world.id == selectedWorldId
+		and Color3.fromRGB(50, 100, 70)
+		or Color3.fromRGB(35, 55, 75)
+	btn.BorderSizePixel = 0
+	btn.Text = world.name
+	btn.TextColor3 = Color3.fromRGB(220, 255, 220)
+	btn.TextSize = 10
+	btn.Font = Enum.Font.GothamBold
+	btn.TextWrapped = true
+	btn.Parent = worldBtnGrid
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 4)
+	btnCorner.Parent = btn
+
+	worldButtons[world.id] = btn
+end
+
+local worldSelectedLabel = Instance.new("TextLabel")
+worldSelectedLabel.Size = UDim2.new(1, -8, 0, 16)
+worldSelectedLabel.Position = UDim2.new(0, 4, 0, 78)
+worldSelectedLabel.BackgroundTransparency = 1
+worldSelectedLabel.Text = "Selected: Lava Volcano"
+worldSelectedLabel.TextColor3 = Color3.fromRGB(180, 220, 190)
+worldSelectedLabel.TextSize = 11
+worldSelectedLabel.Font = Enum.Font.GothamBold
+worldSelectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+worldSelectedLabel.TextTruncate = Enum.TextTruncate.AtEnd
+worldSelectedLabel.Parent = worldsPanel
+
+local worldFilterBar = Instance.new("Frame")
+worldFilterBar.Size = UDim2.new(1, 0, 0, 72)
+worldFilterBar.Position = UDim2.new(0, 0, 0, 96)
+worldFilterBar.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
+worldFilterBar.BorderSizePixel = 0
+worldFilterBar.Parent = worldsPanel
+
+local worldFilterBarCorner = Instance.new("UICorner")
+worldFilterBarCorner.CornerRadius = UDim.new(0, 6)
+worldFilterBarCorner.Parent = worldFilterBar
+
+local worldFilterHint = Instance.new("TextLabel")
+worldFilterHint.Size = UDim2.new(1, -12, 0, 14)
+worldFilterHint.Position = UDim2.new(0, 6, 0, 4)
+worldFilterHint.BackgroundTransparency = 1
+worldFilterHint.Text = "Pets for this world: Name@priority (e.g. Thornshade@1)"
+worldFilterHint.TextColor3 = Color3.fromRGB(150, 190, 160)
+worldFilterHint.TextSize = 10
+worldFilterHint.Font = Enum.Font.Gotham
+worldFilterHint.TextXAlignment = Enum.TextXAlignment.Left
+worldFilterHint.Parent = worldFilterBar
+
+local worldFilterInput = Instance.new("TextBox")
+worldFilterInput.Size = UDim2.new(1, -120, 0, 24)
+worldFilterInput.Position = UDim2.new(0, 6, 0, 20)
+worldFilterInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
+worldFilterInput.BorderSizePixel = 0
+worldFilterInput.ClearTextOnFocus = false
+worldFilterInput.PlaceholderText = "Thornshade@1"
+worldFilterInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
+worldFilterInput.Text = ""
+worldFilterInput.TextColor3 = Color3.fromRGB(220, 255, 220)
+worldFilterInput.TextSize = 12
+worldFilterInput.Font = Enum.Font.Gotham
+worldFilterInput.TextXAlignment = Enum.TextXAlignment.Left
+worldFilterInput.Parent = worldFilterBar
+
+local worldFilterInputCorner = Instance.new("UICorner")
+worldFilterInputCorner.CornerRadius = UDim.new(0, 4)
+worldFilterInputCorner.Parent = worldFilterInput
+
+local worldFilterInputPad = Instance.new("UIPadding")
+worldFilterInputPad.PaddingLeft = UDim.new(0, 6)
+worldFilterInputPad.Parent = worldFilterInput
+
+local worldFilterAddBtn = Instance.new("TextButton")
+worldFilterAddBtn.Size = UDim2.new(0, 44, 0, 24)
+worldFilterAddBtn.Position = UDim2.new(1, -98, 0, 20)
+worldFilterAddBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+worldFilterAddBtn.BorderSizePixel = 0
+worldFilterAddBtn.Text = "Add"
+worldFilterAddBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+worldFilterAddBtn.TextSize = 11
+worldFilterAddBtn.Font = Enum.Font.GothamBold
+worldFilterAddBtn.Parent = worldFilterBar
+
+local worldFilterAddCorner = Instance.new("UICorner")
+worldFilterAddCorner.CornerRadius = UDim.new(0, 4)
+worldFilterAddCorner.Parent = worldFilterAddBtn
+
+local worldFilterClearBtn = Instance.new("TextButton")
+worldFilterClearBtn.Size = UDim2.new(0, 44, 0, 24)
+worldFilterClearBtn.Position = UDim2.new(1, -50, 0, 20)
+worldFilterClearBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 45)
+worldFilterClearBtn.BorderSizePixel = 0
+worldFilterClearBtn.Text = "Clear"
+worldFilterClearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+worldFilterClearBtn.TextSize = 11
+worldFilterClearBtn.Font = Enum.Font.Gotham
+worldFilterClearBtn.Parent = worldFilterBar
+
+local worldFilterClearCorner = Instance.new("UICorner")
+worldFilterClearCorner.CornerRadius = UDim.new(0, 4)
+worldFilterClearCorner.Parent = worldFilterClearBtn
+
+local worldFilterChipScroll = Instance.new("ScrollingFrame")
+worldFilterChipScroll.Size = UDim2.new(1, -12, 0, 22)
+worldFilterChipScroll.Position = UDim2.new(0, 6, 0, 48)
+worldFilterChipScroll.BackgroundTransparency = 1
+worldFilterChipScroll.BorderSizePixel = 0
+worldFilterChipScroll.ScrollBarThickness = 4
+worldFilterChipScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
+worldFilterChipScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+worldFilterChipScroll.AutomaticCanvasSize = Enum.AutomaticSize.X
+worldFilterChipScroll.ScrollingDirection = Enum.ScrollingDirection.X
+worldFilterChipScroll.Parent = worldFilterBar
+
+local worldFilterChipLayout = Instance.new("UIListLayout")
+worldFilterChipLayout.FillDirection = Enum.FillDirection.Horizontal
+worldFilterChipLayout.Padding = UDim.new(0, 4)
+worldFilterChipLayout.SortOrder = Enum.SortOrder.LayoutOrder
+worldFilterChipLayout.Parent = worldFilterChipScroll
+
+local worldHuntRow = Instance.new("Frame")
+worldHuntRow.Size = UDim2.new(1, 0, 0, 28)
+worldHuntRow.Position = UDim2.new(0, 0, 0, 172)
+worldHuntRow.BackgroundTransparency = 1
+worldHuntRow.Parent = worldsPanel
+
+local worldHuntStartBtn = Instance.new("TextButton")
+worldHuntStartBtn.Size = UDim2.new(0, 72, 1, 0)
+worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+worldHuntStartBtn.BorderSizePixel = 0
+worldHuntStartBtn.Text = "Start hunt"
+worldHuntStartBtn.TextColor3 = Color3.fromRGB(220, 255, 255)
+worldHuntStartBtn.TextSize = 11
+worldHuntStartBtn.Font = Enum.Font.GothamBold
+worldHuntStartBtn.Parent = worldHuntRow
+
+local worldHuntStartCorner = Instance.new("UICorner")
+worldHuntStartCorner.CornerRadius = UDim.new(0, 6)
+worldHuntStartCorner.Parent = worldHuntStartBtn
+
+local worldHuntStopBtn = Instance.new("TextButton")
+worldHuntStopBtn.Size = UDim2.new(0, 72, 1, 0)
+worldHuntStopBtn.Position = UDim2.new(0, 78, 0, 0)
+worldHuntStopBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+worldHuntStopBtn.BorderSizePixel = 0
+worldHuntStopBtn.Text = "Stop hunt"
+worldHuntStopBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+worldHuntStopBtn.TextSize = 11
+worldHuntStopBtn.Font = Enum.Font.GothamBold
+worldHuntStopBtn.Parent = worldHuntRow
+
+local worldHuntStopCorner = Instance.new("UICorner")
+worldHuntStopCorner.CornerRadius = UDim.new(0, 6)
+worldHuntStopCorner.Parent = worldHuntStopBtn
+
+local worldHuntStatusLabel = Instance.new("TextLabel")
+worldHuntStatusLabel.Size = UDim2.new(1, -160, 1, 0)
+worldHuntStatusLabel.Position = UDim2.new(0, 156, 0, 0)
+worldHuntStatusLabel.BackgroundTransparency = 1
+worldHuntStatusLabel.Text = "World hunt idle"
+worldHuntStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+worldHuntStatusLabel.TextSize = 11
+worldHuntStatusLabel.Font = Enum.Font.Gotham
+worldHuntStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+worldHuntStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+worldHuntStatusLabel.Parent = worldHuntRow
+
+local worldScroll = Instance.new("ScrollingFrame")
+worldScroll.Name = "WorldList"
+worldScroll.Size = UDim2.new(1, 0, 1, -204)
+worldScroll.Position = UDim2.new(0, 0, 0, 204)
+worldScroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
+worldScroll.BorderSizePixel = 0
+worldScroll.ScrollBarThickness = 8
+worldScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
+worldScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+worldScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+worldScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+worldScroll.Parent = worldsPanel
+
+local worldScrollCorner = Instance.new("UICorner")
+worldScrollCorner.CornerRadius = UDim.new(0, 6)
+worldScrollCorner.Parent = worldScroll
+
+local worldListLayout = Instance.new("UIListLayout")
+worldListLayout.Padding = UDim.new(0, 4)
+worldListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+worldListLayout.Parent = worldScroll
 
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
@@ -847,6 +1258,292 @@ local autoFarmThread = nil
 local filterBarVisible = true
 
 local refreshList
+local refreshWorldList
+
+local function getWorldConfigById(worldId)
+	for _, world in ipairs(WORLD_ZONES) do
+		if world.id == worldId then
+			return world
+		end
+	end
+	return nil
+end
+
+local function getSelectedWorldConfig()
+	return getWorldConfigById(selectedWorldId)
+end
+
+local function getSelectedWorldFilters()
+	if not worldPetFilters[selectedWorldId] then
+		worldPetFilters[selectedWorldId] = {}
+	end
+	return worldPetFilters[selectedWorldId]
+end
+
+local function findWorldFilterIndexByName(name)
+	local filters = getSelectedWorldFilters()
+	local lower = name:lower()
+	for idx, entry in ipairs(filters) do
+		if getFilterName(entry):lower() == lower then
+			return idx
+		end
+	end
+	return nil
+end
+
+local function updateWorldSelectedLabel()
+	local world = getSelectedWorldConfig()
+	local filters = getSelectedWorldFilters()
+	local names = {}
+	for _, entry in ipairs(filters) do
+		table.insert(names, getFilterName(entry) .. "@" .. tostring(getFilterPriority(entry)))
+	end
+	local petText = #names > 0 and table.concat(names, ", ") or "no pets configured"
+	worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
+end
+
+local function highlightWorldButtons()
+	for worldId, btn in pairs(worldButtons) do
+		if worldId == selectedWorldId then
+			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+		else
+			btn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+		end
+	end
+end
+
+local function rebuildWorldFilterChips()
+	for _, child in ipairs(worldFilterChipScroll:GetChildren()) do
+		if child ~= worldFilterChipLayout then
+			child:Destroy()
+		end
+	end
+	local filters = getSelectedWorldFilters()
+	table.sort(filters, function(a, b)
+		local pa, pb = getFilterPriority(a), getFilterPriority(b)
+		if pa ~= pb then
+			return pa < pb
+		end
+		return getFilterName(a):lower() < getFilterName(b):lower()
+	end)
+	for i, entry in ipairs(filters) do
+		local filterName = getFilterName(entry)
+		local priority = getFilterPriority(entry)
+		local chipText = ("P%s %s"):format(tostring(priority), filterName)
+
+		local chip = Instance.new("TextButton")
+		chip.Size = UDim2.new(0, math.max(80, #chipText * 7 + 24), 0, 22)
+		chip.BackgroundColor3 = Color3.fromRGB(45, 75, 65)
+		chip.BorderSizePixel = 0
+		chip.LayoutOrder = i
+		chip.Text = chipText .. "  ×"
+		chip.TextColor3 = Color3.fromRGB(200, 255, 200)
+		chip.TextSize = 11
+		chip.Font = Enum.Font.Gotham
+		chip.AutoButtonColor = true
+		chip.Parent = worldFilterChipScroll
+
+		local chipCorner = Instance.new("UICorner")
+		chipCorner.CornerRadius = UDim.new(0, 4)
+		chipCorner.Parent = chip
+
+		local capturedName = filterName
+		chip.MouseButton1Click:Connect(function()
+			local idx = findWorldFilterIndexByName(capturedName)
+			if idx then
+				table.remove(getSelectedWorldFilters(), idx)
+			end
+			rebuildWorldFilterChips()
+			updateWorldSelectedLabel()
+			if refreshWorldList then
+				refreshWorldList(false)
+			end
+		end)
+	end
+	updateWorldSelectedLabel()
+end
+
+local function addWorldFilterFromInput()
+	local raw = worldFilterInput.Text
+	if raw == "" then
+		worldFilterHint.Text = "Type: Thornshade@1"
+		return
+	end
+
+	local filters = getSelectedWorldFilters()
+	local added = 0
+	for _, part in ipairs(splitFilterParts(raw)) do
+		local name, prio = parseFilterEntry(part)
+		if name ~= nil and prio ~= nil then
+			local existingIdx = findWorldFilterIndexByName(name)
+			if existingIdx then
+				filters[existingIdx].priority = prio
+			else
+				table.insert(filters, { name = name, priority = prio })
+			end
+			added = added + 1
+		end
+	end
+
+	if added > 0 then
+		worldFilterInput.Text = ""
+		worldFilterHint.Text = ("Added %d pet(s) for this world."):format(added)
+		rebuildWorldFilterChips()
+		if refreshWorldList then
+			refreshWorldList(false)
+		end
+	else
+		worldFilterHint.Text = "Invalid format – use Name@priority (e.g. Thornshade@1)"
+	end
+end
+
+local function setFilterBarVisible(visible)
+	filterBarVisible = visible
+	filterBar.Visible = visible
+	if visible then
+		scroll.Size = UDim2.new(1, 0, 1, -76)
+		scroll.Position = UDim2.new(0, 0, 0, 76)
+		filtersBtn.Text = "Filters"
+		filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
+	else
+		scroll.Size = UDim2.new(1, 0, 1, -4)
+		scroll.Position = UDim2.new(0, 0, 0, 4)
+		filtersBtn.Text = "Filters ▾"
+		filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
+	end
+end
+
+local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfiltered, filters, countLbl)
+	for _, child in ipairs(targetScroll:GetChildren()) do
+		if child ~= targetLayout and not child:IsA("UICorner") then
+			child:Destroy()
+		end
+	end
+
+	if countLbl then
+		local countText = tostring(#pets) .. " pet" .. (#pets == 1 and "" or "s")
+		if #filters > 0 and totalUnfiltered then
+			countText = countText .. " / " .. tostring(totalUnfiltered)
+		end
+		countLbl.Text = countText
+	end
+
+	if #pets == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.Size = UDim2.new(1, -8, 0, 40)
+		empty.BackgroundTransparency = 1
+		local emptyMsg
+		if targetScroll == worldScroll then
+			emptyMsg = "No wild pets found in this zone. Teleport to the world and tap Refresh."
+			if #filters > 0 and totalUnfiltered and totalUnfiltered > 0 then
+				emptyMsg = "No pets match your world filters. Try different names or tap Clear."
+			elseif #filters > 0 then
+				emptyMsg = "No pets match your filters yet. Add e.g. Thornshade@1"
+			end
+		else
+			emptyMsg = "No wild pets found. Walk around an adventure zone and tap Refresh."
+			if #filters > 0 and totalUnfiltered and totalUnfiltered > 0 then
+				emptyMsg = "No pets match your filters. Try different names or tap Clear."
+			elseif #filters > 0 then
+				emptyMsg = "No pets match your filters yet. Add e.g. Orbitfin@1, Phant@3, Pico@2"
+			end
+		end
+		empty.Text = emptyMsg
+		empty.TextColor3 = Color3.fromRGB(180, 200, 180)
+		empty.TextSize = 12
+		empty.Font = Enum.Font.Gotham
+		empty.TextWrapped = true
+		empty.LayoutOrder = 1
+		empty.Parent = targetScroll
+		return
+	end
+
+	for i, pet in ipairs(pets) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 52)
+		row.BackgroundColor3 = Color3.fromRGB(32, 50, 72)
+		row.LayoutOrder = i
+		row.Parent = targetScroll
+
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 4)
+		rowCorner.Parent = row
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Size = UDim2.new(1, -70, 0, 18)
+		nameLabel.Position = UDim2.new(0, 8, 0, 4)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Text = pet.name
+		nameLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+		nameLabel.TextSize = 13
+		nameLabel.Font = Enum.Font.GothamBold
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		nameLabel.Parent = row
+
+		local distText = pet.distance and ("%.0f studs"):format(pet.distance) or "?"
+		local prioText = ""
+		if #filters > 0 then
+			prioText = ("P%s | "):format(tostring(getPetFilterPriority(pet.name, filters)))
+		end
+		local infoLabel = Instance.new("TextLabel")
+		infoLabel.Size = UDim2.new(1, -70, 0, 16)
+		infoLabel.Position = UDim2.new(0, 8, 0, 22)
+		infoLabel.BackgroundTransparency = 1
+		infoLabel.Text = prioText .. ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
+			pet.rarity, pet.tier, pet.level, pet.mutation, distText
+		)
+		infoLabel.TextColor3 = Color3.fromRGB(160, 210, 170)
+		infoLabel.TextSize = 11
+		infoLabel.Font = Enum.Font.Gotham
+		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+		infoLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		infoLabel.Parent = row
+
+		local pathLabel = Instance.new("TextLabel")
+		pathLabel.Size = UDim2.new(1, -70, 0, 14)
+		pathLabel.Position = UDim2.new(0, 8, 0, 36)
+		pathLabel.BackgroundTransparency = 1
+		pathLabel.Text = pet.path
+		pathLabel.TextColor3 = Color3.fromRGB(120, 150, 130)
+		pathLabel.TextSize = 9
+		pathLabel.Font = Enum.Font.Code
+		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		pathLabel.Parent = row
+
+		local tpBtn = Instance.new("TextButton")
+		tpBtn.Size = UDim2.new(0, 56, 0, 24)
+		tpBtn.Position = UDim2.new(1, -62, 0.5, -12)
+		tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+		tpBtn.BorderSizePixel = 0
+		tpBtn.Text = "Go"
+		tpBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+		tpBtn.TextSize = 11
+		tpBtn.Font = Enum.Font.GothamBold
+		tpBtn.Parent = row
+
+		local tpCorner = Instance.new("UICorner")
+		tpCorner.CornerRadius = UDim.new(0, 4)
+		tpCorner.Parent = tpBtn
+
+		local modelRef = pet.model
+		tpBtn.MouseButton1Click:Connect(function()
+			if modelRef and modelRef.Parent then
+				teleportToPet(modelRef)
+			end
+		end)
+	end
+end
+
+local function populateList(pets, totalUnfiltered)
+	populatePetScroll(scroll, listLayout, pets, totalUnfiltered, nameFilters, countLabel)
+end
+
+local function populateWorldList(pets, totalUnfiltered)
+	local filters = getSelectedWorldFilters()
+	populatePetScroll(worldScroll, worldListLayout, pets, totalUnfiltered, filters, nil)
+end
 
 local function rebuildFilterChips()
 	for _, child in ipairs(filterChipScroll:GetChildren()) do
@@ -930,133 +1627,6 @@ local function addFilterFromInput()
 	end
 end
 
-local function setFilterBarVisible(visible)
-	filterBarVisible = visible
-	filterBar.Visible = visible
-	if visible then
-		scroll.Size = UDim2.new(1, -16, 1, -188)
-		scroll.Position = UDim2.new(0, 8, 0, 112)
-		filtersBtn.Text = "Filters"
-		filtersBtn.BackgroundColor3 = Color3.fromRGB(55, 85, 55)
-	else
-		scroll.Size = UDim2.new(1, -16, 1, -112)
-		scroll.Position = UDim2.new(0, 8, 0, 40)
-		filtersBtn.Text = "Filters ▾"
-		filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
-	end
-end
-
-local function populateList(pets, totalUnfiltered)
-	for _, child in ipairs(scroll:GetChildren()) do
-		if child ~= listLayout and not child:IsA("UICorner") then
-			child:Destroy()
-		end
-	end
-
-	local countText = tostring(#pets) .. " pet" .. (#pets == 1 and "" or "s")
-	if #nameFilters > 0 and totalUnfiltered then
-		countText = countText .. " / " .. tostring(totalUnfiltered)
-	end
-	countLabel.Text = countText
-
-	if #pets == 0 then
-		local empty = Instance.new("TextLabel")
-		empty.Size = UDim2.new(1, -8, 0, 40)
-		empty.BackgroundTransparency = 1
-		local emptyMsg = "No wild pets found. Walk around an adventure zone and tap Refresh."
-		if #nameFilters > 0 and totalUnfiltered and totalUnfiltered > 0 then
-			emptyMsg = "No pets match your filters. Try different names or tap Clear."
-		elseif #nameFilters > 0 then
-			emptyMsg = "No pets match your filters yet. Add e.g. Orbitfin@1, Phant@3, Pico@2"
-		end
-		empty.Text = emptyMsg
-		empty.TextColor3 = Color3.fromRGB(180, 200, 180)
-		empty.TextSize = 12
-		empty.Font = Enum.Font.Gotham
-		empty.TextWrapped = true
-		empty.LayoutOrder = 1
-		empty.Parent = scroll
-		return
-	end
-
-	for i, pet in ipairs(pets) do
-		local row = Instance.new("Frame")
-		row.Size = UDim2.new(1, -8, 0, 52)
-		row.BackgroundColor3 = Color3.fromRGB(32, 50, 72)
-		row.LayoutOrder = i
-		row.Parent = scroll
-
-		local rowCorner = Instance.new("UICorner")
-		rowCorner.CornerRadius = UDim.new(0, 4)
-		rowCorner.Parent = row
-
-		local nameLabel = Instance.new("TextLabel")
-		nameLabel.Size = UDim2.new(1, -70, 0, 18)
-		nameLabel.Position = UDim2.new(0, 8, 0, 4)
-		nameLabel.BackgroundTransparency = 1
-		nameLabel.Text = pet.name
-		nameLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
-		nameLabel.TextSize = 13
-		nameLabel.Font = Enum.Font.GothamBold
-		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
-		nameLabel.Parent = row
-
-		local distText = pet.distance and ("%.0f studs"):format(pet.distance) or "?"
-		local prioText = ""
-		if #nameFilters > 0 then
-			prioText = ("P%s | "):format(tostring(getPetFilterPriority(pet.name)))
-		end
-		local infoLabel = Instance.new("TextLabel")
-		infoLabel.Size = UDim2.new(1, -70, 0, 16)
-		infoLabel.Position = UDim2.new(0, 8, 0, 22)
-		infoLabel.BackgroundTransparency = 1
-		infoLabel.Text = prioText .. ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
-			pet.rarity, pet.tier, pet.level, pet.mutation, distText
-		)
-		infoLabel.TextColor3 = Color3.fromRGB(160, 210, 170)
-		infoLabel.TextSize = 11
-		infoLabel.Font = Enum.Font.Gotham
-		infoLabel.TextXAlignment = Enum.TextXAlignment.Left
-		infoLabel.TextTruncate = Enum.TextTruncate.AtEnd
-		infoLabel.Parent = row
-
-		local pathLabel = Instance.new("TextLabel")
-		pathLabel.Size = UDim2.new(1, -70, 0, 14)
-		pathLabel.Position = UDim2.new(0, 8, 0, 36)
-		pathLabel.BackgroundTransparency = 1
-		pathLabel.Text = pet.path
-		pathLabel.TextColor3 = Color3.fromRGB(120, 150, 130)
-		pathLabel.TextSize = 9
-		pathLabel.Font = Enum.Font.Code
-		pathLabel.TextXAlignment = Enum.TextXAlignment.Left
-		pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
-		pathLabel.Parent = row
-
-		local tpBtn = Instance.new("TextButton")
-		tpBtn.Size = UDim2.new(0, 56, 0, 24)
-		tpBtn.Position = UDim2.new(1, -62, 0.5, -12)
-		tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
-		tpBtn.BorderSizePixel = 0
-		tpBtn.Text = "Go"
-		tpBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
-		tpBtn.TextSize = 11
-		tpBtn.Font = Enum.Font.GothamBold
-		tpBtn.Parent = row
-
-		local tpCorner = Instance.new("UICorner")
-		tpCorner.CornerRadius = UDim.new(0, 4)
-		tpCorner.Parent = tpBtn
-
-		local modelRef = pet.model
-		tpBtn.MouseButton1Click:Connect(function()
-			if modelRef and modelRef.Parent then
-				teleportToPet(modelRef)
-			end
-		end)
-	end
-end
-
 refreshList = function(rescan)
 	if rescan == false and #lastAllPets > 0 then
 		local filtered = applyNameFilters(lastAllPets)
@@ -1073,6 +1643,151 @@ refreshList = function(rescan)
 		populateList({}, 0)
 		warn("[BloxMonster] Scan error:", pets)
 	end
+end
+
+refreshWorldList = function(rescan, worldConfig)
+	worldConfig = worldConfig or getSelectedWorldConfig()
+	if not worldConfig then
+		populateWorldList({}, 0)
+		return
+	end
+
+	local function showPets(allInWorld)
+		local filters = getSelectedWorldFilters()
+		local filtered = applyNameFilters(allInWorld, filters)
+		populateWorldList(filtered, #allInWorld)
+	end
+
+	if rescan == false then
+		local cached = {}
+		for _, pet in ipairs(lastAllPets) do
+			if pathMatchesWorld(pet.path, worldConfig) then
+				table.insert(cached, pet)
+			end
+		end
+		if #cached > 0 then
+			showPets(cached)
+			return
+		end
+	end
+
+	local ok, pets = pcall(getWorldPets)
+	if ok then
+		lastAllPets = pets
+		local inWorld = getPetsInWorld(worldConfig)
+		showPets(inWorld)
+	else
+		populateWorldList({}, 0)
+		warn("[BloxMonster] World scan error:", pets)
+	end
+end
+
+local function selectWorld(worldId, teleport)
+	selectedWorldId = worldId
+	highlightWorldButtons()
+	rebuildWorldFilterChips()
+	if teleport then
+		local world = getWorldConfigById(worldId)
+		if world then
+			worldHuntStatusLabel.Text = "Teleporting to " .. world.name .. "..."
+			local ok = teleportToWorld(world)
+			worldHuntStatusLabel.Text = ok and ("At " .. world.name) or ("Could not find " .. world.name .. " spawn")
+			task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		end
+	end
+	refreshWorldList(true)
+end
+
+local function setActiveTab(tabName)
+	activeTab = tabName
+	local isPets = tabName == "pets"
+	petsPanel.Visible = isPets
+	worldsPanel.Visible = not isPets
+	filtersBtn.Visible = isPets
+
+	tabPetsBtn.BackgroundColor3 = isPets and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
+	tabPetsBtn.TextColor3 = isPets and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
+	tabWorldsBtn.BackgroundColor3 = isPets and Color3.fromRGB(35, 55, 75) or Color3.fromRGB(50, 100, 70)
+	tabWorldsBtn.TextColor3 = isPets and Color3.fromRGB(180, 210, 190) or Color3.fromRGB(220, 255, 220)
+
+	if isPets then
+		refreshList(false)
+	else
+		rebuildWorldFilterChips()
+		refreshWorldList(false)
+	end
+end
+
+local function stopWorldHunt()
+	worldHuntRunning = false
+	worldHuntStatusLabel.Text = "World hunt idle"
+	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+end
+
+local function startWorldHunt()
+	if worldHuntRunning then
+		return
+	end
+	worldHuntRunning = true
+	worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
+	worldHuntStatusLabel.Text = "World hunt starting..."
+	if worldHuntThread then
+		task.cancel(worldHuntThread)
+	end
+	worldHuntThread = task.spawn(function()
+		while worldHuntRunning do
+			for _, world in ipairs(WORLD_ZONES) do
+				if not worldHuntRunning then
+					break
+				end
+				local filters = worldPetFilters[world.id]
+				if filters and #filters > 0 then
+					selectedWorldId = world.id
+					highlightWorldButtons()
+					rebuildWorldFilterChips()
+
+					worldHuntStatusLabel.Text = "Going to " .. world.name .. "..."
+					local tpOk = teleportToWorld(world)
+					if not tpOk then
+						worldHuntStatusLabel.Text = "No spawn for " .. world.name .. ", skipping..."
+						task.wait(FARM_NO_TARGET_WAIT_SEC)
+					else
+						task.wait(WORLD_TELEPORT_SETTLE_SEC)
+					end
+
+					local lastWorldPriority = 0
+					while worldHuntRunning do
+						local pets = getPetsInWorld(world)
+						refreshWorldList(false, world)
+
+						local targets = applyNameFilters(pets, filters)
+						local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
+						if not target then
+							break
+						end
+
+						local prio = targetP or getPetFilterPriority(target.name, filters)
+						worldHuntStatusLabel.Text = ("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name)
+						teleportToPet(target.model)
+
+						for sec = WORLD_HUNT_WAIT_SEC, 1, -1 do
+							if not worldHuntRunning then
+								break
+							end
+							worldHuntStatusLabel.Text = ("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec)
+							task.wait(1)
+						end
+
+						lastWorldPriority = prio
+					end
+				end
+			end
+			if worldHuntRunning then
+				worldHuntStatusLabel.Text = "Cycle complete – restarting..."
+				task.wait(FARM_NO_TARGET_WAIT_SEC)
+			end
+		end
+	end)
 end
 
 local function stopAutoFarm()
@@ -1136,7 +1851,13 @@ local function stopAutoRefresh()
 	autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
 end
 
-refreshBtn.MouseButton1Click:Connect(refreshList)
+refreshBtn.MouseButton1Click:Connect(function()
+	if activeTab == "worlds" then
+		refreshWorldList(true)
+	else
+		refreshList(true)
+	end
+end)
 
 filterAddBtn.MouseButton1Click:Connect(function()
 	task.defer(addFilterFromInput)
@@ -1152,6 +1873,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	local focused = UserInputService:GetFocusedTextBox()
 	if focused == filterInput then
 		addFilterFromInput()
+	elseif focused == worldFilterInput then
+		addWorldFilterFromInput()
 	end
 end)
 filterClearBtn.MouseButton1Click:Connect(function()
@@ -1164,12 +1887,44 @@ filtersBtn.MouseButton1Click:Connect(function()
 	setFilterBarVisible(not filterBarVisible)
 end)
 
+tabPetsBtn.MouseButton1Click:Connect(function()
+	setActiveTab("pets")
+end)
+
+tabWorldsBtn.MouseButton1Click:Connect(function()
+	setActiveTab("worlds")
+end)
+
+for _, world in ipairs(WORLD_ZONES) do
+	local btn = worldButtons[world.id]
+	if btn then
+		btn.MouseButton1Click:Connect(function()
+			selectWorld(world.id, true)
+		end)
+	end
+end
+
+worldFilterAddBtn.MouseButton1Click:Connect(function()
+	task.defer(addWorldFilterFromInput)
+end)
+
+worldFilterClearBtn.MouseButton1Click:Connect(function()
+	table.clear(getSelectedWorldFilters())
+	worldFilterInput.Text = ""
+	rebuildWorldFilterChips()
+	refreshWorldList(false)
+end)
+
+worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
+worldHuntStopBtn.MouseButton1Click:Connect(stopWorldHunt)
+
 farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
 farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
 closeBtn.MouseButton1Click:Connect(function()
 	stopAutoRefresh()
 	stopAutoFarm()
+	stopWorldHunt()
 	screen:Destroy()
 end)
 
@@ -1186,12 +1941,17 @@ autoRefreshBtn.MouseButton1Click:Connect(function()
 	end
 	autoRefreshThread = task.spawn(function()
 		while autoRefreshRunning do
-			refreshList()
+			if activeTab == "worlds" then
+				refreshWorldList(true)
+			else
+				refreshList(true)
+			end
 			task.wait(AUTO_REFRESH_SEC)
 		end
 	end)
 end)
 
+rebuildWorldFilterChips()
 refreshList()
 
 print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
