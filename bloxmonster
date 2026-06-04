@@ -13,8 +13,9 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.12"
-local AUTO_REFRESH_SEC = 5
+local VERSION = "1.7.13"
+local AUTO_REFRESH_SEC = 3
+local SCAN_CACHE_SEC = 0.5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
@@ -66,6 +67,10 @@ local PET_ATTR_KEYS = {
 
 -- BillboardGui label names to read for display.
 local BILLBOARD_LABELS = { "Name", "PetName", "MonsterName", "Rarity", "Tier", "Level", "Mutation", "Shiny" }
+local BILLBOARD_LABEL_SET = {}
+for _, labelName in ipairs(BILLBOARD_LABELS) do
+	BILLBOARD_LABEL_SET[labelName] = true
+end
 
 local RARITY_ORDER = {
 	Secret = 1, Mythic = 2, Legendary = 3, Epic = 4, Rare = 5,
@@ -184,62 +189,6 @@ local function getBillboardInfo(model)
 	return info
 end
 
-local function hasBillboardGui(model)
-	for _, desc in ipairs(model:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			return true
-		end
-	end
-	return false
-end
-
-local function hasCatchPrompt(model)
-	for _, desc in ipairs(model:GetDescendants()) do
-		if desc:IsA("ProximityPrompt") then
-			local action = (desc.ActionText or ""):lower()
-			local obj = (desc.ObjectText or ""):lower()
-			if action:find("catch", 1, true) or action:find("battle", 1, true)
-				or action:find("fight", 1, true) or obj:find("catch", 1, true) then
-				return true
-			end
-		end
-	end
-	return false
-end
-
-local function countPetSignals(model)
-	local score = 0
-	if model:FindFirstChildOfClass("Humanoid") then
-		score = score + 1
-	end
-	if hasBillboardGui(model) then
-		score = score + 2
-	end
-	if hasCatchPrompt(model) then
-		score = score + 2
-	end
-	for _, key in ipairs(PET_ATTR_KEYS) do
-		if getAttr(model, key) ~= nil then
-			score = score + 1
-			break
-		end
-	end
-	return score
-end
-
-local function looksLikeWildPet(model)
-	if not model or model.ClassName ~= "Model" then
-		return false
-	end
-	if isPlayerCharacter(model) or isEquippedPet(model) then
-		return false
-	end
-	if not isUnderPath(model, WORKSPACE_PREFIX) then
-		return false
-	end
-	return countPetSignals(model) >= 2
-end
-
 local function getModelPosition(model)
 	local ok, pivot = pcall(function() return model:GetPivot() end)
 	if ok and pivot then
@@ -268,20 +217,99 @@ local function getDistanceToPlayer(model)
 	return (root.Position - pos).Magnitude
 end
 
-local function buildPetEntry(model)
-	local bb = getBillboardInfo(model)
-	local petName = bb.PetName or bb.MonsterName or bb.Name
-		or select(1, getFirstMatchingAttr(model, { "PetName", "MonsterName", "Monster", "Name" }))
-		or model.Name
+local function getPlayerCharacterSet()
+	local set = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr.Character then
+			set[plr.Character] = true
+		end
+	end
+	return set
+end
 
-	local rarity = bb.Rarity or select(1, getFirstMatchingAttr(model, { "Rarity", "Tier" }))
+local function isEquippedPetPath(fullName)
+	if fullName:find("Players%.", 1, true) then
+		return true
+	end
+	local lower = fullName:lower()
+	if lower:find("equipped", 1, true) or lower:find("follower", 1, true) or lower:find("followpet", 1, true)
+		or lower:find("playerpet", 1, true) or lower:find("mypet", 1, true) or lower:find("backpack", 1, true) then
+		return true
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if lower:find(plr.Name:lower(), 1, true) and lower:find("pet", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function tryBuildPetEntry(model, playerChars)
+	if not model or model.ClassName ~= "Model" or playerChars[model] then
+		return nil
+	end
+	if WORKSPACE_PREFIX and WORKSPACE_PREFIX ~= "" and not isUnderPath(model, WORKSPACE_PREFIX) then
+		return nil
+	end
+
+	local okName, fullName = pcall(function() return model:GetFullName() end)
+	if not okName or not fullName or isEquippedPetPath(fullName) then
+		return nil
+	end
+
+	local score = model:FindFirstChildOfClass("Humanoid") and 1 or 0
+	local bb = {}
+	local hasBillboard = false
+	local hasCatchPrompt = false
+
+	for _, key in ipairs(PET_ATTR_KEYS) do
+		if getAttr(model, key) ~= nil then
+			score = score + 1
+			break
+		end
+	end
+
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			hasBillboard = true
+		elseif desc:IsA("ProximityPrompt") then
+			local action = (desc.ActionText or ""):lower()
+			local obj = (desc.ObjectText or ""):lower()
+			if action:find("catch", 1, true) or action:find("battle", 1, true)
+				or action:find("fight", 1, true) or obj:find("catch", 1, true) then
+				hasCatchPrompt = true
+			end
+		elseif (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
+			if BILLBOARD_LABEL_SET[desc.Name] then
+				bb[desc.Name] = desc.Text
+			end
+		elseif desc.GetAttribute then
+			for _, key in ipairs(PET_ATTR_KEYS) do
+				if getAttr(desc, key) ~= nil then
+					score = score + 1
+					break
+				end
+			end
+		end
+	end
+
+	if hasBillboard then
+		score = score + 2
+	end
+	if hasCatchPrompt then
+		score = score + 2
+	end
+	if score < 2 then
+		return nil
+	end
+
+	local petName = bb.PetName or bb.MonsterName or bb.Name or model.Name
+	local rarity = bb.Rarity
 	local tier = bb.Tier or getAttr(model, "Tier")
 	local level = bb.Level or getAttr(model, "Level")
 	local mutation = bb.Mutation or getAttr(model, "Mutation")
 	local shiny = bb.Shiny or getAttr(model, "Shiny")
-
 	local rarityKey = rarity and tostring(rarity):gsub("^%s+", ""):gsub("%s+$", "") or ""
-	local sortKey = RARITY_ORDER[rarityKey] or RARITY_ORDER[tostring(tier or "")] or 99
 
 	return {
 		model = model,
@@ -292,11 +320,8 @@ local function buildPetEntry(model)
 		mutation = mutation and tostring(mutation) or "—",
 		shiny = shiny and tostring(shiny) or "—",
 		distance = getDistanceToPlayer(model),
-		path = (function()
-			local okPath, fullName = pcall(function() return model:GetFullName() end)
-			return (okPath and fullName) or model.Name
-		end)(),
-		sortKey = sortKey,
+		path = fullName,
+		sortKey = RARITY_ORDER[rarityKey] or RARITY_ORDER[tostring(tier or "")] or 99,
 	}
 end
 
@@ -304,16 +329,14 @@ local function getWorldPets()
 	local root = getScanRoot()
 	local found = {}
 	local seen = {}
+	local playerChars = getPlayerCharacterSet()
 
 	local function consider(model)
 		if seen[model] then
 			return
 		end
-		if not looksLikeWildPet(model) then
-			return
-		end
 		seen[model] = true
-		local ok, entry = pcall(buildPetEntry, model)
+		local ok, entry = pcall(tryBuildPetEntry, model, playerChars)
 		if ok and entry then
 			table.insert(found, entry)
 		end
@@ -345,6 +368,43 @@ end
 local nameFilters = {}
 local autoFarmRunning = false
 local lastAllPets = {}
+local lastScanClock = 0
+
+local function refreshCachedPetsLight()
+	local out = {}
+	for _, pet in ipairs(lastAllPets) do
+		if pet.model and pet.model.Parent then
+			pet.distance = getDistanceToPlayer(pet.model)
+			table.insert(out, pet)
+		end
+	end
+	lastAllPets = out
+	return out
+end
+
+local function getCachedWorldPets(scanMode)
+	scanMode = scanMode or "auto"
+	if scanMode == "light" then
+		if #lastAllPets == 0 then
+			scanMode = "full"
+		else
+			return refreshCachedPetsLight()
+		end
+	end
+	local now = os.clock()
+	if scanMode ~= "full" and #lastAllPets > 0 and (now - lastScanClock) < SCAN_CACHE_SEC then
+		return refreshCachedPetsLight()
+	end
+	lastScanClock = now
+	local ok, pets = pcall(getWorldPets)
+	if ok and pets then
+		lastAllPets = pets
+		return pets
+	end
+	lastAllPets = {}
+	return {}
+end
+
 local worldPetFilters = {
 	lava_volcano = { { name = "Thornshade", priority = 1 } },
 	astral_grove = {
@@ -642,7 +702,9 @@ local function pathMatchesWorld(path, worldConfig)
 end
 
 local function getPetsInWorld(worldConfig, allPets)
-	allPets = allPets or getWorldPets()
+	if not allPets then
+		allPets = getCachedWorldPets("auto")
+	end
 	local out = {}
 	for _, pet in ipairs(allPets) do
 		if pathMatchesWorld(pet.path, worldConfig) then
@@ -654,9 +716,8 @@ end
 
 -- Pets for a world: path match first, then filter-matched pets from full scan (spawn paths often omit zone names).
 local function getWorldVisiblePets(worldConfig, filters, allPets)
-	allPets = allPets or lastAllPets
-	if #allPets == 0 then
-		allPets = getWorldPets()
+	if not allPets or #allPets == 0 then
+		allPets = getCachedWorldPets("auto")
 	end
 
 	local byPath = getPetsInWorld(worldConfig, allPets)
@@ -680,16 +741,7 @@ local function getWorldVisiblePets(worldConfig, filters, allPets)
 end
 
 local function getWorldHuntTargets(worldConfig, filters)
-	local allPets = lastAllPets
-	if #allPets == 0 then
-		local ok, pets = pcall(getWorldPets)
-		if ok and pets then
-			lastAllPets = pets
-			allPets = pets
-		else
-			allPets = {}
-		end
-	end
+	local allPets = getCachedWorldPets("auto")
 	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
 	return applyNameFilters(visible, filters)
 end
@@ -1146,14 +1198,8 @@ local function teleportToWorld(worldConfig)
 	return false, nil
 end
 
-scanWorldPets = function()
-	local ok, pets = pcall(getWorldPets)
-	if ok and pets then
-		lastAllPets = pets
-		return pets
-	end
-	lastAllPets = {}
-	return {}
+scanWorldPets = function(forceFull)
+	return getCachedWorldPets(forceFull and "full" or "auto")
 end
 
 local function makeDraggable(frame, dragHandles)
@@ -2499,24 +2545,28 @@ end
 
 refreshList = function(rescan)
 	local ok, err = pcall(function()
-		if rescan == false and #lastAllPets > 0 then
-			local filtered = applyNameFilters(lastAllPets)
-			populateList(filtered, #lastAllPets)
-			return
+		local scanMode = "auto"
+		if rescan == true then
+			scanMode = "full"
+		elseif rescan == false then
+			scanMode = "light"
 		end
-		local scanOk, pets = pcall(getWorldPets)
-		if scanOk then
-			lastAllPets = pets
-			local filtered = applyNameFilters(pets)
-			populateList(filtered, #pets)
-		else
-			lastAllPets = {}
-			populateList({}, 0)
-			warn("[BloxMonster] Scan error:", pets)
-		end
+		local pets = getCachedWorldPets(scanMode)
+		local filtered = applyNameFilters(pets)
+		populateList(filtered, #pets)
 	end)
 	if not ok then
 		warn("[BloxMonster] Refresh error:", err)
+	end
+end
+
+local function applyListsFromPets(pets, worldConfig, worldFilters)
+	local filteredPets = applyNameFilters(pets)
+	populateList(filteredPets, #pets)
+	if worldConfig then
+		local visiblePets = getWorldVisiblePets(worldConfig, worldFilters, pets)
+		local filteredWorld = applyNameFilters(visiblePets, worldFilters)
+		populateWorldList(filteredWorld, #visiblePets, #pets)
 	end
 end
 
@@ -2528,30 +2578,17 @@ refreshWorldList = function(rescan, worldConfig)
 			return
 		end
 
+		local scanMode = "auto"
+		if rescan == true then
+			scanMode = "full"
+		elseif rescan == false then
+			scanMode = "light"
+		end
+		local pets = getCachedWorldPets(scanMode)
 		local filters = getSelectedWorldFilters()
-
-		local function showPets(visiblePets, allPets)
-			local filtered = applyNameFilters(visiblePets, filters)
-			populateWorldList(filtered, #visiblePets, #allPets)
-		end
-
-		local allPets = lastAllPets
-		if rescan ~= false or #allPets == 0 then
-			local scanOk, pets = pcall(getWorldPets)
-			if scanOk then
-				lastAllPets = pets
-				allPets = pets
-			else
-				lastAllPets = {}
-				allPets = {}
-				populateWorldList({}, 0, 0)
-				warn("[BloxMonster] World scan error:", pets)
-				return
-			end
-		end
-
-		local visiblePets, scannedPets = getWorldVisiblePets(worldConfig, filters, allPets)
-		showPets(visiblePets, scannedPets)
+		local visiblePets = getWorldVisiblePets(worldConfig, filters, pets)
+		local filtered = applyNameFilters(visiblePets, filters)
+		populateWorldList(filtered, #visiblePets, #pets)
 	end)
 	if not ok then
 		warn("[BloxMonster] World refresh error:", err)
@@ -2635,17 +2672,19 @@ local function stopWorldHunt()
 	stopAllFarm()
 end
 
-local function refreshWorldFarmList(world, statusText, runId)
+local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	if runId and not shouldFarmContinue(runId) then
 		return false
 	end
 	if statusText then
 		setFarmStatus(statusText)
 	end
-	refreshWorldList(true, world)
-	if activeTab == "pets" then
-		refreshList(true)
+	local pets = getCachedWorldPets(scanMode or "auto")
+	if runId and not shouldFarmContinue(runId) then
+		return false
 	end
+	local filters = worldPetFilters[world.id] or {}
+	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId)
 end
 
@@ -2771,11 +2810,11 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
 	if not shouldFarmContinue(runId) then
 		return nil, nil, {}
 	end
-	local pets = scanWorldPets()
+	local pets = getCachedWorldPets("auto")
 	if not shouldFarmContinue(runId) then
 		return nil, nil, pets
 	end
-	refreshList(true)
+	applyListsFromPets(pets, nil, nil)
 	local target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
 	if target then
 		return target, targetP, pets
@@ -2793,14 +2832,11 @@ local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId)
 		end
 		selectedWorldId = world.id
 		highlightWorldButtons()
-		pets = scanWorldPets()
+		pets = getCachedWorldPets("auto")
 		if not shouldFarmContinue(runId) then
 			break
 		end
-		refreshWorldList(true, world)
-		if activeTab == "pets" then
-			refreshList(true)
-		end
+		applyListsFromPets(pets, world, worldPetFilters[world.id] or {})
 		target, targetP = pickBonusPhaseTarget(pets, lastBonusPriority)
 		if target then
 			return target, targetP, pets
@@ -2862,7 +2898,7 @@ local function runPostCycleBonusFarm(runId)
 						waitComplete = true
 						break
 					end
-					local better, betterP = findBetterPriorityTarget(scanWorldPets(), prio)
+					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("light"), prio)
 					if better then
 						target = better
 						targetP = betterP
@@ -2905,8 +2941,8 @@ local function runPostCycleBonusFarm(runId)
 			else
 				lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
 			end
-			scanWorldPets()
-			refreshList(true)
+			getCachedWorldPets("auto")
+			refreshList(false)
 		end
 	end
 end
@@ -3049,7 +3085,7 @@ local function startAutoFarm()
 		local lastFarmPriority = 0
 		local ok, err = pcall(function()
 			while shouldFarmContinue(myRunId) do
-				local pets = scanWorldPets()
+				local pets = getCachedWorldPets("auto")
 				if not shouldFarmContinue(myRunId) then
 					break
 				end
@@ -3085,7 +3121,7 @@ local function startAutoFarm()
 
 					lastFarmPriority = prio
 					UI.farmStatusLabel.Text = "Refreshing list..."
-					pets = scanWorldPets()
+					pets = getCachedWorldPets("auto")
 					populateList(applyNameFilters(pets), #pets)
 				end
 			end
