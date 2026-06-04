@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.16"
+local VERSION = "1.7.17"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -370,19 +370,8 @@ local nameFilters = {}
 local autoFarmRunning = false
 local lastAllPets = {}
 local lastScanClock = 0
-local lastPetsListSig = ""
-local lastWorldListSig = ""
-
-local function petsListSignature(pets)
-	local parts = { tostring(#pets) }
-	for i, pet in ipairs(pets) do
-		if i > 30 then
-			break
-		end
-		parts[#parts + 1] = tostring(pet.name) .. ":" .. tostring(pet.model)
-	end
-	return table.concat(parts, "|")
-end
+local lastLightPetsCount = -1
+local lastLightWorldCount = -1
 
 local function refreshCachedPetsLight()
 	local out = {}
@@ -2565,34 +2554,22 @@ refreshList = function(rescan)
 		elseif rescan == false then
 			scanMode = "light"
 		end
-		if scanMode == "full" then
-			lastPetsListSig = ""
-		end
 		local pets = getCachedWorldPets(scanMode)
 		local filtered = applyNameFilters(pets)
 		populateList(filtered, #pets)
-		lastPetsListSig = petsListSignature(filtered)
 	end)
 	if not ok then
 		warn("[BloxMonster] Refresh error:", err)
 	end
 end
 
-local function applyListsFromPets(pets, worldConfig, worldFilters, forceUi)
+local function applyListsFromPets(pets, worldConfig, worldFilters)
 	local filteredPets = applyNameFilters(pets)
-	local petsSig = petsListSignature(filteredPets)
-	if forceUi or petsSig ~= lastPetsListSig then
-		populateList(filteredPets, #pets)
-		lastPetsListSig = petsSig
-	end
+	populateList(filteredPets, #pets)
 	if worldConfig then
 		local visiblePets = getWorldVisiblePets(worldConfig, worldFilters, pets)
 		local filteredWorld = applyNameFilters(visiblePets, worldFilters)
-		local worldSig = petsListSignature(filteredWorld)
-		if forceUi or worldSig ~= lastWorldListSig then
-			populateWorldList(filteredWorld, #visiblePets, #pets)
-			lastWorldListSig = worldSig
-		end
+		populateWorldList(filteredWorld, #visiblePets, #pets)
 	end
 end
 
@@ -2602,14 +2579,30 @@ local function tickFarmLists(runId, world, filters, scanMode)
 	end
 	scanMode = scanMode or "light"
 	local pets = getCachedWorldPets(scanMode)
+	local filtersForWorld = filters or (world and worldPetFilters[world.id]) or {}
+	local filteredPets = applyNameFilters(pets, nameFilters)
+	local visiblePets = {}
+	local filteredWorld = {}
 	if world then
-		applyListsFromPets(pets, world, filters or worldPetFilters[world.id] or {}, scanMode == "full")
+		visiblePets = getWorldVisiblePets(world, filtersForWorld, pets)
+		filteredWorld = applyNameFilters(visiblePets, filtersForWorld)
+	end
+
+	if scanMode == "full" or scanMode == "auto" then
+		populateList(filteredPets, #pets)
+		if world then
+			populateWorldList(filteredWorld, #visiblePets, #pets)
+		end
+		lastLightPetsCount = #filteredPets
+		lastLightWorldCount = world and #filteredWorld or lastLightWorldCount
 	else
-		local filteredPets = applyNameFilters(pets, nameFilters)
-		local sig = petsListSignature(filteredPets)
-		if scanMode == "full" or sig ~= lastPetsListSig then
+		if #filteredPets ~= lastLightPetsCount then
 			populateList(filteredPets, #pets)
-			lastPetsListSig = sig
+			lastLightPetsCount = #filteredPets
+		end
+		if world and #filteredWorld ~= lastLightWorldCount then
+			populateWorldList(filteredWorld, #filteredWorld, #pets)
+			lastLightWorldCount = #filteredWorld
 		end
 	end
 	return runId == nil or shouldFarmContinue(runId)
@@ -2661,6 +2654,7 @@ refreshWorldList = function(rescan, worldConfig)
 		local visiblePets = getWorldVisiblePets(worldConfig, filters, pets)
 		local filtered = applyNameFilters(visiblePets, filters)
 		populateWorldList(filtered, #visiblePets, #pets)
+		lastLightWorldCount = #filtered
 	end)
 	if not ok then
 		warn("[BloxMonster] World refresh error:", err)
@@ -2756,7 +2750,7 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 		return false
 	end
 	local filters = worldPetFilters[world.id] or {}
-	applyListsFromPets(pets, world, filters, scanMode == "full")
+	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId)
 end
 
@@ -3047,7 +3041,7 @@ local function runWorldFarmLoop(runId)
 
 				local lastWorldPriority = 0
 				while shouldFarmContinue(runId) do
-					if not refreshWorldFarmList(world, "Refreshing list...", runId) then
+					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
 						break
 					end
 					local targets = getWorldHuntTargets(world, filters)
