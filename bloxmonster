@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.2"
+local VERSION = "1.7.3"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -603,7 +603,15 @@ local function getWorldHuntTargets(worldConfig, filters)
 	if #inWorld > 0 then
 		return inWorld
 	end
-	return applyNameFilters(scanWorldPets(), filters)
+	if #lastAllPets > 0 then
+		return applyNameFilters(lastAllPets, filters)
+	end
+	local ok, pets = pcall(getWorldPets)
+	if ok and pets then
+		lastAllPets = pets
+		return applyNameFilters(pets, filters)
+	end
+	return {}
 end
 
 local function getInstancePosition(inst)
@@ -922,6 +930,65 @@ local function formatPosition(pos)
 	return ("%.1f, %.1f, %.1f"):format(pos.X, pos.Y, pos.Z)
 end
 
+local locationCoordBoxes = {}
+local locationHardcodeLabels = {}
+
+local function refreshLocationRows()
+	for _, world in ipairs(WORLD_ZONES) do
+		local box = locationCoordBoxes[world.id]
+		local hint = locationHardcodeLabels[world.id]
+		if box then
+			local loc = resolveWorldLocation(world.id)
+			local isBaked = loc and WORLD_SPAWN_LOCATIONS[world.id] ~= nil and worldSavedLocations[world.id] == nil
+			if loc then
+				box.Text = ("x = %.3f,  y = %.3f,  z = %.3f"):format(loc.x, loc.y, loc.z)
+				box.TextColor3 = Color3.fromRGB(255, 245, 160)
+				if hint then
+					hint.Text = isBaked
+						and ("hardcoded: " .. formatHardcodeEntry(world.id, loc))
+						or ("session: " .. formatHardcodeEntry(world.id, loc))
+				end
+			else
+				box.Text = "x = ?,  y = ?,  z = ?  (not set)"
+				box.TextColor3 = Color3.fromRGB(140, 170, 150)
+				if hint then
+					hint.Text = "Save in-game, then Copy -> paste into WORLD_SPAWN_LOCATIONS"
+				end
+			end
+		end
+	end
+end
+
+local function showLoadError(message)
+	warn("[BloxMonster] " .. tostring(message))
+	local errGui = Instance.new("ScreenGui")
+	errGui.Name = "BloxMonsterError"
+	errGui.ResetOnSpawn = false
+	errGui.DisplayOrder = 100
+	errGui.Parent = PlayerGui
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 420, 0, 120)
+	frame.Position = UDim2.new(0.5, -210, 0.5, -60)
+	frame.BackgroundColor3 = Color3.fromRGB(60, 30, 30)
+	frame.BorderSizePixel = 0
+	frame.Parent = errGui
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = frame
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -16, 1, -16)
+	label.Position = UDim2.new(0, 8, 0, 8)
+	label.BackgroundTransparency = 1
+	label.Text = "BloxMonster failed to load:\n" .. tostring(message)
+	label.TextColor3 = Color3.fromRGB(255, 200, 200)
+	label.TextSize = 12
+	label.Font = Enum.Font.Gotham
+	label.TextWrapped = true
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.Parent = frame
+end
+
 local function robustTeleportToPosition(pos, exact)
 	local char = LocalPlayer.Character
 	if not char or not pos then
@@ -1062,7 +1129,9 @@ local existing = PlayerGui:FindFirstChild("BloxMonster")
 if existing then
 	existing:Destroy()
 end
+PlayerGui:FindFirstChild("BloxMonsterError") and PlayerGui.BloxMonsterError:Destroy()
 
+local buildOk, buildErr = pcall(function()
 local screen = Instance.new("ScreenGui")
 screen.Name = "BloxMonster"
 screen.ResetOnSpawn = false
@@ -1596,7 +1665,7 @@ local locationsHint = Instance.new("TextLabel")
 locationsHint.Size = UDim2.new(1, -8, 0, 28)
 locationsHint.Position = UDim2.new(0, 4, 0, 2)
 locationsHint.BackgroundTransparency = 1
-locationsHint.Text = "Save each world once, then Copy → paste into WORLD_SPAWN_LOCATIONS in the script."
+locationsHint.Text = "Save each world, then Copy -> paste into WORLD_SPAWN_LOCATIONS in the script."
 locationsHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 locationsHint.TextSize = 10
 locationsHint.Font = Enum.Font.Gotham
@@ -1657,8 +1726,6 @@ local copyAllCorner = Instance.new("UICorner")
 copyAllCorner.CornerRadius = UDim.new(0, 4)
 copyAllCorner.Parent = copyAllBtn
 
-local locationCoordBoxes = {}
-local locationHardcodeLabels = {}
 local locationSaveButtons = {}
 
 for i, world in ipairs(WORLD_ZONES) do
@@ -1744,20 +1811,17 @@ for i, world in ipairs(WORLD_ZONES) do
 	clearCorner.CornerRadius = UDim.new(0, 4)
 	clearCorner.Parent = clearBtn
 
-	local coordBox = Instance.new("TextBox")
+	local coordBox = Instance.new("TextLabel")
 	coordBox.Size = UDim2.new(1, -16, 0, 26)
 	coordBox.Position = UDim2.new(0, 8, 0, 26)
 	coordBox.BackgroundColor3 = Color3.fromRGB(18, 28, 42)
 	coordBox.BorderSizePixel = 0
-	coordBox.ClearTextOnFocus = false
-	coordBox.TextEditable = true
 	coordBox.Text = "x = ?, y = ?, z = ?  (not set)"
-	coordBox.PlaceholderText = "Save or paste coords here"
-	coordBox.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
 	coordBox.TextColor3 = Color3.fromRGB(255, 245, 160)
 	coordBox.TextSize = 12
-	coordBox.Font = Enum.Font.Code
+	coordBox.Font = Enum.Font.Gotham
 	coordBox.TextXAlignment = Enum.TextXAlignment.Left
+	coordBox.TextWrapped = true
 	coordBox.Parent = row
 	locationCoordBoxes[world.id] = coordBox
 
@@ -1787,7 +1851,7 @@ for i, world in ipairs(WORLD_ZONES) do
 		local ok, pos = saveWorldLocation(world.id)
 		if ok then
 			local line = formatHardcodeEntry(world.id, worldSavedLocations[world.id])
-			locationsStatusLabel.Text = ("Saved %s – tap Copy to paste into script"):format(world.name)
+			locationsStatusLabel.Text = ("Saved %s - tap Copy to paste into script"):format(world.name)
 			print("[BloxMonster] " .. world.name .. " → " .. line)
 			if refreshLocationRows then
 				refreshLocationRows()
