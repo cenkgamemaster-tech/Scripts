@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.6.2"
+local VERSION = "1.7.0"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
@@ -342,6 +342,8 @@ local worldPetFilters = {
 		{ name = "Phant", priority = 3 },
 	},
 }
+-- Saved player positions per world (set on Locations tab).
+local worldSavedLocations = {}
 local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
 local worldHuntThread = nil
@@ -839,7 +841,42 @@ local function findWorldTeleportPosition(worldConfig)
 	return bestPos, bestScore
 end
 
-local function robustTeleportToPosition(pos)
+local function getPlayerHRP()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getPlayerPosition()
+	local root = getPlayerHRP()
+	return root and root.Position or nil
+end
+
+local function getSavedWorldPosition(worldId)
+	local saved = worldSavedLocations[worldId]
+	if not saved then
+		return nil
+	end
+	return Vector3.new(saved.x, saved.y, saved.z)
+end
+
+local function saveWorldLocation(worldId)
+	local pos = getPlayerPosition()
+	if not pos then
+		return false
+	end
+	worldSavedLocations[worldId] = { x = pos.X, y = pos.Y, z = pos.Z }
+	return true, pos
+end
+
+local function clearWorldLocation(worldId)
+	worldSavedLocations[worldId] = nil
+end
+
+local function formatPosition(pos)
+	return ("%.1f, %.1f, %.1f"):format(pos.X, pos.Y, pos.Z)
+end
+
+local function robustTeleportToPosition(pos, exact)
 	local char = LocalPlayer.Character
 	if not char or not pos then
 		return false
@@ -849,7 +886,7 @@ local function robustTeleportToPosition(pos)
 		return false
 	end
 
-	local target = CFrame.new(pos + Vector3.new(0, 5, 0))
+	local target = CFrame.new(exact and pos or (pos + Vector3.new(0, 5, 0)))
 	pcall(function()
 		char:PivotTo(target)
 	end)
@@ -873,6 +910,12 @@ end
 
 local function teleportToWorld(worldConfig)
 	local filters = worldPetFilters[worldConfig.id]
+
+	local savedPos = getSavedWorldPosition(worldConfig.id)
+	if savedPos and robustTeleportToPosition(savedPos, true) then
+		print(("[BloxMonster] Teleported to saved location for %s"):format(worldConfig.name))
+		return true, "saved"
+	end
 
 	if tryFireWorldRemotes(worldConfig) then
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
@@ -1089,7 +1132,7 @@ tabBar.Parent = main
 
 local tabPetsBtn = Instance.new("TextButton")
 tabPetsBtn.Name = "TabPets"
-tabPetsBtn.Size = UDim2.new(0.5, -2, 1, 0)
+tabPetsBtn.Size = UDim2.new(0.333, -3, 1, 0)
 tabPetsBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 tabPetsBtn.BorderSizePixel = 0
 tabPetsBtn.Text = "Pets"
@@ -1104,8 +1147,8 @@ tabPetsCorner.Parent = tabPetsBtn
 
 local tabWorldsBtn = Instance.new("TextButton")
 tabWorldsBtn.Name = "TabWorlds"
-tabWorldsBtn.Size = UDim2.new(0.5, -2, 1, 0)
-tabWorldsBtn.Position = UDim2.new(0.5, 2, 0, 0)
+tabWorldsBtn.Size = UDim2.new(0.333, -3, 1, 0)
+tabWorldsBtn.Position = UDim2.new(0.333, 3, 0, 0)
 tabWorldsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabWorldsBtn.BorderSizePixel = 0
 tabWorldsBtn.Text = "Worlds"
@@ -1117,6 +1160,22 @@ tabWorldsBtn.Parent = tabBar
 local tabWorldsCorner = Instance.new("UICorner")
 tabWorldsCorner.CornerRadius = UDim.new(0, 6)
 tabWorldsCorner.Parent = tabWorldsBtn
+
+local tabLocationsBtn = Instance.new("TextButton")
+tabLocationsBtn.Name = "TabLocations"
+tabLocationsBtn.Size = UDim2.new(0.333, -3, 1, 0)
+tabLocationsBtn.Position = UDim2.new(0.666, 6, 0, 0)
+tabLocationsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+tabLocationsBtn.BorderSizePixel = 0
+tabLocationsBtn.Text = "Locations"
+tabLocationsBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+tabLocationsBtn.TextSize = 11
+tabLocationsBtn.Font = Enum.Font.GothamBold
+tabLocationsBtn.Parent = tabBar
+
+local tabLocationsCorner = Instance.new("UICorner")
+tabLocationsCorner.CornerRadius = UDim.new(0, 6)
+tabLocationsCorner.Parent = tabLocationsBtn
 
 local petsPanel = Instance.new("Frame")
 petsPanel.Name = "PetsPanel"
@@ -1479,6 +1538,177 @@ worldListLayout.Padding = UDim.new(0, 4)
 worldListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 worldListLayout.Parent = worldScroll
 
+local locationsPanel = Instance.new("Frame")
+locationsPanel.Name = "LocationsPanel"
+locationsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
+locationsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+locationsPanel.BackgroundTransparency = 1
+locationsPanel.Visible = false
+locationsPanel.Parent = main
+
+local locationsHint = Instance.new("TextLabel")
+locationsHint.Size = UDim2.new(1, -8, 0, 28)
+locationsHint.Position = UDim2.new(0, 4, 0, 2)
+locationsHint.BackgroundTransparency = 1
+locationsHint.Text = "Walk to each world in-game, then tap Save. Farm/hunt uses saved spots first."
+locationsHint.TextColor3 = Color3.fromRGB(150, 190, 160)
+locationsHint.TextSize = 10
+locationsHint.Font = Enum.Font.Gotham
+locationsHint.TextXAlignment = Enum.TextXAlignment.Left
+locationsHint.TextWrapped = true
+locationsHint.Parent = locationsPanel
+
+local locationsScroll = Instance.new("ScrollingFrame")
+locationsScroll.Size = UDim2.new(1, 0, 1, -58)
+locationsScroll.Position = UDim2.new(0, 0, 0, 32)
+locationsScroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
+locationsScroll.BorderSizePixel = 0
+locationsScroll.ScrollBarThickness = 8
+locationsScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 180, 100)
+locationsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+locationsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+locationsScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+locationsScroll.Parent = locationsPanel
+
+local locationsScrollCorner = Instance.new("UICorner")
+locationsScrollCorner.CornerRadius = UDim.new(0, 6)
+locationsScrollCorner.Parent = locationsScroll
+
+local locationsListLayout = Instance.new("UIListLayout")
+locationsListLayout.Padding = UDim.new(0, 6)
+locationsListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+locationsListLayout.Parent = locationsScroll
+
+local locationCoordLabels = {}
+local locationSaveButtons = {}
+
+for i, world in ipairs(WORLD_ZONES) do
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, -8, 0, 58)
+	row.BackgroundColor3 = Color3.fromRGB(32, 50, 72)
+	row.LayoutOrder = i
+	row.Parent = locationsScroll
+
+	local rowCorner = Instance.new("UICorner")
+	rowCorner.CornerRadius = UDim.new(0, 4)
+	rowCorner.Parent = row
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1, -8, 0, 16)
+	nameLabel.Position = UDim2.new(0, 8, 0, 4)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = world.name
+	nameLabel.TextColor3 = Color3.fromRGB(200, 255, 200)
+	nameLabel.TextSize = 12
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.Parent = row
+
+	local coordLabel = Instance.new("TextLabel")
+	coordLabel.Size = UDim2.new(1, -170, 0, 14)
+	coordLabel.Position = UDim2.new(0, 8, 0, 22)
+	coordLabel.BackgroundTransparency = 1
+	coordLabel.Text = "Not saved"
+	coordLabel.TextColor3 = Color3.fromRGB(140, 170, 150)
+	coordLabel.TextSize = 10
+	coordLabel.Font = Enum.Font.Code
+	coordLabel.TextXAlignment = Enum.TextXAlignment.Left
+	coordLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	coordLabel.Parent = row
+	locationCoordLabels[world.id] = coordLabel
+
+	local saveBtn = Instance.new("TextButton")
+	saveBtn.Size = UDim2.new(0, 44, 0, 22)
+	saveBtn.Position = UDim2.new(1, -154, 0, 30)
+	saveBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+	saveBtn.BorderSizePixel = 0
+	saveBtn.Text = "Save"
+	saveBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+	saveBtn.TextSize = 10
+	saveBtn.Font = Enum.Font.GothamBold
+	saveBtn.Parent = row
+
+	local saveCorner = Instance.new("UICorner")
+	saveCorner.CornerRadius = UDim.new(0, 4)
+	saveCorner.Parent = saveBtn
+	locationSaveButtons[world.id] = saveBtn
+
+	local goBtn = Instance.new("TextButton")
+	goBtn.Size = UDim2.new(0, 36, 0, 22)
+	goBtn.Position = UDim2.new(1, -106, 0, 30)
+	goBtn.BackgroundColor3 = Color3.fromRGB(45, 80, 100)
+	goBtn.BorderSizePixel = 0
+	goBtn.Text = "Go"
+	goBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
+	goBtn.TextSize = 10
+	goBtn.Font = Enum.Font.GothamBold
+	goBtn.Parent = row
+
+	local goCorner = Instance.new("UICorner")
+	goCorner.CornerRadius = UDim.new(0, 4)
+	goCorner.Parent = goBtn
+
+	local clearBtn = Instance.new("TextButton")
+	clearBtn.Size = UDim2.new(0, 44, 0, 22)
+	clearBtn.Position = UDim2.new(1, -54, 0, 30)
+	clearBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 45)
+	clearBtn.BorderSizePixel = 0
+	clearBtn.Text = "Clear"
+	clearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+	clearBtn.TextSize = 10
+	clearBtn.Font = Enum.Font.Gotham
+	clearBtn.Parent = row
+
+	local clearCorner = Instance.new("UICorner")
+	clearCorner.CornerRadius = UDim.new(0, 4)
+	clearCorner.Parent = clearBtn
+
+	saveBtn.MouseButton1Click:Connect(function()
+		local ok, pos = saveWorldLocation(world.id)
+		if ok then
+			locationsStatusLabel.Text = ("Saved %s at %s"):format(world.name, formatPosition(pos))
+			if refreshLocationRows then
+				refreshLocationRows()
+			end
+		else
+			locationsStatusLabel.Text = "Could not read character position"
+		end
+	end)
+
+	goBtn.MouseButton1Click:Connect(function()
+		local pos = getSavedWorldPosition(world.id)
+		if not pos then
+			locationsStatusLabel.Text = ("No saved location for %s yet"):format(world.name)
+			return
+		end
+		if robustTeleportToPosition(pos, true) then
+			locationsStatusLabel.Text = ("Teleported to %s"):format(world.name)
+		else
+			locationsStatusLabel.Text = "Teleport failed"
+		end
+	end)
+
+	clearBtn.MouseButton1Click:Connect(function()
+		clearWorldLocation(world.id)
+		locationsStatusLabel.Text = ("Cleared saved location for %s"):format(world.name)
+		if refreshLocationRows then
+			refreshLocationRows()
+		end
+	end)
+end
+
+local locationsStatusLabel = Instance.new("TextLabel")
+locationsStatusLabel.Size = UDim2.new(1, -8, 0, 22)
+locationsStatusLabel.Position = UDim2.new(0, 4, 1, -24)
+locationsStatusLabel.BackgroundTransparency = 1
+locationsStatusLabel.Text = "Save a spot in each world you farm"
+locationsStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+locationsStatusLabel.TextSize = 10
+locationsStatusLabel.Font = Enum.Font.Gotham
+locationsStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+locationsStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+locationsStatusLabel.Parent = locationsPanel
+
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
 bottom.Position = UDim2.new(0, 8, 1, -76)
@@ -1576,6 +1806,7 @@ local filterBarVisible = true
 
 local refreshList
 local refreshWorldList
+local refreshLocationRows
 
 local function getWorldConfigById(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
@@ -2019,23 +2250,45 @@ local function selectWorld(worldId, teleport)
 	refreshWorldList(true)
 end
 
+refreshLocationRows = function()
+	for _, world in ipairs(WORLD_ZONES) do
+		local label = locationCoordLabels[world.id]
+		if label then
+			local saved = worldSavedLocations[world.id]
+			if saved then
+				label.Text = formatPosition(Vector3.new(saved.x, saved.y, saved.z))
+				label.TextColor3 = Color3.fromRGB(160, 220, 170)
+			else
+				label.Text = "Not saved – walk there and tap Save"
+				label.TextColor3 = Color3.fromRGB(140, 170, 150)
+			end
+		end
+	end
+end
+
+local function styleTabButton(btn, active)
+	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
+	btn.TextColor3 = active and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
+end
+
 local function setActiveTab(tabName)
 	activeTab = tabName
-	local isPets = tabName == "pets"
-	petsPanel.Visible = isPets
-	worldsPanel.Visible = not isPets
-	filtersBtn.Visible = isPets
+	petsPanel.Visible = tabName == "pets"
+	worldsPanel.Visible = tabName == "worlds"
+	locationsPanel.Visible = tabName == "locations"
+	filtersBtn.Visible = tabName == "pets"
 
-	tabPetsBtn.BackgroundColor3 = isPets and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
-	tabPetsBtn.TextColor3 = isPets and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
-	tabWorldsBtn.BackgroundColor3 = isPets and Color3.fromRGB(35, 55, 75) or Color3.fromRGB(50, 100, 70)
-	tabWorldsBtn.TextColor3 = isPets and Color3.fromRGB(180, 210, 190) or Color3.fromRGB(220, 255, 220)
+	styleTabButton(tabPetsBtn, tabName == "pets")
+	styleTabButton(tabWorldsBtn, tabName == "worlds")
+	styleTabButton(tabLocationsBtn, tabName == "locations")
 
-	if isPets then
+	if tabName == "pets" then
 		refreshList(false)
-	else
+	elseif tabName == "worlds" then
 		rebuildWorldFilterChips()
 		refreshWorldList(false)
+	elseif tabName == "locations" then
+		refreshLocationRows()
 	end
 end
 
@@ -2263,6 +2516,10 @@ tabWorldsBtn.MouseButton1Click:Connect(function()
 	setActiveTab("worlds")
 end)
 
+tabLocationsBtn.MouseButton1Click:Connect(function()
+	setActiveTab("locations")
+end)
+
 for _, world in ipairs(WORLD_ZONES) do
 	local btn = worldButtons[world.id]
 	if btn then
@@ -2319,6 +2576,7 @@ autoRefreshBtn.MouseButton1Click:Connect(function()
 end)
 
 rebuildWorldFilterChips()
+refreshLocationRows()
 refreshList()
 
 print(("[BloxMonster] v%s loaded – %d pets in world"):format(VERSION, #getWorldPets()))
