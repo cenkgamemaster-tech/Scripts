@@ -13,13 +13,13 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.11"
+local VERSION = "1.7.12"
 local AUTO_REFRESH_SEC = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
 local WORLD_TELEPORT_SETTLE_SEC = 3
-local WORLD_CYCLE_BONUS_SEC = 120
+local WORLD_CYCLE_BONUS_SEC = 60
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
