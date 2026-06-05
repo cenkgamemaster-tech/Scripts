@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.18"
+local VERSION = "1.7.19"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -21,8 +21,7 @@ local FARM_NO_TARGET_WAIT_SEC = 2
 local FARM_WAIT_SEC = 20
 local WORLD_HUNT_WAIT_SEC = 20
 local WORLD_TELEPORT_SETTLE_SEC = 3
-local WORLD_CYCLE_BONUS_P3_SEC = 60
-local WORLD_CYCLE_BONUS_PRIORITY_SEC = 60
+local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
 
 local function nowSeconds()
@@ -504,6 +503,16 @@ local function getFilterPriority(entry)
 		return entry.priority
 	end
 	return 999
+end
+
+local function filtersBelowPriority(filters, maxPriority)
+	local out = {}
+	for _, entry in ipairs(filters or {}) do
+		if getFilterPriority(entry) < maxPriority then
+			table.insert(out, entry)
+		end
+	end
+	return out
 end
 
 local function parseFilterEntry(chunk)
@@ -2759,28 +2768,6 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	return runId == nil or shouldFarmContinue(runId)
 end
 
-local function collectAllFarmFilters()
-	local out = {}
-	local seen = {}
-	local function addFrom(filters)
-		if not filters then
-			return
-		end
-		for _, entry in ipairs(filters) do
-			local key = getFilterName(entry):lower()
-			if key ~= "" and not seen[key] then
-				seen[key] = true
-				table.insert(out, entry)
-			end
-		end
-	end
-	for _, world in ipairs(WORLD_ZONES) do
-		addFrom(worldPetFilters[world.id])
-	end
-	addFrom(nameFilters)
-	return out
-end
-
 local function collectBonusFarmFilters()
 	local out = {}
 	local seen = {}
@@ -2805,245 +2792,63 @@ local function collectBonusFarmFilters()
 	return out
 end
 
-local function collectHighPriorityFarmFilters()
-	local out = {}
-	for _, entry in ipairs(collectAllFarmFilters()) do
-		if getFilterPriority(entry) < WORLD_CYCLE_BONUS_MIN_PRIORITY then
-			table.insert(out, entry)
-		end
-	end
-	return out
-end
-
-local function getWorldsWithFarmFilters()
-	local out = {}
-	for _, world in ipairs(WORLD_ZONES) do
-		local filters = worldPetFilters[world.id]
-		if filters and #filters > 0 then
-			table.insert(out, world)
-		end
-	end
-	return out
-end
-
-local function getWorldsWithBonusFilters()
-	local out = {}
-	for _, world in ipairs(WORLD_ZONES) do
-		local filters = worldPetFilters[world.id]
-		if filters then
-			for _, entry in ipairs(filters) do
-				if getFilterPriority(entry) >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
-					table.insert(out, world)
-					break
-				end
-			end
-		end
-	end
-	return out
-end
-
 local function formatBonusTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-local function findBetterPriorityTarget(pets, currentPrio)
-	local highFilters = collectHighPriorityFarmFilters()
-	if #highFilters == 0 then
-		return nil
-	end
-	local targets = applyNameFilters(pets, highFilters)
-	local best, bestP = pickNextFarmTarget(targets, 0, highFilters)
-	if best and bestP < currentPrio then
-		return best, bestP
-	end
-	return nil
-end
-
-local function pickBonusPhaseTarget(pets, lastBonusPriority)
-	local highFilters = collectHighPriorityFarmFilters()
-	if #highFilters > 0 then
-		local highTargets = applyNameFilters(pets, highFilters)
-		local target, targetP = pickNextFarmTarget(highTargets, 0, highFilters)
-		if target then
-			return target, targetP
-		end
-	end
-
-	local bonusFilters = collectBonusFarmFilters()
-	if #bonusFilters == 0 then
-		return nil
-	end
-	local targets = applyNameFilters(pets, bonusFilters)
-	return pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
-end
-
-local function pickHighPriorityTarget(pets, lastSkipPriority)
-	local highFilters = collectHighPriorityFarmFilters()
-	if #highFilters == 0 then
-		return nil
-	end
-	local targets = applyNameFilters(pets, highFilters)
-	return pickNextFarmTarget(targets, lastSkipPriority or 0, highFilters)
-end
-
-local function pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
-	if nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
-		return pickBonusPhaseTarget(pets, lastBonusPriority)
-	end
-	return pickHighPriorityTarget(pets, 0)
-end
-
-local function getBonusPhaseLabel(bonusStart)
-	if nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
-		return "P3+"
-	end
-	return "Priority"
-end
-
-local function scanForBonusTarget(lastBonusPriority, worldsToCheck, runId, bonusStart)
-	if not shouldFarmContinue(runId) then
-		return nil, nil, {}
-	end
-	local pets = getCachedWorldPets("auto")
-	if not shouldFarmContinue(runId) then
-		return nil, nil, pets
-	end
-	applyListsFromPets(pets, nil, nil)
-	local target, targetP = pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
-	if target then
-		return target, targetP, pets
-	end
-
-	for _, world in ipairs(worldsToCheck) do
-		if not shouldFarmContinue(runId) then
-			break
-		end
-		local tpOk = teleportToWorld(world)
-		if tpOk then
-			if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
-				break
-			end
-		end
-		selectedWorldId = world.id
-		highlightWorldButtons()
-		pets = getCachedWorldPets("full")
-		if not shouldFarmContinue(runId) then
-			break
-		end
-		applyListsFromPets(pets, world, worldPetFilters[world.id] or {})
-		target, targetP = pickPostCycleTarget(pets, lastBonusPriority, bonusStart)
-		if target then
-			return target, targetP, pets
-		end
-	end
-
-	return nil, nil, pets
-end
-
 local function runPostCycleBonusFarm(runId)
 	local bonusFilters = collectBonusFarmFilters()
-	local highFilters = collectHighPriorityFarmFilters()
-	if #bonusFilters == 0 and #highFilters == 0 then
-		setFarmStatus("Cycle bonus: no bonus pets configured – skipping")
+	if #bonusFilters == 0 then
 		return
 	end
 
-	local bonusStart = nowSeconds()
-	local bonusEnd = bonusStart + WORLD_CYCLE_BONUS_P3_SEC + WORLD_CYCLE_BONUS_PRIORITY_SEC
+	local bonusEnd = nowSeconds() + WORLD_CYCLE_BONUS_SEC
 	local lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
-	local worldsToCheck = getWorldsWithFarmFilters()
-	if #worldsToCheck == 0 then
-		worldsToCheck = getWorldsWithBonusFilters()
-	end
 
 	while shouldFarmContinue(runId) and nowSeconds() < bonusEnd do
 		local timeLeft = math.ceil(bonusEnd - nowSeconds())
-		local phaseLabel = getBonusPhaseLabel(bonusStart)
-		setFarmStatus(("Cycle bonus %s (%s left) – scanning..."):format(phaseLabel, formatBonusTimeLeft(timeLeft)))
+		setFarmStatus(("Bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
 
-		local target, targetP
-		target, targetP = scanForBonusTarget(lastBonusPriority, worldsToCheck, runId, bonusStart)
-
+		local pets = getCachedWorldPets("auto")
 		if not shouldFarmContinue(runId) then
 			break
 		end
+		applyListsFromPets(pets, nil, nil)
+		local targets = applyNameFilters(pets, bonusFilters)
+		local target, targetP = pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
 
 		if not target then
-			timeLeft = math.ceil(bonusEnd - nowSeconds())
-			setFarmStatus(("Cycle bonus %s (%s left) – no targets, retrying..."):format(phaseLabel, formatBonusTimeLeft(timeLeft)))
+			setFarmStatus(("Bonus P3+ (%s left) – no targets, waiting..."):format(formatBonusTimeLeft(timeLeft)))
 			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
 				break
 			end
 		else
-			local inP3Phase = nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC
-			local prio = targetP or getPetFilterPriority(target.name, collectAllFarmFilters())
-			local waitComplete = false
+			local prio = targetP or getPetFilterPriority(target.name, bonusFilters)
+			setFarmStatus(("Bonus P%s: %s (%s left)"):format(
+				tostring(prio),
+				target.name,
+				formatBonusTimeLeft(timeLeft)
+			))
+			teleportToPet(target.model)
+			tickFarmLists(runId, nil, nil, "auto")
 
-			while shouldFarmContinue(runId) and nowSeconds() < bonusEnd and not waitComplete do
+			farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
 				timeLeft = math.ceil(bonusEnd - nowSeconds())
-				phaseLabel = getBonusPhaseLabel(bonusStart)
-				local roleLabel = (inP3Phase and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY) and "Bonus" or "Priority"
-				setFarmStatus(("%s P%s: %s (%s left)"):format(
-					roleLabel,
+				setFarmStatus(("Bonus P%s: %s – %ds (%s left)"):format(
 					tostring(prio),
 					target.name,
+					sec,
 					formatBonusTimeLeft(timeLeft)
 				))
-				teleportToPet(target.model)
-				tickFarmLists(runId, nil, nil, "auto")
-
-				local waitResult = farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
-					timeLeft = math.ceil(bonusEnd - nowSeconds())
-					phaseLabel = getBonusPhaseLabel(bonusStart)
-					roleLabel = (nowSeconds() < bonusStart + WORLD_CYCLE_BONUS_P3_SEC and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY) and "Bonus" or "Priority"
-					setFarmStatus(("%s P%s: %s – %ds (%s left)"):format(
-						roleLabel,
-						tostring(prio),
-						target.name,
-						sec,
-						formatBonusTimeLeft(timeLeft)
-					))
-				end, nil, nil, function()
-					if nowSeconds() >= bonusStart + WORLD_CYCLE_BONUS_P3_SEC then
-						return false
-					end
-					local better, betterP = findBetterPriorityTarget(getCachedWorldPets("auto"), prio)
-					if better then
-						target = better
-						targetP = betterP
-						prio = betterP
-						timeLeft = math.ceil(bonusEnd - nowSeconds())
-						setFarmStatus(("Switching to P%s: %s (%s left)"):format(
-							tostring(prio),
-							target.name,
-							formatBonusTimeLeft(timeLeft)
-						))
-						return true
-					end
-					return false
-				end, function()
-					return shouldFarmContinue(runId) and nowSeconds() < bonusEnd
-				end)
-
-				if waitResult == "interrupt" then
-					-- switch to higher-priority pet and restart wait
-				elseif not waitResult then
-					waitComplete = true
-					break
-				else
-					waitComplete = true
-				end
-			end
+			end, nil, nil, nil, function()
+				return shouldFarmContinue(runId) and nowSeconds() < bonusEnd
+			end)
 
 			if not shouldFarmContinue(runId) then
 				break
 			end
 
-			if inP3Phase and prio >= WORLD_CYCLE_BONUS_MIN_PRIORITY then
-				lastBonusPriority = prio
-			else
-				lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
-			end
+			lastBonusPriority = prio
 			getCachedWorldPets("auto")
 			refreshList(false)
 		end
@@ -3057,7 +2862,8 @@ local function runWorldFarmLoop(runId)
 				break
 			end
 			local filters = worldPetFilters[world.id]
-			if filters and #filters > 0 then
+			local highFilters = filtersBelowPriority(filters, WORLD_CYCLE_BONUS_MIN_PRIORITY)
+			if #highFilters > 0 then
 				selectedWorldId = world.id
 				highlightWorldButtons()
 				rebuildWorldFilterChips()
@@ -3081,21 +2887,21 @@ local function runWorldFarmLoop(runId)
 					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
 						break
 					end
-					local targets = getWorldHuntTargets(world, filters)
+					local targets = getWorldHuntTargets(world, highFilters)
 
-					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, filters)
+					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
 						break
 					end
 
-					local prio = targetP or getPetFilterPriority(target.name, filters)
+					local prio = targetP or getPetFilterPriority(target.name, highFilters)
 					setFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
 					teleportToPet(target.model)
-					tickFarmLists(runId, world, filters, "auto")
+					tickFarmLists(runId, world, highFilters, "auto")
 
 					if not farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
 						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
-					end, world, filters) then
+					end, world, highFilters) then
 						break
 					end
 
