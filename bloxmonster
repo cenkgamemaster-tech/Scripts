@@ -13,13 +13,14 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.25"
+local VERSION = "1.7.26"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
 local FARM_NO_TARGET_WAIT_SEC = 2
-local FARM_WAIT_SEC = 20
-local WORLD_HUNT_WAIT_SEC = 20
+local DEFAULT_FARM_WAIT_SEC = 30
+local MIN_FARM_WAIT_SEC = 5
+local MAX_FARM_WAIT_SEC = 120
 local WORLD_TELEPORT_SETTLE_SEC = 3
 local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
@@ -431,6 +432,7 @@ local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
 local worldHuntThread = nil
 local activeTab = "pets"
+local farmWaitSec = DEFAULT_FARM_WAIT_SEC
 local farmRunId = 0
 
 local function shouldFarmContinue(runId)
@@ -1410,7 +1412,7 @@ tabBar.Parent = main
 
 local tabPetsBtn = Instance.new("TextButton")
 tabPetsBtn.Name = "TabPets"
-tabPetsBtn.Size = UDim2.new(0.333, -3, 1, 0)
+tabPetsBtn.Size = UDim2.new(0.25, -3, 1, 0)
 tabPetsBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 tabPetsBtn.BorderSizePixel = 0
 tabPetsBtn.Text = "Pets"
@@ -1425,8 +1427,8 @@ tabPetsCorner.Parent = tabPetsBtn
 
 local tabWorldsBtn = Instance.new("TextButton")
 tabWorldsBtn.Name = "TabWorlds"
-tabWorldsBtn.Size = UDim2.new(0.333, -3, 1, 0)
-tabWorldsBtn.Position = UDim2.new(0.333, 3, 0, 0)
+tabWorldsBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabWorldsBtn.Position = UDim2.new(0.25, 3, 0, 0)
 tabWorldsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabWorldsBtn.BorderSizePixel = 0
 tabWorldsBtn.Text = "Worlds"
@@ -1441,8 +1443,8 @@ tabWorldsCorner.Parent = tabWorldsBtn
 
 local tabLocationsBtn = Instance.new("TextButton")
 tabLocationsBtn.Name = "TabLocations"
-tabLocationsBtn.Size = UDim2.new(0.333, -3, 1, 0)
-tabLocationsBtn.Position = UDim2.new(0.666, 6, 0, 0)
+tabLocationsBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabLocationsBtn.Position = UDim2.new(0.5, 6, 0, 0)
 tabLocationsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabLocationsBtn.BorderSizePixel = 0
 tabLocationsBtn.Text = "Locations"
@@ -1454,6 +1456,22 @@ tabLocationsBtn.Parent = tabBar
 local tabLocationsCorner = Instance.new("UICorner")
 tabLocationsCorner.CornerRadius = UDim.new(0, 6)
 tabLocationsCorner.Parent = tabLocationsBtn
+
+local tabConfigBtn = Instance.new("TextButton")
+tabConfigBtn.Name = "TabConfig"
+tabConfigBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabConfigBtn.Position = UDim2.new(0.75, 9, 0, 0)
+tabConfigBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+tabConfigBtn.BorderSizePixel = 0
+tabConfigBtn.Text = "Config"
+tabConfigBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+tabConfigBtn.TextSize = 11
+tabConfigBtn.Font = Enum.Font.GothamBold
+tabConfigBtn.Parent = tabBar
+
+local tabConfigCorner = Instance.new("UICorner")
+tabConfigCorner.CornerRadius = UDim.new(0, 6)
+tabConfigCorner.Parent = tabConfigBtn
 
 local petsPanel = Instance.new("Frame")
 petsPanel.Name = "PetsPanel"
@@ -2067,6 +2085,105 @@ copyAllBtn.MouseButton1Click:Connect(function()
 		or "Printed all locations to Output (F9) – paste into script"
 end)
 
+local configPanel = Instance.new("Frame")
+configPanel.Name = "ConfigPanel"
+configPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
+configPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+configPanel.BackgroundTransparency = 1
+configPanel.Visible = false
+configPanel.Parent = main
+
+local configHint = Instance.new("TextLabel")
+configHint.Size = UDim2.new(1, -8, 0, 28)
+configHint.Position = UDim2.new(0, 4, 0, 2)
+configHint.BackgroundTransparency = 1
+configHint.Text = "Farm timing and other settings. Changes apply on the next hunt wait."
+configHint.TextColor3 = Color3.fromRGB(150, 190, 160)
+configHint.TextSize = 10
+configHint.Font = Enum.Font.Gotham
+configHint.TextXAlignment = Enum.TextXAlignment.Left
+configHint.TextWrapped = true
+configHint.Parent = configPanel
+
+local configCard = Instance.new("Frame")
+configCard.Size = UDim2.new(1, 0, 0, 88)
+configCard.Position = UDim2.new(0, 0, 0, 34)
+configCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
+configCard.BorderSizePixel = 0
+configCard.Parent = configPanel
+
+local configCardCorner = Instance.new("UICorner")
+configCardCorner.CornerRadius = UDim.new(0, 6)
+configCardCorner.Parent = configCard
+
+local farmWaitLabel = Instance.new("TextLabel")
+farmWaitLabel.Size = UDim2.new(1, -12, 0, 16)
+farmWaitLabel.Position = UDim2.new(0, 6, 0, 8)
+farmWaitLabel.BackgroundTransparency = 1
+farmWaitLabel.Text = "Farm wait (seconds after teleport)"
+farmWaitLabel.TextColor3 = Color3.fromRGB(180, 220, 190)
+farmWaitLabel.TextSize = 11
+farmWaitLabel.Font = Enum.Font.GothamBold
+farmWaitLabel.TextXAlignment = Enum.TextXAlignment.Left
+farmWaitLabel.Parent = configCard
+
+local farmWaitDesc = Instance.new("TextLabel")
+farmWaitDesc.Size = UDim2.new(1, -12, 0, 14)
+farmWaitDesc.Position = UDim2.new(0, 6, 0, 24)
+farmWaitDesc.BackgroundTransparency = 1
+farmWaitDesc.Text = ("Used by Pets farm and Worlds farm. Range: %d–%d sec."):format(
+	MIN_FARM_WAIT_SEC,
+	MAX_FARM_WAIT_SEC
+)
+farmWaitDesc.TextColor3 = Color3.fromRGB(130, 160, 140)
+farmWaitDesc.TextSize = 10
+farmWaitDesc.Font = Enum.Font.Gotham
+farmWaitDesc.TextXAlignment = Enum.TextXAlignment.Left
+farmWaitDesc.Parent = configCard
+
+local farmWaitInput = Instance.new("TextBox")
+farmWaitInput.Size = UDim2.new(0, 64, 0, 24)
+farmWaitInput.Position = UDim2.new(0, 6, 0, 46)
+farmWaitInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
+farmWaitInput.BorderSizePixel = 0
+farmWaitInput.ClearTextOnFocus = false
+farmWaitInput.Text = tostring(DEFAULT_FARM_WAIT_SEC)
+farmWaitInput.TextColor3 = Color3.fromRGB(220, 255, 220)
+farmWaitInput.TextSize = 12
+farmWaitInput.Font = Enum.Font.Gotham
+farmWaitInput.TextXAlignment = Enum.TextXAlignment.Center
+farmWaitInput.Parent = configCard
+
+local farmWaitInputCorner = Instance.new("UICorner")
+farmWaitInputCorner.CornerRadius = UDim.new(0, 4)
+farmWaitInputCorner.Parent = farmWaitInput
+
+local farmWaitApplyBtn = Instance.new("TextButton")
+farmWaitApplyBtn.Size = UDim2.new(0, 56, 0, 24)
+farmWaitApplyBtn.Position = UDim2.new(0, 76, 0, 46)
+farmWaitApplyBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+farmWaitApplyBtn.BorderSizePixel = 0
+farmWaitApplyBtn.Text = "Apply"
+farmWaitApplyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+farmWaitApplyBtn.TextSize = 11
+farmWaitApplyBtn.Font = Enum.Font.GothamBold
+farmWaitApplyBtn.Parent = configCard
+
+local farmWaitApplyCorner = Instance.new("UICorner")
+farmWaitApplyCorner.CornerRadius = UDim.new(0, 4)
+farmWaitApplyCorner.Parent = farmWaitApplyBtn
+
+local configStatusLabel = Instance.new("TextLabel")
+configStatusLabel.Size = UDim2.new(1, -8, 0, 22)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 130)
+configStatusLabel.BackgroundTransparency = 1
+configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
+configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+configStatusLabel.TextSize = 11
+configStatusLabel.Font = Enum.Font.Gotham
+configStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+configStatusLabel.Parent = configPanel
+
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
 bottom.Position = UDim2.new(0, 8, 1, -76)
@@ -2165,9 +2282,11 @@ makeDraggable(main, { top, title, main })
 		tabPetsBtn = tabPetsBtn,
 		tabWorldsBtn = tabWorldsBtn,
 		tabLocationsBtn = tabLocationsBtn,
+		tabConfigBtn = tabConfigBtn,
 		petsPanel = petsPanel,
 		worldsPanel = worldsPanel,
 		locationsPanel = locationsPanel,
+		configPanel = configPanel,
 		filterBar = filterBar,
 		filterHint = filterHint,
 		filterInput = filterInput,
@@ -2195,6 +2314,8 @@ makeDraggable(main, { top, title, main })
 		farmStopBtn = farmStopBtn,
 		farmStatusLabel = farmStatusLabel,
 		autoRefreshBtn = autoRefreshBtn,
+		farmWaitInput = farmWaitInput,
+		configStatusLabel = configStatusLabel,
 	}
 end
 
@@ -2711,6 +2832,31 @@ local function selectWorld(worldId, teleport)
 	refreshWorldList(true)
 end
 
+local function getFarmWaitSec()
+	return farmWaitSec
+end
+
+local function parseFarmWaitSec(text)
+	local n = tonumber(text)
+	if not n then
+		return nil
+	end
+	return math.clamp(math.floor(n + 0.5), MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
+end
+
+local function applyFarmWaitFromInput()
+	local val = parseFarmWaitSec(UI.farmWaitInput.Text)
+	if not val then
+		UI.configStatusLabel.Text = ("Enter %d–%d seconds"):format(MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
+		UI.farmWaitInput.Text = tostring(farmWaitSec)
+		return false
+	end
+	farmWaitSec = val
+	UI.farmWaitInput.Text = tostring(farmWaitSec)
+	UI.configStatusLabel.Text = ("Farm wait: %ds (applies on next hunt)"):format(farmWaitSec)
+	return true
+end
+
 local function styleTabButton(btn, active)
 	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
 	btn.TextColor3 = active and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
@@ -2721,11 +2867,13 @@ local function setActiveTab(tabName)
 	UI.petsPanel.Visible = tabName == "pets"
 	UI.worldsPanel.Visible = tabName == "worlds"
 	UI.locationsPanel.Visible = tabName == "locations"
+	UI.configPanel.Visible = tabName == "config"
 	UI.filtersBtn.Visible = tabName == "pets"
 
 	styleTabButton(UI.tabPetsBtn, tabName == "pets")
 	styleTabButton(UI.tabWorldsBtn, tabName == "worlds")
 	styleTabButton(UI.tabLocationsBtn, tabName == "locations")
+	styleTabButton(UI.tabConfigBtn, tabName == "config")
 
 	if tabName == "pets" then
 		refreshList(false)
@@ -2734,6 +2882,9 @@ local function setActiveTab(tabName)
 		refreshWorldList(false)
 	elseif tabName == "locations" then
 		refreshLocationRows()
+	elseif tabName == "config" then
+		UI.farmWaitInput.Text = tostring(farmWaitSec)
+		UI.configStatusLabel.Text = ("Farm wait: %ds"):format(farmWaitSec)
 	end
 end
 
@@ -2848,7 +2999,7 @@ local function runPostCycleBonusFarm(runId)
 			teleportToPet(target.model)
 			tickFarmLists(runId, nil, nil, "auto")
 
-			farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
+			farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
 				timeLeft = math.ceil(bonusEnd - nowSeconds())
 				setFarmStatus(("Bonus P%s: %s – %ds (%s left)"):format(
 					tostring(prio),
@@ -2915,7 +3066,7 @@ local function runWorldFarmLoop(runId)
 					teleportToPet(target.model)
 					tickFarmLists(runId, world, highFilters, "auto")
 
-					if not farmWaitWithListRefresh(WORLD_HUNT_WAIT_SEC, runId, function(sec)
+					if not farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
 						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
 					end, world, highFilters) then
 						break
@@ -3028,7 +3179,7 @@ local function startAutoFarm()
 					teleportToPet(model)
 					tickFarmLists(myRunId, nil, nil, "auto")
 
-					if not farmWaitWithListRefresh(FARM_WAIT_SEC, myRunId, function(sec)
+					if not farmWaitWithListRefresh(getFarmWaitSec(), myRunId, function(sec)
 						UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
 					end, nil, nameFilters) then
 						break
@@ -3084,6 +3235,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		addFilterFromInput()
 	elseif focused == UI.worldFilterInput then
 		addWorldFilterFromInput()
+	elseif focused == UI.farmWaitInput then
+		applyFarmWaitFromInput()
 	end
 end)
 UI.filterClearBtn.MouseButton1Click:Connect(function()
@@ -3106,6 +3259,14 @@ end)
 
 UI.tabLocationsBtn.MouseButton1Click:Connect(function()
 	setActiveTab("locations")
+end)
+
+UI.tabConfigBtn.MouseButton1Click:Connect(function()
+	setActiveTab("config")
+end)
+
+farmWaitApplyBtn.MouseButton1Click:Connect(function()
+	applyFarmWaitFromInput()
 end)
 
 for _, world in ipairs(WORLD_ZONES) do
