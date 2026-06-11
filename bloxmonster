@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.29"
+local VERSION = "1.7.30"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1287,9 +1287,13 @@ if errExisting then
 	errExisting:Destroy()
 end
 
-local UI
 local onWorldButtonClick
 local TAB_PANELS
+local CONTENT_TOP = 60
+local CONTENT_HEIGHT = 352
+
+local uiBuildOk, uiBuildErr = pcall(function()
+UI = {}
 
 do
 local screen = Instance.new("ScreenGui")
@@ -1396,9 +1400,6 @@ closeBtn.TextSize = 20
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.Parent = top
 
-local CONTENT_TOP = 60
-local CONTENT_HEIGHT = 352
-
 local tabBar = Instance.new("Frame")
 tabBar.Name = "TabBar"
 tabBar.Size = UDim2.new(1, -16, 0, 28)
@@ -1476,6 +1477,24 @@ tabContentHost.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
 tabContentHost.BackgroundTransparency = 1
 tabContentHost.ClipsDescendants = true
 tabContentHost.Parent = main
+
+UI.screen = screen
+UI.main = main
+UI.top = top
+UI.title = title
+UI.countLabel = countLabel
+UI.refreshBtn = refreshBtn
+UI.closeBtn = closeBtn
+UI.filtersBtn = filtersBtn
+UI.tabPetsBtn = tabPetsBtn
+UI.tabWorldsBtn = tabWorldsBtn
+UI.tabLocationsBtn = tabLocationsBtn
+UI.tabConfigBtn = tabConfigBtn
+UI.tabContentHost = tabContentHost
+end
+
+do
+local tabContentHost = UI.tabContentHost
 
 local petsPanel = Instance.new("Frame")
 petsPanel.Name = "PetsPanel"
@@ -1610,6 +1629,21 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 4)
 listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 listLayout.Parent = scroll
+
+UI.petsPanel = petsPanel
+UI.filterBar = filterBar
+UI.filterHint = filterHint
+UI.filterInput = filterInput
+UI.filterAddBtn = filterAddBtn
+UI.filterClearBtn = filterClearBtn
+UI.filterChipScroll = filterChipScroll
+UI.filterChipLayout = filterChipLayout
+UI.scroll = scroll
+UI.listLayout = listLayout
+end
+
+do
+local tabContentHost = UI.tabContentHost
 
 local worldsPanel = Instance.new("Frame")
 worldsPanel.Name = "WorldsPanel"
@@ -1845,6 +1879,25 @@ local worldListLayout = Instance.new("UIListLayout")
 worldListLayout.Padding = UDim.new(0, 4)
 worldListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 worldListLayout.Parent = worldScroll
+
+UI.worldsPanel = worldsPanel
+UI.worldButtons = worldButtons
+UI.worldSelectedLabel = worldSelectedLabel
+UI.worldFilterHint = worldFilterHint
+UI.worldFilterInput = worldFilterInput
+UI.worldFilterAddBtn = worldFilterAddBtn
+UI.worldFilterClearBtn = worldFilterClearBtn
+UI.worldFilterChipScroll = worldFilterChipScroll
+UI.worldFilterChipLayout = worldFilterChipLayout
+UI.worldScroll = worldScroll
+UI.worldListLayout = worldListLayout
+UI.worldHuntStartBtn = worldHuntStartBtn
+UI.worldHuntStopBtn = worldHuntStopBtn
+UI.worldHuntStatusLabel = worldHuntStatusLabel
+end
+
+do
+local tabContentHost = UI.tabContentHost
 
 local locationsPanel = Instance.new("Frame")
 locationsPanel.Name = "LocationsPanel"
@@ -2098,6 +2151,13 @@ copyAllBtn.MouseButton1Click:Connect(function()
 		or "Printed all locations to Output (F9) – paste into script"
 end)
 
+UI.locationsPanel = locationsPanel
+end
+
+do
+local main = UI.main
+local tabContentHost = UI.tabContentHost
+
 local configPanel = Instance.new("Frame")
 configPanel.Name = "ConfigPanel"
 configPanel.Size = UDim2.new(1, 0, 1, 0)
@@ -2286,54 +2346,27 @@ versionLabel.Font = Enum.Font.Gotham
 versionLabel.TextXAlignment = Enum.TextXAlignment.Right
 versionLabel.Parent = bottomRow
 
-makeDraggable(main, { top, title })
+makeDraggable(main, { UI.top, UI.title })
 
-	UI = {
-		screen = screen,
-		countLabel = countLabel,
-		refreshBtn = refreshBtn,
-		closeBtn = closeBtn,
-		tabPetsBtn = tabPetsBtn,
-		tabWorldsBtn = tabWorldsBtn,
-		tabLocationsBtn = tabLocationsBtn,
-		tabConfigBtn = tabConfigBtn,
-		tabContentHost = tabContentHost,
-		petsPanel = petsPanel,
-		worldsPanel = worldsPanel,
-		locationsPanel = locationsPanel,
-		configPanel = configPanel,
-		filterBar = filterBar,
-		filterHint = filterHint,
-		filterInput = filterInput,
-		filterAddBtn = filterAddBtn,
-		filterClearBtn = filterClearBtn,
-		filtersBtn = filtersBtn,
-		filterChipScroll = filterChipScroll,
-		filterChipLayout = filterChipLayout,
-		scroll = scroll,
-		listLayout = listLayout,
-		worldButtons = worldButtons,
-		worldSelectedLabel = worldSelectedLabel,
-		worldFilterHint = worldFilterHint,
-		worldFilterInput = worldFilterInput,
-		worldFilterAddBtn = worldFilterAddBtn,
-		worldFilterClearBtn = worldFilterClearBtn,
-		worldFilterChipScroll = worldFilterChipScroll,
-		worldFilterChipLayout = worldFilterChipLayout,
-		worldScroll = worldScroll,
-		worldListLayout = worldListLayout,
-		worldHuntStartBtn = worldHuntStartBtn,
-		worldHuntStopBtn = worldHuntStopBtn,
-		worldHuntStatusLabel = worldHuntStatusLabel,
-		farmStartBtn = farmStartBtn,
-		farmStopBtn = farmStopBtn,
-		farmStatusLabel = farmStatusLabel,
-		autoRefreshBtn = autoRefreshBtn,
-		farmWaitInput = farmWaitInput,
-		farmWaitApplyBtn = farmWaitApplyBtn,
-		configStatusLabel = configStatusLabel,
-	}
+UI.configPanel = configPanel
+UI.farmWaitInput = farmWaitInput
+UI.farmWaitApplyBtn = farmWaitApplyBtn
+UI.configStatusLabel = configStatusLabel
+UI.farmStartBtn = farmStartBtn
+UI.farmStopBtn = farmStopBtn
+UI.farmStatusLabel = farmStatusLabel
+UI.autoRefreshBtn = autoRefreshBtn
 end
+
+end)
+
+if not uiBuildOk then
+	showLoadError(tostring(uiBuildErr))
+	warn("[BloxMonster] UI build error:", uiBuildErr)
+	return
+end
+
+local UI = UI
 
 TAB_PANELS = {
 	{ id = "pets", panel = UI.petsPanel },
