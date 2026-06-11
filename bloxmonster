@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.26"
+local VERSION = "1.7.29"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1267,22 +1267,14 @@ local function makeDraggable(frame, dragHandles)
 end
 
 local function teleportToPet(model)
-	local char = LocalPlayer.Character
-	if not char then
-		return
+	if not model then
+		return false
 	end
-	local root = char:FindFirstChild("HumanoidRootPart")
 	local pos = getModelPosition(model)
-	if not root or not pos then
-		return
+	if not pos then
+		return false
 	end
-	local target = CFrame.new(pos + Vector3.new(0, 0, 6))
-	pcall(function()
-		char:PivotTo(target)
-	end)
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
-	root.CFrame = target
+	return robustTeleportToPosition(pos + Vector3.new(0, 0, 6))
 end
 
 -- Remove existing UI
@@ -1296,11 +1288,15 @@ if errExisting then
 end
 
 local UI
+local onWorldButtonClick
+local TAB_PANELS
+
 do
 local screen = Instance.new("ScreenGui")
 screen.Name = "BloxMonster"
 screen.ResetOnSpawn = false
 screen.DisplayOrder = 50
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
@@ -1473,12 +1469,21 @@ local tabConfigCorner = Instance.new("UICorner")
 tabConfigCorner.CornerRadius = UDim.new(0, 6)
 tabConfigCorner.Parent = tabConfigBtn
 
+local tabContentHost = Instance.new("Frame")
+tabContentHost.Name = "TabContent"
+tabContentHost.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
+tabContentHost.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+tabContentHost.BackgroundTransparency = 1
+tabContentHost.ClipsDescendants = true
+tabContentHost.Parent = main
+
 local petsPanel = Instance.new("Frame")
 petsPanel.Name = "PetsPanel"
-petsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
-petsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+petsPanel.Size = UDim2.new(1, 0, 1, 0)
+petsPanel.Position = UDim2.new(0, 0, 0, 0)
 petsPanel.BackgroundTransparency = 1
-petsPanel.Parent = main
+petsPanel.ZIndex = 2
+petsPanel.Parent = tabContentHost
 
 local filterBar = Instance.new("Frame")
 filterBar.Name = "FilterBar"
@@ -1608,11 +1613,12 @@ listLayout.Parent = scroll
 
 local worldsPanel = Instance.new("Frame")
 worldsPanel.Name = "WorldsPanel"
-worldsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
-worldsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+worldsPanel.Size = UDim2.new(1, 0, 1, 0)
+worldsPanel.Position = UDim2.new(0, 0, 0, 0)
 worldsPanel.BackgroundTransparency = 1
 worldsPanel.Visible = false
-worldsPanel.Parent = main
+worldsPanel.ZIndex = 1
+worldsPanel.Parent = tabContentHost
 
 local worldHint = Instance.new("TextLabel")
 worldHint.Size = UDim2.new(1, -8, 0, 14)
@@ -1658,6 +1664,12 @@ for i, world in ipairs(WORLD_ZONES) do
 	btnCorner.Parent = btn
 
 	worldButtons[world.id] = btn
+	local capturedWorldId = world.id
+	btn.MouseButton1Click:Connect(function()
+		if onWorldButtonClick then
+			onWorldButtonClick(capturedWorldId, true)
+		end
+	end)
 end
 
 local worldSelectedLabel = Instance.new("TextLabel")
@@ -1836,11 +1848,12 @@ worldListLayout.Parent = worldScroll
 
 local locationsPanel = Instance.new("Frame")
 locationsPanel.Name = "LocationsPanel"
-locationsPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
-locationsPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+locationsPanel.Size = UDim2.new(1, 0, 1, 0)
+locationsPanel.Position = UDim2.new(0, 0, 0, 0)
 locationsPanel.BackgroundTransparency = 1
 locationsPanel.Visible = false
-locationsPanel.Parent = main
+locationsPanel.ZIndex = 1
+locationsPanel.Parent = tabContentHost
 
 local locationsHint = Instance.new("TextLabel")
 locationsHint.Size = UDim2.new(1, -8, 0, 28)
@@ -2087,11 +2100,12 @@ end)
 
 local configPanel = Instance.new("Frame")
 configPanel.Name = "ConfigPanel"
-configPanel.Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT)
-configPanel.Position = UDim2.new(0, 8, 0, CONTENT_TOP)
+configPanel.Size = UDim2.new(1, 0, 1, 0)
+configPanel.Position = UDim2.new(0, 0, 0, 0)
 configPanel.BackgroundTransparency = 1
 configPanel.Visible = false
-configPanel.Parent = main
+configPanel.ZIndex = 1
+configPanel.Parent = tabContentHost
 
 local configHint = Instance.new("TextLabel")
 configHint.Size = UDim2.new(1, -8, 0, 28)
@@ -2272,7 +2286,7 @@ versionLabel.Font = Enum.Font.Gotham
 versionLabel.TextXAlignment = Enum.TextXAlignment.Right
 versionLabel.Parent = bottomRow
 
-makeDraggable(main, { top, title, main })
+makeDraggable(main, { top, title })
 
 	UI = {
 		screen = screen,
@@ -2283,6 +2297,7 @@ makeDraggable(main, { top, title, main })
 		tabWorldsBtn = tabWorldsBtn,
 		tabLocationsBtn = tabLocationsBtn,
 		tabConfigBtn = tabConfigBtn,
+		tabContentHost = tabContentHost,
 		petsPanel = petsPanel,
 		worldsPanel = worldsPanel,
 		locationsPanel = locationsPanel,
@@ -2315,9 +2330,17 @@ makeDraggable(main, { top, title, main })
 		farmStatusLabel = farmStatusLabel,
 		autoRefreshBtn = autoRefreshBtn,
 		farmWaitInput = farmWaitInput,
+		farmWaitApplyBtn = farmWaitApplyBtn,
 		configStatusLabel = configStatusLabel,
 	}
 end
+
+TAB_PANELS = {
+	{ id = "pets", panel = UI.petsPanel },
+	{ id = "worlds", panel = UI.worldsPanel },
+	{ id = "locations", panel = UI.locationsPanel },
+	{ id = "config", panel = UI.configPanel },
+}
 
 
 local autoRefreshRunning = false
@@ -2540,7 +2563,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 		rowCorner.Parent = row
 
 		local nameLabel = Instance.new("TextLabel")
-		nameLabel.Size = UDim2.new(1, -70, 0, 18)
+		nameLabel.Size = UDim2.new(1, -76, 0, 18)
 		nameLabel.Position = UDim2.new(0, 8, 0, 4)
 		nameLabel.BackgroundTransparency = 1
 		nameLabel.Text = pet.name
@@ -2557,7 +2580,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 			prioText = ("P%s | "):format(tostring(getPetFilterPriority(pet.name, filters)))
 		end
 		local infoLabel = Instance.new("TextLabel")
-		infoLabel.Size = UDim2.new(1, -70, 0, 16)
+		infoLabel.Size = UDim2.new(1, -76, 0, 16)
 		infoLabel.Position = UDim2.new(0, 8, 0, 22)
 		infoLabel.BackgroundTransparency = 1
 		infoLabel.Text = prioText .. ("Rarity: %s | Tier: %s | Lv: %s | Mut: %s | %s"):format(
@@ -2571,7 +2594,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 		infoLabel.Parent = row
 
 		local pathLabel = Instance.new("TextLabel")
-		pathLabel.Size = UDim2.new(1, -70, 0, 14)
+		pathLabel.Size = UDim2.new(1, -76, 0, 14)
 		pathLabel.Position = UDim2.new(0, 8, 0, 36)
 		pathLabel.BackgroundTransparency = 1
 		pathLabel.Text = pet.path
@@ -2591,6 +2614,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 		tpBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
 		tpBtn.TextSize = 11
 		tpBtn.Font = Enum.Font.GothamBold
+		tpBtn.ZIndex = 2
 		tpBtn.Parent = row
 
 		local tpCorner = Instance.new("UICorner")
@@ -2598,9 +2622,25 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 		tpCorner.Parent = tpBtn
 
 		local modelRef = pet.model
+		local petName = pet.name
 		tpBtn.MouseButton1Click:Connect(function()
-			if modelRef and modelRef.Parent then
-				teleportToPet(modelRef)
+			local model = modelRef
+			if not model or not model.Parent then
+				for _, entry in ipairs(getCachedWorldPets("light")) do
+					if entry.name == petName and entry.model and entry.model.Parent then
+						model = entry.model
+						break
+					end
+				end
+			end
+			if model and model.Parent then
+				if teleportToPet(model) then
+					UI.farmStatusLabel.Text = "Teleported to " .. petName
+				else
+					UI.farmStatusLabel.Text = "Teleport failed for " .. petName
+				end
+			else
+				UI.farmStatusLabel.Text = petName .. " gone – tap Refresh"
 			end
 		end)
 	end
@@ -2832,6 +2872,8 @@ local function selectWorld(worldId, teleport)
 	refreshWorldList(true)
 end
 
+onWorldButtonClick = selectWorld
+
 local function getFarmWaitSec()
 	return farmWaitSec
 end
@@ -2862,12 +2904,18 @@ local function styleTabButton(btn, active)
 	btn.TextColor3 = active and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
 end
 
+local function setTabPanelVisible(panel, visible)
+	panel.Visible = visible
+	panel.ZIndex = visible and 2 or 1
+end
+
 local function setActiveTab(tabName)
 	activeTab = tabName
-	UI.petsPanel.Visible = tabName == "pets"
-	UI.worldsPanel.Visible = tabName == "worlds"
-	UI.locationsPanel.Visible = tabName == "locations"
-	UI.configPanel.Visible = tabName == "config"
+	if TAB_PANELS then
+		for _, entry in ipairs(TAB_PANELS) do
+			setTabPanelVisible(entry.panel, entry.id == tabName)
+		end
+	end
 	UI.filtersBtn.Visible = tabName == "pets"
 
 	styleTabButton(UI.tabPetsBtn, tabName == "pets")
@@ -3211,125 +3259,127 @@ local function stopAutoRefresh()
 	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
 end
 
-UI.refreshBtn.MouseButton1Click:Connect(function()
-	if activeTab == "worlds" then
-		refreshWorldList(true)
-	else
-		refreshList(true)
-	end
-end)
-
-UI.filterAddBtn.MouseButton1Click:Connect(function()
-	task.defer(addFilterFromInput)
-end)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed then
-		return
-	end
-	if input.KeyCode ~= Enum.KeyCode.Return and input.KeyCode ~= Enum.KeyCode.KeypadEnter then
-		return
-	end
-	local focused = UserInputService:GetFocusedTextBox()
-	if focused == UI.filterInput then
-		addFilterFromInput()
-	elseif focused == UI.worldFilterInput then
-		addWorldFilterFromInput()
-	elseif focused == UI.farmWaitInput then
-		applyFarmWaitFromInput()
-	end
-end)
-UI.filterClearBtn.MouseButton1Click:Connect(function()
-	table.clear(nameFilters)
-	UI.filterInput.Text = ""
-	rebuildFilterChips()
-	refreshList(false)
-end)
-UI.filtersBtn.MouseButton1Click:Connect(function()
-	setFilterBarVisible(not filterBarVisible)
-end)
-
-UI.tabPetsBtn.MouseButton1Click:Connect(function()
-	setActiveTab("pets")
-end)
-
-UI.tabWorldsBtn.MouseButton1Click:Connect(function()
-	setActiveTab("worlds")
-end)
-
-UI.tabLocationsBtn.MouseButton1Click:Connect(function()
-	setActiveTab("locations")
-end)
-
-UI.tabConfigBtn.MouseButton1Click:Connect(function()
-	setActiveTab("config")
-end)
-
-farmWaitApplyBtn.MouseButton1Click:Connect(function()
-	applyFarmWaitFromInput()
-end)
-
-for _, world in ipairs(WORLD_ZONES) do
-	local btn = UI.worldButtons[world.id]
-	if btn then
-		btn.MouseButton1Click:Connect(function()
-			selectWorld(world.id, true)
-		end)
-	end
-end
-
-UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
-	task.defer(addWorldFilterFromInput)
-end)
-
-UI.worldFilterClearBtn.MouseButton1Click:Connect(function()
-	table.clear(getSelectedWorldFilters())
-	UI.worldFilterInput.Text = ""
-	rebuildWorldFilterChips()
-	refreshWorldList(false)
-end)
-
-UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
-UI.worldHuntStopBtn.MouseButton1Click:Connect(function()
-	stopWorldHunt()
-end)
-
-UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
-UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
-
-UI.closeBtn.MouseButton1Click:Connect(function()
-	stopAutoRefresh()
-	stopAllFarm()
-	UI.screen:Destroy()
-end)
-
-UI.autoRefreshBtn.MouseButton1Click:Connect(function()
-	if autoRefreshRunning then
-		stopAutoRefresh()
-		return
-	end
-	autoRefreshRunning = true
-	UI.autoRefreshBtn.Text = "Auto refresh: ON"
-	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 70)
-	if autoRefreshThread then
-		task.cancel(autoRefreshThread)
-	end
-	autoRefreshThread = task.spawn(function()
-		while autoRefreshRunning do
-			if not autoFarmRunning and not worldHuntRunning then
-				if activeTab == "worlds" then
-					refreshWorldList(false)
-				else
-					refreshList(false)
-				end
-			end
-			task.wait(AUTO_REFRESH_SEC)
+local function connectAllUIHandlers()
+	UI.refreshBtn.MouseButton1Click:Connect(function()
+		if activeTab == "worlds" then
+			refreshWorldList(true)
+		else
+			refreshList(true)
 		end
 	end)
-end)
+
+	UI.filterAddBtn.MouseButton1Click:Connect(function()
+		task.defer(addFilterFromInput)
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then
+			return
+		end
+		if input.KeyCode ~= Enum.KeyCode.Return and input.KeyCode ~= Enum.KeyCode.KeypadEnter then
+			return
+		end
+		local focused = UserInputService:GetFocusedTextBox()
+		if focused == UI.filterInput then
+			addFilterFromInput()
+		elseif focused == UI.worldFilterInput then
+			addWorldFilterFromInput()
+		elseif focused == UI.farmWaitInput then
+			applyFarmWaitFromInput()
+		end
+	end)
+
+	UI.filterClearBtn.MouseButton1Click:Connect(function()
+		table.clear(nameFilters)
+		UI.filterInput.Text = ""
+		rebuildFilterChips()
+		refreshList(false)
+	end)
+
+	UI.filtersBtn.MouseButton1Click:Connect(function()
+		setFilterBarVisible(not filterBarVisible)
+	end)
+
+	UI.tabPetsBtn.MouseButton1Click:Connect(function()
+		setActiveTab("pets")
+	end)
+
+	UI.tabWorldsBtn.MouseButton1Click:Connect(function()
+		setActiveTab("worlds")
+	end)
+
+	UI.tabLocationsBtn.MouseButton1Click:Connect(function()
+		setActiveTab("locations")
+	end)
+
+	UI.tabConfigBtn.MouseButton1Click:Connect(function()
+		setActiveTab("config")
+	end)
+
+	UI.farmWaitApplyBtn.MouseButton1Click:Connect(function()
+		applyFarmWaitFromInput()
+	end)
+
+	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
+		task.defer(addWorldFilterFromInput)
+	end)
+
+	UI.worldFilterClearBtn.MouseButton1Click:Connect(function()
+		table.clear(getSelectedWorldFilters())
+		UI.worldFilterInput.Text = ""
+		rebuildWorldFilterChips()
+		refreshWorldList(false)
+	end)
+
+	UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
+	UI.worldHuntStopBtn.MouseButton1Click:Connect(function()
+		stopWorldHunt()
+	end)
+
+	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
+	UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
+
+	UI.closeBtn.MouseButton1Click:Connect(function()
+		stopAutoRefresh()
+		stopAllFarm()
+		UI.screen:Destroy()
+	end)
+
+	UI.autoRefreshBtn.MouseButton1Click:Connect(function()
+		if autoRefreshRunning then
+			stopAutoRefresh()
+			return
+		end
+		autoRefreshRunning = true
+		UI.autoRefreshBtn.Text = "Auto refresh: ON"
+		UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 70)
+		if autoRefreshThread then
+			task.cancel(autoRefreshThread)
+		end
+		autoRefreshThread = task.spawn(function()
+			while autoRefreshRunning do
+				if not autoFarmRunning and not worldHuntRunning then
+					if activeTab == "worlds" then
+						refreshWorldList(false)
+					else
+						refreshList(false)
+					end
+				end
+				task.wait(AUTO_REFRESH_SEC)
+			end
+		end)
+	end)
+end
+
+local connectOk, connectErr = pcall(connectAllUIHandlers)
+if not connectOk then
+	warn("[BloxMonster] UI handler connect error:", connectErr)
+	showLoadError(tostring(connectErr))
+end
 
 task.defer(function()
 	local initOk, initErr = pcall(function()
+		setActiveTab("pets")
 		rebuildWorldFilterChips()
 		refreshLocationRows()
 		refreshList()
