@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.23"
+local VERSION = "1.7.24"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -561,23 +561,34 @@ local function resolvePetIdentity(petOrName)
 	return { name = tostring(petOrName or "") }
 end
 
+local function exactNameEquals(text, fname, fcompact)
+	local lower = tostring(text or ""):lower()
+	local comp = compactName(text)
+	return lower == fname or comp == fcompact
+end
+
+local function pathEndsWithExactName(path, fname, fcompact)
+	local last = tostring(path or ""):match("([^%.]+)$")
+	if not last then
+		return false
+	end
+	return exactNameEquals(last, fname, fcompact)
+end
+
 local function nameMatchesFilter(filterName, pet)
 	local fname = tostring(filterName or ""):lower()
 	local fcompact = compactName(filterName)
 	if fname == "" or fcompact == "" then
 		return false
 	end
-	local texts = {
-		tostring(pet.name or ""),
-		pet.model and pet.model.Name or "",
-		tostring(pet.path or ""),
-	}
-	for _, text in ipairs(texts) do
-		local lower = text:lower()
-		local comp = compactName(text)
-		if lower:find(fname, 1, true) or comp:find(fcompact, 1, true) then
-			return true
-		end
+	if exactNameEquals(pet.name, fname, fcompact) then
+		return true
+	end
+	if pet.model and exactNameEquals(pet.model.Name, fname, fcompact) then
+		return true
+	end
+	if pathEndsWithExactName(pet.path, fname, fcompact) then
+		return true
 	end
 	return false
 end
