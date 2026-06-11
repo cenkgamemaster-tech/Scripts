@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.30"
+local VERSION = "1.7.31"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1156,7 +1156,7 @@ local function showLoadError(message)
 	label.Parent = frame
 end
 
-local function robustTeleportToPosition(pos, exact)
+local function setCharacterAtPosition(pos, exact, holdRetries)
 	local char = LocalPlayer.Character
 	if not char or not pos then
 		return false
@@ -1174,7 +1174,8 @@ local function robustTeleportToPosition(pos, exact)
 	root.AssemblyAngularVelocity = Vector3.zero
 	root.CFrame = target
 
-	for _ = 1, 5 do
+	holdRetries = holdRetries or 0
+	for _ = 1, holdRetries do
 		task.wait(0.08)
 		if not root.Parent then
 			return false
@@ -1182,6 +1183,10 @@ local function robustTeleportToPosition(pos, exact)
 		root.CFrame = target
 	end
 	return true
+end
+
+local function robustTeleportToPosition(pos, exact)
+	return setCharacterAtPosition(pos, exact, 5)
 end
 
 local function teleportPlayerToPosition(pos)
@@ -1274,7 +1279,7 @@ local function teleportToPet(model)
 	if not pos then
 		return false
 	end
-	return robustTeleportToPosition(pos + Vector3.new(0, 0, 6))
+	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
 end
 
 -- Remove existing UI
