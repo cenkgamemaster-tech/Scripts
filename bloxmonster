@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.21"
+local VERSION = "1.7.23"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -50,6 +50,11 @@ local WORLD_ZONES = {
 		name = "Astral Grove",
 		keywords = { "astral", "grove", "astralgrove" },
 	},
+	{
+		id = "bamboo_temple",
+		name = "Bamboo Temple",
+		keywords = { "bamboo", "temple", "bambootemple" },
+	},
 }
 
 -- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
@@ -59,6 +64,7 @@ local WORLD_SPAWN_LOCATIONS = {
 	lava_volcano = { x = 1831.778, y = 48.990, z = 2097.601 },
 	iceberg = { x = 2167.745, y = 138.188, z = 260.928 },
 	astral_grove = { x = 886.715, y = 28.821, z = -1335.855 },
+	bamboo_temple = { x = 886.715, y = 28.821, z = -1335.855 },
 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
@@ -413,12 +419,10 @@ local function getCachedWorldPets(scanMode)
 end
 
 local worldPetFilters = {
-	lava_volcano = { { name = "Thornshade", priority = 1 } },
 	astral_grove = {
 		{ name = "Orbitfin", priority = 1 },
 		{ name = "Pico", priority = 2 },
 	},
-	iceberg = { { name = "Snowbud", priority = 1 } },
 }
 -- Session overrides from Locations tab Save (falls back to WORLD_SPAWN_LOCATIONS).
 local worldSavedLocations = {}
@@ -1592,7 +1596,7 @@ worldHint.TextXAlignment = Enum.TextXAlignment.Left
 worldHint.Parent = worldsPanel
 
 local worldBtnGrid = Instance.new("Frame")
-worldBtnGrid.Size = UDim2.new(1, 0, 0, 56)
+worldBtnGrid.Size = UDim2.new(1, 0, 0, 86)
 worldBtnGrid.Position = UDim2.new(0, 0, 0, 18)
 worldBtnGrid.BackgroundTransparency = 1
 worldBtnGrid.Parent = worldsPanel
@@ -1628,7 +1632,7 @@ end
 
 local worldSelectedLabel = Instance.new("TextLabel")
 worldSelectedLabel.Size = UDim2.new(1, -8, 0, 16)
-worldSelectedLabel.Position = UDim2.new(0, 4, 0, 78)
+worldSelectedLabel.Position = UDim2.new(0, 4, 0, 108)
 worldSelectedLabel.BackgroundTransparency = 1
 worldSelectedLabel.Text = "Selected: Lava Volcano"
 worldSelectedLabel.TextColor3 = Color3.fromRGB(180, 220, 190)
@@ -1640,7 +1644,7 @@ worldSelectedLabel.Parent = worldsPanel
 
 local worldFilterBar = Instance.new("Frame")
 worldFilterBar.Size = UDim2.new(1, 0, 0, 72)
-worldFilterBar.Position = UDim2.new(0, 0, 0, 96)
+worldFilterBar.Position = UDim2.new(0, 0, 0, 126)
 worldFilterBar.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
 worldFilterBar.BorderSizePixel = 0
 worldFilterBar.Parent = worldsPanel
@@ -1733,7 +1737,7 @@ worldFilterChipLayout.Parent = worldFilterChipScroll
 
 local worldHuntRow = Instance.new("Frame")
 worldHuntRow.Size = UDim2.new(1, 0, 0, 28)
-worldHuntRow.Position = UDim2.new(0, 0, 0, 172)
+worldHuntRow.Position = UDim2.new(0, 0, 0, 202)
 worldHuntRow.BackgroundTransparency = 1
 worldHuntRow.Parent = worldsPanel
 
@@ -1780,8 +1784,8 @@ worldHuntStatusLabel.Parent = worldHuntRow
 
 local worldScroll = Instance.new("ScrollingFrame")
 worldScroll.Name = "WorldList"
-worldScroll.Size = UDim2.new(1, 0, 1, -204)
-worldScroll.Position = UDim2.new(0, 0, 0, 204)
+worldScroll.Size = UDim2.new(1, 0, 1, -234)
+worldScroll.Position = UDim2.new(0, 0, 0, 234)
 worldScroll.BackgroundColor3 = Color3.fromRGB(25, 38, 58)
 worldScroll.BorderSizePixel = 0
 worldScroll.ScrollBarThickness = 8
