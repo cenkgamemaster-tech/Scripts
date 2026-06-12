@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.31"
+local VERSION = "1.7.32"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -66,7 +66,7 @@ local WORLD_SPAWN_LOCATIONS = {
 	lava_volcano = { x = 1831.778, y = 48.990, z = 2097.601 },
 	iceberg = { x = 2167.745, y = 138.188, z = 260.928 },
 	astral_grove = { x = 1009.309, y = 28.937, z = -1430.242 },
-	bamboo_temple = { x = -1806.118, y = 27.892, z = 283.938 },
+	bamboo_temple = { x = -1740.765, y = 17.948, z = 178.225 },
 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
