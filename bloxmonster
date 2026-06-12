@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.35"
+local VERSION = "1.7.36"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -29,7 +29,10 @@ local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
 
 local function nowSeconds()
-	return time()
+	if typeof(time) == "function" then
+		return time()
+	end
+	return tick()
 end
 
 -- World zones: keywords match workspace paths; add pets per world on Worlds tab.
@@ -446,7 +449,10 @@ local farmStaySec = DEFAULT_FARM_STAY_SEC
 local farmRunId = 0
 
 local function shouldFarmContinue(runId)
-	return autoFarmRunning and farmRunId == runId
+	if runId then
+		return (autoFarmRunning or worldHuntRunning) and farmRunId == runId
+	end
+	return autoFarmRunning or worldHuntRunning
 end
 
 local function farmWait(seconds, runId)
@@ -3321,6 +3327,11 @@ local function formatFarmStayTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
+local function setFarmStatus(text)
+	UI.farmStatusLabel.Text = text
+	UI.worldHuntStatusLabel.Text = text
+end
+
 local function runFarmLocationPhase(runId)
 	if not farmLocationEnabled then
 		return true
@@ -3332,7 +3343,7 @@ local function runFarmLocationPhase(runId)
 	end
 
 	setFarmStatus("Going to farm location...")
-	if not robustTeleportToPosition(pos, true) then
+	if not setCharacterAtPosition(pos, true, 0) then
 		setFarmStatus("Farm location teleport failed")
 		return farmWait(FARM_NO_TARGET_WAIT_SEC, runId)
 	end
@@ -3388,11 +3399,6 @@ local function setActiveTab(tabName)
 		updateFarmLocationEnableButton()
 		refreshConfigStatusLabel()
 	end
-end
-
-local function setFarmStatus(text)
-	UI.farmStatusLabel.Text = text
-	UI.worldHuntStatusLabel.Text = text
 end
 
 local function isAnyFarmRunning()
