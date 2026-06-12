@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.34"
+local VERSION = "1.7.35"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -21,6 +21,9 @@ local FARM_NO_TARGET_WAIT_SEC = 2
 local DEFAULT_FARM_WAIT_SEC = 30
 local MIN_FARM_WAIT_SEC = 5
 local MAX_FARM_WAIT_SEC = 120
+local DEFAULT_FARM_STAY_SEC = 120
+local MIN_FARM_STAY_SEC = 10
+local MAX_FARM_STAY_SEC = 600
 local WORLD_TELEPORT_SETTLE_SEC = 3
 local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
@@ -70,6 +73,8 @@ local WORLD_SPAWN_LOCATIONS = {
 	bamboo_temple = { x = -1909.778, y = 4.971, z = 106.222 },
 }
 
+local FARM_LOCATION_ID = "farm_location"
+local FARM_SPAWN_LOCATION = { x = -1629.027, y = 10.694, z = 315.471 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
@@ -430,11 +435,14 @@ local worldPetFilters = {
 }
 -- Session overrides from Locations tab Save (falls back to WORLD_SPAWN_LOCATIONS).
 local worldSavedLocations = {}
+local farmLocationSession = nil
 local selectedWorldId = "lava_volcano"
 local worldHuntRunning = false
 local worldHuntThread = nil
 local activeTab = "pets"
 local farmWaitSec = DEFAULT_FARM_WAIT_SEC
+local farmLocationEnabled = false
+local farmStaySec = DEFAULT_FARM_STAY_SEC
 local farmRunId = 0
 
 local function shouldFarmContinue(runId)
@@ -1070,6 +1078,11 @@ local function formatHardcodeBlock()
 		end
 	end
 	table.insert(lines, "}" )
+	local farmLoc = resolveFarmLocation()
+	if farmLoc then
+		table.insert(lines, "")
+		table.insert(lines, formatFarmLocationHardcodeEntry(farmLoc))
+	end
 	return table.concat(lines, "\n")
 end
 
@@ -1095,6 +1108,38 @@ local function clearWorldLocation(worldId)
 	worldSavedLocations[worldId] = nil
 end
 
+local function resolveFarmLocation()
+	if farmLocationSession then
+		return farmLocationSession
+	end
+	return FARM_SPAWN_LOCATION
+end
+
+local function getFarmLocationPosition()
+	local loc = resolveFarmLocation()
+	if not loc then
+		return nil
+	end
+	return Vector3.new(loc.x, loc.y, loc.z)
+end
+
+local function formatFarmLocationHardcodeEntry(loc)
+	return ('local FARM_SPAWN_LOCATION = { x = %.3f, y = %.3f, z = %.3f }'):format(loc.x, loc.y, loc.z)
+end
+
+local function saveFarmLocation()
+	local pos = getPlayerPosition()
+	if not pos then
+		return false
+	end
+	farmLocationSession = { x = pos.X, y = pos.Y, z = pos.Z }
+	return true, pos
+end
+
+local function clearFarmLocation()
+	farmLocationSession = nil
+end
+
 local function formatPosition(pos)
 	return ("%.1f, %.1f, %.1f"):format(pos.X, pos.Y, pos.Z)
 end
@@ -1102,7 +1147,33 @@ end
 local locationCoordBoxes = {}
 local locationHardcodeLabels = {}
 
+local function refreshFarmLocationRow()
+	local box = locationCoordBoxes[FARM_LOCATION_ID]
+	local hint = locationHardcodeLabels[FARM_LOCATION_ID]
+	if not box then
+		return
+	end
+	local loc = resolveFarmLocation()
+	local isBaked = loc and farmLocationSession == nil
+	if loc then
+		box.Text = ("x = %.3f,  y = %.3f,  z = %.3f"):format(loc.x, loc.y, loc.z)
+		box.TextColor3 = Color3.fromRGB(255, 245, 160)
+		if hint then
+			hint.Text = isBaked
+				and ("hardcoded: " .. formatFarmLocationHardcodeEntry(loc))
+				or ("session: " .. formatFarmLocationHardcodeEntry(loc))
+		end
+	else
+		box.Text = "x = ?,  y = ?,  z = ?  (not set)"
+		box.TextColor3 = Color3.fromRGB(140, 170, 150)
+		if hint then
+			hint.Text = "Save in-game, then Copy -> paste into FARM_SPAWN_LOCATION"
+		end
+	end
+end
+
 local function refreshLocationRows()
+	refreshFarmLocationRow()
 	for _, world in ipairs(WORLD_ZONES) do
 		local box = locationCoordBoxes[world.id]
 		local hint = locationHardcodeLabels[world.id]
@@ -1919,7 +1990,7 @@ local locationsHint = Instance.new("TextLabel")
 locationsHint.Size = UDim2.new(1, -8, 0, 28)
 locationsHint.Position = UDim2.new(0, 4, 0, 2)
 locationsHint.BackgroundTransparency = 1
-locationsHint.Text = "Save each world, then Copy -> paste into WORLD_SPAWN_LOCATIONS in the script."
+locationsHint.Text = "Save world spawns and farm location, then Copy -> paste into the script."
 locationsHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 locationsHint.TextSize = 10
 locationsHint.Font = Enum.Font.Gotham
@@ -1981,6 +2052,171 @@ copyAllCorner.CornerRadius = UDim.new(0, 4)
 copyAllCorner.Parent = copyAllBtn
 
 local locationSaveButtons = {}
+
+do
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, -8, 0, 72)
+	row.BackgroundColor3 = Color3.fromRGB(38, 58, 48)
+	row.LayoutOrder = 0
+	row.Parent = locationsScroll
+
+	local rowCorner = Instance.new("UICorner")
+	rowCorner.CornerRadius = UDim.new(0, 4)
+	rowCorner.Parent = row
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1, -196, 0, 18)
+	nameLabel.Position = UDim2.new(0, 8, 0, 4)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = "Farm location"
+	nameLabel.TextColor3 = Color3.fromRGB(200, 255, 220)
+	nameLabel.TextSize = 12
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.Parent = row
+
+	local saveBtn = Instance.new("TextButton")
+	saveBtn.Size = UDim2.new(0, 40, 0, 20)
+	saveBtn.Position = UDim2.new(1, -188, 0, 4)
+	saveBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+	saveBtn.BorderSizePixel = 0
+	saveBtn.Text = "Save"
+	saveBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+	saveBtn.TextSize = 10
+	saveBtn.Font = Enum.Font.GothamBold
+	saveBtn.Parent = row
+
+	local saveCorner = Instance.new("UICorner")
+	saveCorner.CornerRadius = UDim.new(0, 4)
+	saveCorner.Parent = saveBtn
+
+	local goBtn = Instance.new("TextButton")
+	goBtn.Size = UDim2.new(0, 32, 0, 20)
+	goBtn.Position = UDim2.new(1, -144, 0, 4)
+	goBtn.BackgroundColor3 = Color3.fromRGB(45, 80, 100)
+	goBtn.BorderSizePixel = 0
+	goBtn.Text = "Go"
+	goBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
+	goBtn.TextSize = 10
+	goBtn.Font = Enum.Font.GothamBold
+	goBtn.Parent = row
+
+	local goCorner = Instance.new("UICorner")
+	goCorner.CornerRadius = UDim.new(0, 4)
+	goCorner.Parent = goBtn
+
+	local copyBtn = Instance.new("TextButton")
+	copyBtn.Size = UDim2.new(0, 40, 0, 20)
+	copyBtn.Position = UDim2.new(1, -108, 0, 4)
+	copyBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
+	copyBtn.BorderSizePixel = 0
+	copyBtn.Text = "Copy"
+	copyBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
+	copyBtn.TextSize = 10
+	copyBtn.Font = Enum.Font.GothamBold
+	copyBtn.Parent = row
+
+	local copyCorner = Instance.new("UICorner")
+	copyCorner.CornerRadius = UDim.new(0, 4)
+	copyCorner.Parent = copyBtn
+
+	local clearBtn = Instance.new("TextButton")
+	clearBtn.Size = UDim2.new(0, 40, 0, 20)
+	clearBtn.Position = UDim2.new(1, -64, 0, 4)
+	clearBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 45)
+	clearBtn.BorderSizePixel = 0
+	clearBtn.Text = "Clear"
+	clearBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
+	clearBtn.TextSize = 10
+	clearBtn.Font = Enum.Font.Gotham
+	clearBtn.Parent = row
+
+	local clearCorner = Instance.new("UICorner")
+	clearCorner.CornerRadius = UDim.new(0, 4)
+	clearCorner.Parent = clearBtn
+
+	local coordBox = Instance.new("TextLabel")
+	coordBox.Size = UDim2.new(1, -16, 0, 26)
+	coordBox.Position = UDim2.new(0, 8, 0, 26)
+	coordBox.BackgroundColor3 = Color3.fromRGB(18, 28, 42)
+	coordBox.BorderSizePixel = 0
+	coordBox.Text = "x = ?, y = ?, z = ?  (not set)"
+	coordBox.TextColor3 = Color3.fromRGB(255, 245, 160)
+	coordBox.TextSize = 12
+	coordBox.Font = Enum.Font.Gotham
+	coordBox.TextXAlignment = Enum.TextXAlignment.Left
+	coordBox.TextWrapped = true
+	coordBox.Parent = row
+	locationCoordBoxes[FARM_LOCATION_ID] = coordBox
+
+	local coordBoxCorner = Instance.new("UICorner")
+	coordBoxCorner.CornerRadius = UDim.new(0, 4)
+	coordBoxCorner.Parent = coordBox
+
+	local coordBoxPad = Instance.new("UIPadding")
+	coordBoxPad.PaddingLeft = UDim.new(0, 6)
+	coordBoxPad.PaddingRight = UDim.new(0, 4)
+	coordBoxPad.Parent = coordBox
+
+	local hardcodeLabel = Instance.new("TextLabel")
+	hardcodeLabel.Size = UDim2.new(1, -16, 0, 14)
+	hardcodeLabel.Position = UDim2.new(0, 8, 0, 54)
+	hardcodeLabel.BackgroundTransparency = 1
+	hardcodeLabel.Text = ""
+	hardcodeLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
+	hardcodeLabel.TextSize = 9
+	hardcodeLabel.Font = Enum.Font.Code
+	hardcodeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	hardcodeLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	hardcodeLabel.Parent = row
+	locationHardcodeLabels[FARM_LOCATION_ID] = hardcodeLabel
+
+	saveBtn.MouseButton1Click:Connect(function()
+		local ok = saveFarmLocation()
+		if ok then
+			locationsStatusLabel.Text = "Saved farm location – tap Copy to paste into script"
+			if refreshLocationRows then
+				refreshLocationRows()
+			end
+		else
+			locationsStatusLabel.Text = "Could not read character position"
+		end
+	end)
+
+	goBtn.MouseButton1Click:Connect(function()
+		local pos = getFarmLocationPosition()
+		if not pos then
+			locationsStatusLabel.Text = "No farm location set – Save or paste into script"
+			return
+		end
+		if robustTeleportToPosition(pos, true) then
+			locationsStatusLabel.Text = "Teleported to farm location"
+		else
+			locationsStatusLabel.Text = "Teleport failed"
+		end
+	end)
+
+	copyBtn.MouseButton1Click:Connect(function()
+		local loc = resolveFarmLocation()
+		if not loc then
+			locationsStatusLabel.Text = "Nothing to copy for farm location"
+			return
+		end
+		local line = formatFarmLocationHardcodeEntry(loc)
+		local copied = copyText(line)
+		locationsStatusLabel.Text = copied
+			and "Copied farm location to clipboard"
+			or "Printed farm location to Output (F9)"
+	end)
+
+	clearBtn.MouseButton1Click:Connect(function()
+		clearFarmLocation()
+		locationsStatusLabel.Text = "Cleared session farm location (hardcoded coords still used)"
+		if refreshLocationRows then
+			refreshLocationRows()
+		end
+	end)
+end
 
 for i, world in ipairs(WORLD_ZONES) do
 	local row = Instance.new("Frame")
@@ -2178,7 +2414,7 @@ local configHint = Instance.new("TextLabel")
 configHint.Size = UDim2.new(1, -8, 0, 28)
 configHint.Position = UDim2.new(0, 4, 0, 2)
 configHint.BackgroundTransparency = 1
-configHint.Text = "Farm timing and other settings. Changes apply on the next hunt wait."
+configHint.Text = "Farm timing and farm-location settings for world farm."
 configHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 configHint.TextSize = 10
 configHint.Font = Enum.Font.Gotham
@@ -2255,15 +2491,99 @@ farmWaitApplyCorner.CornerRadius = UDim.new(0, 4)
 farmWaitApplyCorner.Parent = farmWaitApplyBtn
 
 local configStatusLabel = Instance.new("TextLabel")
-configStatusLabel.Size = UDim2.new(1, -8, 0, 22)
-configStatusLabel.Position = UDim2.new(0, 4, 0, 130)
+configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 236)
 configStatusLabel.BackgroundTransparency = 1
 configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
 configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
 configStatusLabel.TextSize = 11
 configStatusLabel.Font = Enum.Font.Gotham
 configStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+configStatusLabel.TextWrapped = true
 configStatusLabel.Parent = configPanel
+
+local farmLocCard = Instance.new("Frame")
+farmLocCard.Size = UDim2.new(1, 0, 0, 100)
+farmLocCard.Position = UDim2.new(0, 0, 0, 126)
+farmLocCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
+farmLocCard.BorderSizePixel = 0
+farmLocCard.Parent = configPanel
+
+local farmLocCardCorner = Instance.new("UICorner")
+farmLocCardCorner.CornerRadius = UDim.new(0, 6)
+farmLocCardCorner.Parent = farmLocCard
+
+local farmLocationEnableBtn = Instance.new("TextButton")
+farmLocationEnableBtn.Size = UDim2.new(1, -12, 0, 24)
+farmLocationEnableBtn.Position = UDim2.new(0, 6, 0, 8)
+farmLocationEnableBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+farmLocationEnableBtn.BorderSizePixel = 0
+farmLocationEnableBtn.Text = "Farm location before world cycle: OFF"
+farmLocationEnableBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+farmLocationEnableBtn.TextSize = 10
+farmLocationEnableBtn.Font = Enum.Font.GothamBold
+farmLocationEnableBtn.Parent = farmLocCard
+
+local farmLocationEnableCorner = Instance.new("UICorner")
+farmLocationEnableCorner.CornerRadius = UDim.new(0, 4)
+farmLocationEnableCorner.Parent = farmLocationEnableBtn
+
+local farmStayLabel = Instance.new("TextLabel")
+farmStayLabel.Size = UDim2.new(1, -12, 0, 14)
+farmStayLabel.Position = UDim2.new(0, 6, 0, 36)
+farmStayLabel.BackgroundTransparency = 1
+farmStayLabel.Text = "Stay at farm location (seconds)"
+farmStayLabel.TextColor3 = Color3.fromRGB(180, 220, 190)
+farmStayLabel.TextSize = 11
+farmStayLabel.Font = Enum.Font.GothamBold
+farmStayLabel.TextXAlignment = Enum.TextXAlignment.Left
+farmStayLabel.Parent = farmLocCard
+
+local farmStayDesc = Instance.new("TextLabel")
+farmStayDesc.Size = UDim2.new(1, -12, 0, 14)
+farmStayDesc.Position = UDim2.new(0, 6, 0, 50)
+farmStayDesc.BackgroundTransparency = 1
+farmStayDesc.Text = ("Before each world cycle. Range: %d–%d sec."):format(
+	MIN_FARM_STAY_SEC,
+	MAX_FARM_STAY_SEC
+)
+farmStayDesc.TextColor3 = Color3.fromRGB(130, 160, 140)
+farmStayDesc.TextSize = 10
+farmStayDesc.Font = Enum.Font.Gotham
+farmStayDesc.TextXAlignment = Enum.TextXAlignment.Left
+farmStayDesc.Parent = farmLocCard
+
+local farmStayInput = Instance.new("TextBox")
+farmStayInput.Size = UDim2.new(0, 64, 0, 24)
+farmStayInput.Position = UDim2.new(0, 6, 0, 68)
+farmStayInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
+farmStayInput.BorderSizePixel = 0
+farmStayInput.ClearTextOnFocus = false
+farmStayInput.Text = tostring(DEFAULT_FARM_STAY_SEC)
+farmStayInput.TextColor3 = Color3.fromRGB(220, 255, 220)
+farmStayInput.TextSize = 12
+farmStayInput.Font = Enum.Font.Gotham
+farmStayInput.TextXAlignment = Enum.TextXAlignment.Center
+farmStayInput.Parent = farmLocCard
+
+local farmStayInputCorner = Instance.new("UICorner")
+farmStayInputCorner.CornerRadius = UDim.new(0, 4)
+farmStayInputCorner.Parent = farmStayInput
+
+local farmStayApplyBtn = Instance.new("TextButton")
+farmStayApplyBtn.Size = UDim2.new(0, 56, 0, 24)
+farmStayApplyBtn.Position = UDim2.new(0, 76, 0, 68)
+farmStayApplyBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+farmStayApplyBtn.BorderSizePixel = 0
+farmStayApplyBtn.Text = "Apply"
+farmStayApplyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+farmStayApplyBtn.TextSize = 11
+farmStayApplyBtn.Font = Enum.Font.GothamBold
+farmStayApplyBtn.Parent = farmLocCard
+
+local farmStayApplyCorner = Instance.new("UICorner")
+farmStayApplyCorner.CornerRadius = UDim.new(0, 4)
+farmStayApplyCorner.Parent = farmStayApplyBtn
 
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
@@ -2358,6 +2678,9 @@ makeDraggable(main, { UI.top, UI.title })
 UI.configPanel = configPanel
 UI.farmWaitInput = farmWaitInput
 UI.farmWaitApplyBtn = farmWaitApplyBtn
+UI.farmLocationEnableBtn = farmLocationEnableBtn
+UI.farmStayInput = farmStayInput
+UI.farmStayApplyBtn = farmStayApplyBtn
 UI.configStatusLabel = configStatusLabel
 UI.farmStartBtn = farmStartBtn
 UI.farmStopBtn = farmStopBtn
@@ -2918,6 +3241,37 @@ local function getFarmWaitSec()
 	return farmWaitSec
 end
 
+local function getFarmStaySec()
+	return farmStaySec
+end
+
+local function refreshConfigStatusLabel()
+	local locState = farmLocationEnabled and "ON" or "OFF"
+	UI.configStatusLabel.Text = ("Farm wait: %ds | Farm location: %s (%ds stay)"):format(
+		farmWaitSec,
+		locState,
+		farmStaySec
+	)
+end
+
+local function updateFarmLocationEnableButton()
+	if farmLocationEnabled then
+		UI.farmLocationEnableBtn.Text = "Farm location before world cycle: ON"
+		UI.farmLocationEnableBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
+		UI.farmLocationEnableBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+	else
+		UI.farmLocationEnableBtn.Text = "Farm location before world cycle: OFF"
+		UI.farmLocationEnableBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+		UI.farmLocationEnableBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+	end
+end
+
+local function toggleFarmLocationEnabled()
+	farmLocationEnabled = not farmLocationEnabled
+	updateFarmLocationEnableButton()
+	refreshConfigStatusLabel()
+end
+
 local function parseFarmWaitSec(text)
 	local n = tonumber(text)
 	if not n then
@@ -2935,8 +3289,66 @@ local function applyFarmWaitFromInput()
 	end
 	farmWaitSec = val
 	UI.farmWaitInput.Text = tostring(farmWaitSec)
-	UI.configStatusLabel.Text = ("Farm wait: %ds (applies on next hunt)"):format(farmWaitSec)
+	refreshConfigStatusLabel()
 	return true
+end
+
+local function parseFarmStaySec(text)
+	local n = tonumber(text)
+	if not n then
+		return nil
+	end
+	return math.clamp(math.floor(n + 0.5), MIN_FARM_STAY_SEC, MAX_FARM_STAY_SEC)
+end
+
+local function applyFarmStayFromInput()
+	local val = parseFarmStaySec(UI.farmStayInput.Text)
+	if not val then
+		UI.configStatusLabel.Text = ("Farm stay: enter %d–%d seconds"):format(
+			MIN_FARM_STAY_SEC,
+			MAX_FARM_STAY_SEC
+		)
+		UI.farmStayInput.Text = tostring(farmStaySec)
+		return false
+	end
+	farmStaySec = val
+	UI.farmStayInput.Text = tostring(farmStaySec)
+	refreshConfigStatusLabel()
+	return true
+end
+
+local function formatFarmStayTimeLeft(secondsLeft)
+	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
+end
+
+local function runFarmLocationPhase(runId)
+	if not farmLocationEnabled then
+		return true
+	end
+	local pos = getFarmLocationPosition()
+	if not pos then
+		setFarmStatus("Farm location not set – skipping")
+		return true
+	end
+
+	setFarmStatus("Going to farm location...")
+	if not robustTeleportToPosition(pos, true) then
+		setFarmStatus("Farm location teleport failed")
+		return farmWait(FARM_NO_TARGET_WAIT_SEC, runId)
+	end
+	if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
+		return false
+	end
+
+	local endTime = nowSeconds() + getFarmStaySec()
+	while shouldFarmContinue(runId) and nowSeconds() < endTime do
+		local left = math.ceil(endTime - nowSeconds())
+		setFarmStatus(("Farm location (%s left)"):format(formatFarmStayTimeLeft(left)))
+		if not farmWait(1, runId) then
+			return false
+		end
+	end
+	return shouldFarmContinue(runId)
 end
 
 local function styleTabButton(btn, active)
@@ -2972,7 +3384,9 @@ local function setActiveTab(tabName)
 		refreshLocationRows()
 	elseif tabName == "config" then
 		UI.farmWaitInput.Text = tostring(farmWaitSec)
-		UI.configStatusLabel.Text = ("Farm wait: %ds"):format(farmWaitSec)
+		UI.farmStayInput.Text = tostring(farmStaySec)
+		updateFarmLocationEnableButton()
+		refreshConfigStatusLabel()
 	end
 end
 
@@ -3112,6 +3526,10 @@ end
 
 local function runWorldFarmLoop(runId)
 	while shouldFarmContinue(runId) do
+		if not runFarmLocationPhase(runId) then
+			break
+		end
+
 		for _, world in ipairs(WORLD_ZONES) do
 			if not shouldFarmContinue(runId) then
 				break
@@ -3326,6 +3744,8 @@ local function connectAllUIHandlers()
 			addWorldFilterFromInput()
 		elseif focused == UI.farmWaitInput then
 			applyFarmWaitFromInput()
+		elseif focused == UI.farmStayInput then
+			applyFarmStayFromInput()
 		end
 	end)
 
@@ -3358,6 +3778,14 @@ local function connectAllUIHandlers()
 
 	UI.farmWaitApplyBtn.MouseButton1Click:Connect(function()
 		applyFarmWaitFromInput()
+	end)
+
+	UI.farmLocationEnableBtn.MouseButton1Click:Connect(function()
+		toggleFarmLocationEnabled()
+	end)
+
+	UI.farmStayApplyBtn.MouseButton1Click:Connect(function()
+		applyFarmStayFromInput()
 	end)
 
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
