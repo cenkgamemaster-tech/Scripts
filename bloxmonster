@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.36"
+local VERSION = "1.7.37"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -432,10 +432,13 @@ end
 
 local worldPetFilters = {
 	astral_grove = {
-		{ name = "Orbitfin", priority = 1 },
-		{ name = "Pico", priority = 2 },
+		{ name = "Pico", priority = 1 },
+	},
+	bamboo_temple = {
+		{ name = "Bambit", priority = 1 },
 	},
 }
+
 -- Session overrides from Locations tab Save (falls back to WORLD_SPAWN_LOCATIONS).
 local worldSavedLocations = {}
 local farmLocationSession = nil
