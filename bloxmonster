@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.38"
+local VERSION = "1.7.39"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1364,7 +1364,16 @@ local function teleportToPet(model)
 	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
 end
 
--- Fuse / inventory discovery (Phase 1 – reverse-engineer auto-fuse API).
+-- Fuse / inventory discovery (Phase 1 – scoped to avoid 200-local limit).
+local scanFuseRelatedRemotesText
+local dumpPlayerInventoryText
+local openFuseDiscoveryWindow
+local toggleFuseRemoteHook
+local updateFuseHookButton
+local disableFuseRemoteHook
+local collectFuseRelatedRemotes
+
+do
 local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot" }
 local FUSE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.Fuse",
@@ -1437,7 +1446,7 @@ local function logFuseHook(direction, remote, ...)
 	print(line)
 end
 
-local function collectFuseRelatedRemotes()
+collectFuseRelatedRemotes = function()
 	local seen = {}
 	local list = {}
 	local function add(remote)
@@ -1465,7 +1474,7 @@ local function collectFuseRelatedRemotes()
 	return list
 end
 
-local function scanFuseRelatedRemotesText()
+scanFuseRelatedRemotesText = function()
 	local remotes = collectFuseRelatedRemotes()
 	local lines = {
 		"=== Fuse / inventory remotes ===",
@@ -1678,7 +1687,7 @@ local function collectRowAttributes(frame)
 	return attrs
 end
 
-local function dumpPlayerInventoryText()
+dumpPlayerInventoryText = function()
 	local out = {
 		"=== Inventory dump (UI scan) ===",
 		"Open your pet inventory in-game first for best results.",
@@ -1783,7 +1792,7 @@ local function dumpPlayerInventoryText()
 	return text, #rows
 end
 
-local function disableFuseRemoteHook()
+disableFuseRemoteHook = function()
 	for _, conn in ipairs(fuseRemoteHookConnections) do
 		pcall(function()
 			conn:Disconnect()
@@ -1834,7 +1843,7 @@ local function enableFuseRemoteHook()
 	return #remotes
 end
 
-local function toggleFuseRemoteHook()
+toggleFuseRemoteHook = function()
 	if fuseRemoteHookEnabled then
 		disableFuseRemoteHook()
 		return false
@@ -1843,7 +1852,7 @@ local function toggleFuseRemoteHook()
 	return true
 end
 
-local function updateFuseHookButton(btn)
+updateFuseHookButton = function(btn)
 	if not btn then
 		return
 	end
@@ -1858,7 +1867,7 @@ local function updateFuseHookButton(btn)
 	end
 end
 
-local function openFuseDiscoveryWindow(initialText)
+openFuseDiscoveryWindow = function(initialText)
 	local existing = PlayerGui:FindFirstChild("BloxMonster_FuseDiscovery")
 	if existing then
 		existing:Destroy()
@@ -2012,6 +2021,8 @@ local function openFuseDiscoveryWindow(initialText)
 
 	task.defer(updateFuseCanvasSize)
 end
+
+end -- fuse discovery scope
 
 -- Remove existing UI
 local existing = PlayerGui:FindFirstChild("BloxMonster")
