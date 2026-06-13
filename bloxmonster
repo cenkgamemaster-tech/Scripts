@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.8.1"
+local VERSION = "1.8.3"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1572,18 +1572,43 @@ local KNIT_PET_TABLE_KEYS = {
 	"_pets", "PetInventory", "Owned", "Cache", "Replica",
 }
 
+local function isKnitNonPetValue(value)
+	if type(value) ~= "table" and type(value) ~= "userdata" then
+		return true
+	end
+	local t = typeof(value)
+	return t == "RBXScriptSignal" or t == "Instance" or t == "function"
+end
+
+local function readPetField(pet, ...)
+	for _, key in ipairs({ ... }) do
+		local ok, val = pcall(function()
+			return pet[key]
+		end)
+		if ok and val ~= nil and val ~= "" then
+			return val
+		end
+	end
+	return nil
+end
+
 local function isKnitPetRecord(value)
-	return type(value) == "table" and (value.uid or value.UID or value.id or value.Id)
+	if type(value) ~= "table" or isKnitNonPetValue(value) then
+		return false
+	end
+	local uid = readPetField(value, "uid", "UID")
+	local id = readPetField(value, "id", "Id")
+	return type(uid) == "string" and uid ~= "" and type(id) == "string" and id ~= ""
 end
 
 local knitPetCache = {}
 local petListenersConnected = false
 
 local function ingestPetRecord(data, uidOverride)
-	if type(data) ~= "table" then
+	if not isKnitPetRecord(data) then
 		return
 	end
-	local uid = uidOverride or data.uid or data.UID
+	local uid = uidOverride or readPetField(data, "uid", "UID")
 	if uid then
 		knitPetCache[tostring(uid)] = data
 	end
@@ -1642,7 +1667,7 @@ local function findKnitPetTable(value, depth)
 	end
 	local hasPet = false
 	for _, v in pairs(value) do
-		if isKnitPetRecord(v) then
+		if not isKnitNonPetValue(v) and isKnitPetRecord(v) then
 			hasPet = true
 			break
 		end
@@ -1660,7 +1685,7 @@ local function findKnitPetTable(value, depth)
 		end
 	end
 	for _, sub in pairs(value) do
-		if type(sub) == "table" then
+		if type(sub) == "table" and not isKnitNonPetValue(sub) then
 			local found = findKnitPetTable(sub, depth + 1)
 			if found then
 				return found
@@ -1670,20 +1695,180 @@ local function findKnitPetTable(value, depth)
 	return nil
 end
 
+local function getKnitModule()
+	local packages = ReplicatedStorage:FindFirstChild("Packages")
+	local knitModule = packages and packages:FindFirstChild("Knit")
+	if knitModule then
+		local ok, knit = pcall(require, knitModule)
+		if ok then
+			return knit
+		end
+	end
+	return nil
+end
+
+local function collectKnitPetsDeep(value, out, depth, seen)
+	depth = depth or 0
+	seen = seen or {}
+	if depth > 6 or type(value) ~= "table" or seen[value] then
+		return
+	end
+	seen[value] = true
+	if isKnitPetRecord(value) then
+		local uid = readPetField(value, "uid", "UID")
+		if uid then
+			out[tostring(uid)] = value
+		end
+		return
+	end
+	for _, sub in pairs(value) do
+		if type(sub) == "table" and not isKnitNonPetValue(sub) then
+			collectKnitPetsDeep(sub, out, depth + 1, seen)
+		end
+	end
+end
+
+local KNIT_PET_FETCH_METHODS = {
+	"GetPets", "GetPetList", "GetInventory", "GetAllPets", "FetchPets", "LoadPets",
+}
+
+local function mergePetsIntoCache(pets)
+	if type(pets) ~= "table" then
+		return 0
+	end
+	local added = 0
+	local before = 0
+	for _ in pairs(knitPetCache) do
+		before = before + 1
+	end
+	if #pets > 0 then
+		for _, pet in ipairs(pets) do
+			if isKnitPetRecord(pet) then
+				ingestPetRecord(pet)
+			end
+		end
+	else
+		for _, pet in pairs(pets) do
+			if isKnitPetRecord(pet) then
+				ingestPetRecord(pet)
+			else
+				for _, sub in pairs(pet) do
+					if isKnitPetRecord(sub) then
+						ingestPetRecord(sub)
+					end
+				end
+			end
+		end
+	end
+	local after = 0
+	for _ in pairs(knitPetCache) do
+		after = after + 1
+	end
+	return after - before
+end
+
+local knitPetSyncSource = nil
+
+local function syncKnitPetCacheFromKnit()
+	ensurePetListeners()
+	local sources = {}
+	local Knit = getKnitModule()
+	if Knit and type(Knit.GetController) == "function" then
+		for _, ctrlName in ipairs(KNIT_PET_CONTROLLER_NAMES) do
+			local okCtrl, ctrl = pcall(function()
+				return Knit.GetController(ctrlName)
+			end)
+			if okCtrl and type(ctrl) == "table" then
+				local found = {}
+				collectKnitPetsDeep(ctrl, found, 0, {})
+				if next(found) then
+					sources[ctrlName] = true
+				end
+				for _, pet in pairs(found) do
+					ingestPetRecord(pet)
+				end
+				for _, method in ipairs(KNIT_PET_FETCH_METHODS) do
+					local fn = ctrl[method]
+					if type(fn) == "function" then
+						local okCall, res = pcall(function()
+							return fn(ctrl)
+						end)
+						if okCall then
+							mergePetsIntoCache(res)
+							sources[ctrlName .. "." .. method] = true
+						end
+					end
+				end
+			end
+		end
+	end
+	if Knit and type(Knit.GetService) == "function" then
+		local okSvc, petInvSvc = pcall(function()
+			return Knit.GetService("PetInvService")
+		end)
+		if okSvc and type(petInvSvc) == "table" then
+			for _, method in ipairs({ "GetEquippedPets", "GetPets", "GetInventory" }) do
+				local fn = petInvSvc[method]
+				if type(fn) == "function" then
+					local okCall, res = pcall(function()
+						return fn(petInvSvc)
+					end)
+					if okCall then
+						mergePetsIntoCache(res)
+						sources["PetInvService." .. method] = true
+					end
+				end
+			end
+		end
+	end
+	local petInvFolder = ReplicatedStorage:FindFirstChild("Packages")
+		and ReplicatedStorage.Packages:FindFirstChild("Knit")
+		and ReplicatedStorage.Packages.Knit:FindFirstChild("Services")
+		and ReplicatedStorage.Packages.Knit.Services:FindFirstChild("PetInvService")
+	local rfFolder = petInvFolder and petInvFolder:FindFirstChild("RF")
+	if rfFolder then
+		for _, rfName in ipairs({ "GetEquippedPets" }) do
+			local rf = rfFolder:FindFirstChild(rfName)
+			if rf and rf:IsA("RemoteFunction") then
+				local okCall, res = pcall(function()
+					return rf:InvokeServer()
+				end)
+				if okCall then
+					ingestPetPayload(res)
+					sources["RF." .. rfName] = true
+				end
+			end
+		end
+	end
+	local sourceParts = {}
+	for name in pairs(sources) do
+		table.insert(sourceParts, name)
+	end
+	table.sort(sourceParts)
+	if #sourceParts > 0 then
+		knitPetSyncSource = table.concat(sourceParts, ", ")
+	elseif next(knitPetCache) then
+		knitPetSyncSource = "PetService event cache"
+	end
+	local n = 0
+	for _ in pairs(knitPetCache) do
+		n = n + 1
+	end
+	return n
+end
+
 local FUSE_TARGET_RANKS = { "E", "D", "C", "B" }
 local ASCEND_TO_RANK = { "E", "D", "C", "B", "A", "S", "SS", "SSS" }
 
 local function getPetRank(pet)
-	if type(pet) ~= "table" then
+	if not isKnitPetRecord(pet) then
 		return "?"
 	end
-	if pet.rank and tostring(pet.rank) ~= "" then
-		return tostring(pet.rank)
+	local rank = readPetField(pet, "rank", "Rank")
+	if rank then
+		return tostring(rank)
 	end
-	if pet.Rank and tostring(pet.Rank) ~= "" then
-		return tostring(pet.Rank)
-	end
-	local ascend = tonumber(pet.ascend or pet.Ascend)
+	local ascend = tonumber(readPetField(pet, "ascend", "Ascend"))
 	if ascend and ASCEND_TO_RANK[ascend + 1] then
 		return ASCEND_TO_RANK[ascend + 1]
 	end
@@ -1707,15 +1892,20 @@ local function formatKnitPetLine(index, pet, nickname)
 end
 
 local function isPlainKnitPet(pet)
-	if type(pet) ~= "table" then
+	if not isKnitPetRecord(pet) then
 		return false
 	end
-	local mut = tostring(pet.mutation or pet.Mutation or "")
+	local mut = tostring(readPetField(pet, "mutation", "Mutation") or "")
 	if mut ~= "" and mut ~= "MU0" and mut:lower() ~= "none" then
 		return false
 	end
-	local traits = pet.traits or pet.Traits
-	return type(traits) ~= "table" or not next(traits)
+	local ok, traits = pcall(function()
+		return pet.traits or pet.Traits
+	end)
+	if not ok or (type(traits) == "table" and next(traits)) then
+		return false
+	end
+	return true
 end
 
 local function canAutoFuseRank(rank)
@@ -1739,21 +1929,24 @@ end
 local function summarizeFuseGroups(pets)
 	local groups = {}
 	local function addPet(pet)
-		if not isPlainKnitPet(pet) then
+		if not isKnitPetRecord(pet) or not isPlainKnitPet(pet) then
 			return
 		end
 		local rank = getPetRank(pet)
 		if not canAutoFuseRank(rank) then
 			return
 		end
-		local species = tostring(pet.id or pet.Id or "?")
+		local species = tostring(readPetField(pet, "id", "Id") or "?")
 		local key = species .. " / rank " .. rank
 		if not groups[key] then
 			groups[key] = { count = 0, uids = {} }
 		end
 		groups[key].count = groups[key].count + 1
 		if pet.uid and #groups[key].uids < 6 then
-			table.insert(groups[key].uids, tostring(pet.uid))
+			local uid = readPetField(pet, "uid", "UID")
+			if uid then
+				table.insert(groups[key].uids, tostring(uid))
+			end
 		end
 	end
 	if #pets > 0 then
@@ -1762,9 +1955,7 @@ local function summarizeFuseGroups(pets)
 		end
 	else
 		for _, pet in pairs(pets) do
-			if type(pet) == "table" then
-				addPet(pet)
-			end
+			addPet(pet)
 		end
 	end
 	local keys = {}
@@ -1775,20 +1966,13 @@ local function summarizeFuseGroups(pets)
 	return groups, keys
 end
 
-local function getKnitModule()
-	local packages = ReplicatedStorage:FindFirstChild("Packages")
-	local knitModule = packages and packages:FindFirstChild("Knit")
-	if knitModule then
-		local ok, knit = pcall(require, knitModule)
-		if ok then
-			return knit
-		end
-	end
-	return nil
-end
-
 local function fetchKnitPets()
 	ensurePetListeners()
+	syncKnitPetCacheFromKnit()
+
+	if next(knitPetCache) then
+		return knitPetCache, knitPetSyncSource or "Knit client (no UI)"
+	end
 
 	local pets = nil
 	local source = nil
@@ -1821,34 +2005,14 @@ local function fetchKnitPets()
 			end
 		end
 	end
-	if next(knitPetCache) then
-		if not pets then
-			pets = knitPetCache
-			source = "PetService event cache"
-		else
-			local merged = {}
-			if #pets > 0 then
-				for _, pet in ipairs(pets) do
-					if type(pet) == "table" and pet.uid then
-						merged[tostring(pet.uid)] = pet
-					end
-				end
-			else
-				for key, pet in pairs(pets) do
-					if type(pet) == "table" then
-						local uid = pet.uid or pet.UID or key
-						merged[tostring(uid)] = pet
-					end
-				end
-			end
-			for uid, pet in pairs(knitPetCache) do
-				merged[uid] = pet
-			end
-			pets = merged
-			source = (source or "client") .. " + PetService events"
+	if pets then
+		mergePetsIntoCache(pets)
+		if next(knitPetCache) then
+			knitPetSyncSource = source
+			return knitPetCache, source
 		end
 	end
-	return pets, source
+	return nil, nil
 end
 
 local function countPets(pets)
@@ -1860,7 +2024,7 @@ local function countPets(pets)
 		return #pets
 	end
 	for _, pet in pairs(pets) do
-		if type(pet) == "table" then
+		if isKnitPetRecord(pet) then
 			n = n + 1
 		end
 	end
@@ -1883,9 +2047,7 @@ local function countEligibleFusePets(pets)
 		end
 	else
 		for _, pet in pairs(pets) do
-			if type(pet) == "table" then
-				consider(pet)
-			end
+			consider(pet)
 		end
 	end
 	return n
@@ -1895,14 +2057,15 @@ local function isFuseEligiblePet(pet)
 	if not isPlainKnitPet(pet) then
 		return false
 	end
-	if pet.locked == true then
+	if readPetField(pet, "locked", "Locked") == true then
 		return false
 	end
 	local rank = getPetRank(pet)
 	if not canAutoFuseRank(rank) then
 		return false
 	end
-	return pet.uid ~= nil and pet.uid ~= ""
+	local uid = readPetField(pet, "uid", "UID")
+	return type(uid) == "string" and uid ~= ""
 end
 
 local function getRankUpRemote()
@@ -1919,18 +2082,21 @@ end
 
 local rankUpMethodId = nil
 
-local function invokeRankUp(uids)
+local function invokeRankUp(uids, petRecords)
 	local u1, u2, u3 = uids[1], uids[2], uids[3]
 	if not u1 or not u2 or not u3 then
 		return false, "need 3 uids"
 	end
+	local p1 = petRecords and petRecords[1] or knitPetCache[u1]
+	local p2 = petRecords and petRecords[2] or knitPetCache[u2]
+	local p3 = petRecords and petRecords[3] or knitPetCache[u3]
 
 	local rf = getRankUpRemote()
 	local Knit = getKnitModule()
 
 	local function tryCall(methodId, fn)
 		local ok, res = pcall(fn)
-		if ok then
+		if ok and res ~= false then
 			rankUpMethodId = methodId
 			return true, res
 		end
@@ -1939,7 +2105,15 @@ local function invokeRankUp(uids)
 
 	if rankUpMethodId then
 		local ok, res = false, nil
-		if rankUpMethodId == "rf3" and rf then
+		if rankUpMethodId == "ctrlDoPets" and Knit and p1 and p2 and p3 then
+			ok, res = tryCall("ctrlDoPets", function()
+				return Knit.GetController("PetInvController"):DoRankUp(p1, p2, p3)
+			end)
+		elseif rankUpMethodId == "rfPets" and rf and p1 and p2 and p3 then
+			ok, res = tryCall("rfPets", function()
+				return rf:InvokeServer(p1, p2, p3)
+			end)
+		elseif rankUpMethodId == "rf3" and rf then
 			ok, res = tryCall("rf3", function()
 				return rf:InvokeServer(u1, u2, u3)
 			end)
@@ -1971,6 +2145,22 @@ local function invokeRankUp(uids)
 	end
 
 	local attempts = {}
+	if Knit and type(Knit.GetController) == "function" and p1 and p2 and p3 then
+		table.insert(attempts, { "ctrlDoPets", function()
+			return Knit.GetController("PetInvController"):DoRankUp(p1, p2, p3)
+		end })
+		table.insert(attempts, { "ctrlDoPetsT", function()
+			return Knit.GetController("PetInvController"):DoRankUp({ p1, p2, p3 })
+		end })
+	end
+	if rf and p1 and p2 and p3 then
+		table.insert(attempts, { "rfPets", function()
+			return rf:InvokeServer(p1, p2, p3)
+		end })
+		table.insert(attempts, { "rfPetsT", function()
+			return rf:InvokeServer({ p1, p2, p3 })
+		end })
+	end
 	if rf then
 		table.insert(attempts, { "rf3", function()
 			return rf:InvokeServer(u1, u2, u3)
@@ -2010,14 +2200,18 @@ end
 local function pickFuseTriple(pets, rank)
 	local bySpecies = {}
 	local function consider(pet)
+		if not isKnitPetRecord(pet) then
+			return
+		end
 		if not isFuseEligiblePet(pet) or getPetRank(pet) ~= rank then
 			return
 		end
-		local species = tostring(pet.id or pet.Id or "?")
+		local species = tostring(readPetField(pet, "id", "Id") or "?")
+		local uid = readPetField(pet, "uid", "UID")
 		if not bySpecies[species] then
 			bySpecies[species] = {}
 		end
-		table.insert(bySpecies[species], tostring(pet.uid))
+		table.insert(bySpecies[species], { uid = tostring(uid), pet = pet })
 	end
 	if #pets > 0 then
 		for _, pet in ipairs(pets) do
@@ -2025,9 +2219,7 @@ local function pickFuseTriple(pets, rank)
 		end
 	else
 		for _, pet in pairs(pets) do
-			if type(pet) == "table" then
-				consider(pet)
-			end
+			consider(pet)
 		end
 	end
 	local speciesList = {}
@@ -2036,9 +2228,11 @@ local function pickFuseTriple(pets, rank)
 	end
 	table.sort(speciesList)
 	for _, species in ipairs(speciesList) do
-		local uids = bySpecies[species]
-		if #uids >= 3 then
-			return species, rank, { uids[1], uids[2], uids[3] }
+		local entries = bySpecies[species]
+		if #entries >= 3 then
+			return species, rank,
+				{ entries[1].uid, entries[2].uid, entries[3].uid },
+				{ entries[1].pet, entries[2].pet, entries[3].pet }
 		end
 	end
 	return nil
@@ -2075,8 +2269,22 @@ startAutoFuse = function()
 			while autoFuseRunning do
 				local pets, source = fetchKnitPets()
 				local total = countPets(pets)
+				if total == 0 then
+					for _ = 1, 5 do
+						if not autoFuseRunning then
+							break
+						end
+						setAutoFuseStatus("Waiting for pet data from game…")
+						task.wait(1)
+						pets, source = fetchKnitPets()
+						total = countPets(pets)
+						if total > 0 then
+							break
+						end
+					end
+				end
 				if not pets or total == 0 then
-					setAutoFuseStatus("No pets found – open inventory, wait 2s, try again")
+					setAutoFuseStatus("No pets found – wait for game load (~5s) or re-run script after join")
 					break
 				end
 				local eligible = countEligibleFusePets(pets)
@@ -2089,10 +2297,10 @@ startAutoFuse = function()
 					if not autoFuseRunning then
 						break
 					end
-					local species, _, uids = pickFuseTriple(pets, rank)
+					local species, _, uids, petRecords = pickFuseTriple(pets, rank)
 					if uids then
 						setAutoFuseStatus(("RankUp %s %s ×3 (%s)…"):format(species, rank, source or "?"))
-						local fuseOk, res = invokeRankUp(uids)
+						local fuseOk, res = invokeRankUp(uids, petRecords)
 						if fuseOk then
 							totalFused = totalFused + 1
 							fusedThisPass = true
@@ -2144,7 +2352,8 @@ dumpKnitPetInventoryText = function()
 
 	if not pets then
 		table.insert(lines, "Knit pet list not found on client.")
-		table.insert(lines, "Try opening pet inventory in-game, then dump again.")
+		table.insert(lines, "Pets load on join via PetService – wait a few seconds after spawn, then dump again.")
+		table.insert(lines, "(Opening inventory UI is not required.)")
 		table.insert(lines, "")
 		local uiText, rowCount = dumpPlayerInventoryText()
 		return table.concat(lines, "\n") .. "\n" .. uiText, rowCount
@@ -2700,7 +2909,10 @@ openFuseDiscoveryWindow = function(initialText)
 	task.defer(updateFuseCanvasSize)
 end
 
-task.defer(ensurePetListeners)
+task.defer(function()
+	ensurePetListeners()
+	syncKnitPetCacheFromKnit()
+end)
 
 end -- fuse discovery scope
 
@@ -4043,7 +4255,7 @@ fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 24)
 fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 100)
 fuseDiscoveryStatusLabel.TextWrapped = true
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Uses PetInvService.RF.RankUp – dump pets first to verify groups"
+fuseDiscoveryStatusLabel.Text = "Reads pets from Knit on join (no inventory UI) – dump to verify, then auto-fuse"
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
