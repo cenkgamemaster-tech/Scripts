@@ -2625,6 +2625,7 @@ local function pickFuseTriple(pets, rank)
 end
 
 local AUTO_FUSE_DELAY_SEC = 1
+local AUTO_FUSE_IDLE_SEC = 5
 local autoFuseRunning = false
 local autoFuseStatusCallback = nil
 
@@ -2651,95 +2652,68 @@ startAutoFuse = function()
 		local ok, err = pcall(function()
 			ensurePetListeners()
 			local totalFused = 0
-			setAutoFuseStatus("Started – MU0 pets E→D→C→B→A (any traits, not locked)")
+			setAutoFuseStatus("Started – MU0 pets E→D→C→B→A (runs until Stop)")
 			while autoFuseRunning do
+				refreshKnitPetCacheFromDataController()
 				local pets, source = fetchKnitPets()
 				local total = countPets(pets)
 				if total == 0 then
-					for _ = 1, 5 do
-						if not autoFuseRunning then
-							break
-						end
-						setAutoFuseStatus("Waiting for pet data from game…")
-						task.wait(1)
-						pets, source = fetchKnitPets()
-						total = countPets(pets)
-						if total > 0 then
-							break
-						end
-					end
-				end
-				if not pets or total == 0 then
-					setAutoFuseStatus("No pets found – open inventory once, Dump Knit pets, then auto-fuse")
-					break
-				end
-				local eligible = countEligibleFusePets(pets)
-				if eligible < 3 then
-					setAutoFuseStatus(("Only %d eligible MU0 E-D-C-B pets (from %d total, not locked)"):format(eligible, total))
-					local shown = 0
-					for _, pet in pairs(pets) do
-						if isKnitPetRecord(pet, nil) and shown < 6 then
-							local reason = getPetFuseBlockReason(pet)
-							if reason then
-								setAutoFuseStatus("Skip: " .. reason)
-								shown = shown + 1
-							end
-						end
-					end
-					if total < 50 then
-						setAutoFuseStatus(("Only %d pets cached (you have ~393?) – Dump Knit pets after opening inventory once"):format(total))
+					setAutoFuseStatus("Waiting for pet data…")
+					task.wait(AUTO_FUSE_IDLE_SEC)
+				else
+					local eligible = countEligibleFusePets(pets)
+					if eligible < 3 then
+						setAutoFuseStatus(("Waiting – %d eligible (need 3), %d pets (%d fused total)"):format(
+							eligible, total, totalFused
+						))
+						task.wait(AUTO_FUSE_IDLE_SEC)
 					else
-						setAutoFuseStatus(("Source: %s"):format(source or "?"))
-					end
-					break
-				end
-				local fusedThisPass = false
-				for _, rank in ipairs(FUSE_TARGET_RANKS) do
-					if not autoFuseRunning then
-						break
-					end
-					local species, _, uids, petRecords = pickFuseTriple(pets, rank)
-					if uids then
-						setAutoFuseStatus(("RankUp %s %s ×3 (%s)…"):format(species, rank, source or "?"))
-						local fuseOk, res = invokeRankUp(uids, petRecords)
-						if fuseOk then
-							totalFused = totalFused + 1
-							fusedThisPass = true
-							local nextRank = ASCEND_TO_RANK[rankIndexFromRank(rank) + 1] or "?"
-							setAutoFuseStatus(("Fused 3× %s %s → %s (%d total)"):format(
-								species, rank, nextRank, totalFused
-							))
-							task.wait(AUTO_FUSE_DELAY_SEC)
-							refreshKnitPetCacheFromDataController()
-							break
-						else
-							setAutoFuseStatus("RankUp failed: " .. tostring(res))
-							task.wait(0.5)
-							refreshKnitPetCacheFromDataController()
-							local retryOk, retryRes = invokeRankUp(uids, petRecords)
-							if retryOk then
-								totalFused = totalFused + 1
-								fusedThisPass = true
-								setAutoFuseStatus(("Fused on retry (%d total)"):format(totalFused))
-								task.wait(AUTO_FUSE_DELAY_SEC)
-								refreshKnitPetCacheFromDataController()
+						local fusedThisPass = false
+						for _, rank in ipairs(FUSE_TARGET_RANKS) do
+							if not autoFuseRunning then
 								break
 							end
-							setAutoFuseStatus("RankUp retry failed: " .. tostring(retryRes))
-							task.wait(1)
+							local species, _, uids, petRecords = pickFuseTriple(pets, rank)
+							if uids then
+								setAutoFuseStatus(("RankUp %s %s ×3 (%s)…"):format(species, rank, source or "?"))
+								local fuseOk, res = invokeRankUp(uids, petRecords)
+								if fuseOk then
+									totalFused = totalFused + 1
+									fusedThisPass = true
+									local nextRank = ASCEND_TO_RANK[rankIndexFromRank(rank) + 1] or "?"
+									setAutoFuseStatus(("Fused 3× %s %s → %s (%d total)"):format(
+										species, rank, nextRank, totalFused
+									))
+									task.wait(AUTO_FUSE_DELAY_SEC)
+									break
+								else
+									setAutoFuseStatus("RankUp failed: " .. tostring(res))
+									task.wait(0.5)
+									local retryOk, retryRes = invokeRankUp(uids, petRecords)
+									if retryOk then
+										totalFused = totalFused + 1
+										fusedThisPass = true
+										setAutoFuseStatus(("Fused on retry (%d total)"):format(totalFused))
+										task.wait(AUTO_FUSE_DELAY_SEC)
+										break
+									end
+									setAutoFuseStatus("RankUp retry failed: " .. tostring(retryRes))
+									task.wait(AUTO_FUSE_IDLE_SEC)
+									break
+								end
+							end
+						end
+						if not fusedThisPass then
+							setAutoFuseStatus(("Waiting – no fuse groups yet (%d eligible, %d fused total)"):format(
+								eligible, totalFused
+							))
+							task.wait(AUTO_FUSE_IDLE_SEC)
 						end
 					end
 				end
-				if not fusedThisPass then
-					if totalFused == 0 then
-						setAutoFuseStatus(("Nothing to fuse (%d pets, %d eligible – need 3× same id+rank)"):format(
-							total, eligible
-						))
-						break
-					end
-					setAutoFuseStatus(("Paused – %d fusion(s) done, nothing left this pass"):format(totalFused))
-					break
-				end
+			end
+			if totalFused > 0 then
+				setAutoFuseStatus(("Stopped – %d fusion(s) completed"):format(totalFused))
 			end
 		end)
 		if not ok then
