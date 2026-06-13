@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.39"
+local VERSION = "1.7.40"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1374,6 +1374,15 @@ local disableFuseRemoteHook
 local collectFuseRelatedRemotes
 
 do
+-- Clean up namecall hook from a previous script run (prevents hook stack overflow).
+if typeof(_G) == "table" then
+	local prevRestore = _G.__BloxMonsterFuseNamecallRestore
+	if typeof(prevRestore) == "function" then
+		pcall(prevRestore)
+	end
+	_G.__BloxMonsterFuseNamecallRestore = nil
+end
+
 local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot" }
 local FUSE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.Fuse",
@@ -1389,7 +1398,58 @@ local INVENTORY_ID_LABELS = { "Id", "UUID", "PetId", "UniqueId", "Guid" }
 
 local fuseRemoteHookConnections = {}
 local fuseRemoteHookEnabled = false
-local fuseNamecallHookRestore = nil
+local fuseNamecallOld = nil
+local fuseNamecallBusy = false
+
+local function restoreFuseNamecallHook()
+	if typeof(_G) == "table" then
+		local restore = _G.__BloxMonsterFuseNamecallRestore
+		if typeof(restore) == "function" then
+			pcall(restore)
+		end
+		_G.__BloxMonsterFuseNamecallRestore = nil
+	end
+	fuseNamecallOld = nil
+	fuseNamecallBusy = false
+end
+
+local function installFuseNamecallHook()
+	if typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
+		return false
+	end
+	restoreFuseNamecallHook()
+
+	local oldHook
+	oldHook = hookmetamethod(game, "__namecall", function(self, ...)
+		if fuseNamecallBusy then
+			return oldHook(self, ...)
+		end
+		local method = getnamecallmethod()
+		if method == "FireServer" or method == "InvokeServer" then
+			-- Never call :IsA() inside __namecall – it re-enters the hook and overflows.
+			local className = typeof(self) == "Instance" and self.ClassName
+			if className == "RemoteEvent" or className == "RemoteFunction" then
+				if remoteNameMatchesFuse(self.Name) then
+					fuseNamecallBusy = true
+					pcall(logFuseHook, method, self, ...)
+					fuseNamecallBusy = false
+				end
+			end
+		end
+		return oldHook(self, ...)
+	end)
+	fuseNamecallOld = oldHook
+	if typeof(_G) == "table" then
+		_G.__BloxMonsterFuseNamecallRestore = function()
+			if typeof(hookmetamethod) == "function" and fuseNamecallOld then
+				hookmetamethod(game, "__namecall", fuseNamecallOld)
+			end
+			fuseNamecallOld = nil
+			fuseNamecallBusy = false
+		end
+	end
+	return true
+end
 
 local function resolveRemotePath(pathString)
 	local node = game
@@ -1799,10 +1859,7 @@ disableFuseRemoteHook = function()
 		end)
 	end
 	table.clear(fuseRemoteHookConnections)
-	if fuseNamecallHookRestore then
-		pcall(fuseNamecallHookRestore)
-		fuseNamecallHookRestore = nil
-	end
+	restoreFuseNamecallHook()
 	fuseRemoteHookEnabled = false
 end
 
@@ -1810,35 +1867,14 @@ local function enableFuseRemoteHook()
 	disableFuseRemoteHook()
 	local remotes = collectFuseRelatedRemotes()
 	for _, remote in ipairs(remotes) do
-		if remote:IsA("RemoteEvent") then
+		if remote.ClassName == "RemoteEvent" then
 			local conn = remote.OnClientEvent:Connect(function(...)
 				logFuseHook("OnClientEvent", remote, ...)
 			end)
 			table.insert(fuseRemoteHookConnections, conn)
 		end
 	end
-	if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" then
-		local ok, restore = pcall(function()
-			local old
-			old = hookmetamethod(game, "__namecall", function(self, ...)
-				local method = getnamecallmethod()
-				if self and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
-					if method == "FireServer" or method == "InvokeServer" then
-						if remoteNameMatchesFuse(self.Name) then
-							logFuseHook(method, self, ...)
-						end
-					end
-				end
-				return old(self, ...)
-			end)
-			return function()
-				hookmetamethod(game, "__namecall", old)
-			end
-		end)
-		if ok and restore then
-			fuseNamecallHookRestore = restore
-		end
-	end
+	installFuseNamecallHook()
 	fuseRemoteHookEnabled = true
 	return #remotes
 end
@@ -3333,7 +3369,7 @@ local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
 fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 12)
 fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 82)
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Open inventory, turn hook ON, fuse 3× E manually."
+fuseDiscoveryStatusLabel.Text = "Hook OFF by default. Turn ON only while testing fuse."
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
