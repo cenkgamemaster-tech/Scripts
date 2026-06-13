@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.40"
+local VERSION = "1.7.43"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1368,13 +1368,14 @@ end
 local scanFuseRelatedRemotesText
 local dumpPlayerInventoryText
 local openFuseDiscoveryWindow
-local toggleFuseRemoteHook
-local updateFuseHookButton
-local disableFuseRemoteHook
+local copyFuseDiscoveryLog
+local appendFuseDiscoveryLog
 local collectFuseRelatedRemotes
+local scanPetServiceText
+local dumpKnitPetInventoryText
 
 do
--- Clean up namecall hook from a previous script run (prevents hook stack overflow).
+-- Clean up legacy namecall hook from older script versions.
 if typeof(_G) == "table" then
 	local prevRestore = _G.__BloxMonsterFuseNamecallRestore
 	if typeof(prevRestore) == "function" then
@@ -1383,7 +1384,47 @@ if typeof(_G) == "table" then
 	_G.__BloxMonsterFuseNamecallRestore = nil
 end
 
-local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot" }
+local MAX_FUSE_LOG_LINES = 250
+local fuseLogLines = {}
+local fuseWindowSetContent = nil
+
+appendFuseDiscoveryLog = function(text)
+	if not text or text == "" then
+		return
+	end
+	for line in string.gmatch(text .. "\n", "(.-)\n") do
+		if line ~= "" then
+			table.insert(fuseLogLines, line)
+		end
+	end
+	while #fuseLogLines > MAX_FUSE_LOG_LINES do
+		table.remove(fuseLogLines, 1)
+	end
+	if fuseWindowSetContent then
+		task.defer(function()
+			fuseWindowSetContent(table.concat(fuseLogLines, "\n"))
+		end)
+	end
+end
+
+local function getFuseDiscoveryLogText()
+	if #fuseLogLines == 0 then
+		return "(empty – run Scan or Dump inventory first)"
+	end
+	return table.concat(fuseLogLines, "\n")
+end
+
+copyFuseDiscoveryLog = function()
+	local text = getFuseDiscoveryLogText()
+	if typeof(setclipboard) == "function" then
+		setclipboard(text)
+		return true
+	end
+	openFuseDiscoveryWindow()
+	return false
+end
+
+local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot", "rank" }
 local FUSE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.Fuse",
 	"ReplicatedStorage.Remotes.FusePet",
@@ -1395,61 +1436,6 @@ local INVENTORY_ROW_LABELS = {
 	"Rarity", "Rank", "Tier", "Mutation", "Trait", "Shiny", "Level",
 }
 local INVENTORY_ID_LABELS = { "Id", "UUID", "PetId", "UniqueId", "Guid" }
-
-local fuseRemoteHookConnections = {}
-local fuseRemoteHookEnabled = false
-local fuseNamecallOld = nil
-local fuseNamecallBusy = false
-
-local function restoreFuseNamecallHook()
-	if typeof(_G) == "table" then
-		local restore = _G.__BloxMonsterFuseNamecallRestore
-		if typeof(restore) == "function" then
-			pcall(restore)
-		end
-		_G.__BloxMonsterFuseNamecallRestore = nil
-	end
-	fuseNamecallOld = nil
-	fuseNamecallBusy = false
-end
-
-local function installFuseNamecallHook()
-	if typeof(hookmetamethod) ~= "function" or typeof(getnamecallmethod) ~= "function" then
-		return false
-	end
-	restoreFuseNamecallHook()
-
-	local oldHook
-	oldHook = hookmetamethod(game, "__namecall", function(self, ...)
-		if fuseNamecallBusy then
-			return oldHook(self, ...)
-		end
-		local method = getnamecallmethod()
-		if method == "FireServer" or method == "InvokeServer" then
-			-- Never call :IsA() inside __namecall – it re-enters the hook and overflows.
-			local className = typeof(self) == "Instance" and self.ClassName
-			if className == "RemoteEvent" or className == "RemoteFunction" then
-				if remoteNameMatchesFuse(self.Name) then
-					fuseNamecallBusy = true
-					pcall(logFuseHook, method, self, ...)
-					fuseNamecallBusy = false
-				end
-			end
-		end
-		return oldHook(self, ...)
-	end)
-	fuseNamecallOld = oldHook
-	if typeof(_G) == "table" then
-		_G.__BloxMonsterFuseNamecallRestore = function()
-			if typeof(hookmetamethod) == "function" and fuseNamecallOld then
-				hookmetamethod(game, "__namecall", fuseNamecallOld)
-			end
-			fuseNamecallOld = nil
-			fuseNamecallBusy = false
-		end
-	end
-	return true
-end
 
 local function resolveRemotePath(pathString)
 	local node = game
@@ -1496,16 +1482,6 @@ local function valueToLogString(value, depth)
 	return tostring(value)
 end
 
-local function logFuseHook(direction, remote, ...)
-	local args = { ... }
-	local parts = {}
-	for i, v in ipairs(args) do
-		parts[i] = valueToLogString(v)
-	end
-	local line = ("[FuseHook] %s %s | %s"):format(direction, remote:GetFullName(), table.concat(parts, ", "))
-	print(line)
-end
-
 collectFuseRelatedRemotes = function()
 	local seen = {}
 	local list = {}
@@ -1534,23 +1510,325 @@ collectFuseRelatedRemotes = function()
 	return list
 end
 
+local function findPetServiceFolder()
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc.Name == "PetService" and desc:FindFirstChild("RE") then
+			return desc
+		end
+	end
+	return nil
+end
+
+scanPetServiceText = function()
+	local lines = {
+		"=== PetService (Knit) ===",
+		"AddPet / UpdatePetData = server → client (pet table includes rank=E, uid, id=P7).",
+		"Auto-fuse needs the client → server RankUp/Fuse remote (scan below).",
+		"",
+	}
+	local petService = findPetServiceFolder()
+	if not petService then
+		table.insert(lines, "PetService not found under ReplicatedStorage.")
+		return table.concat(lines, "\n"), 0
+	end
+	table.insert(lines, "Path: " .. petService:GetFullName())
+	table.insert(lines, "")
+	local count = 0
+	local remotes = {}
+	for _, child in ipairs(petService:GetDescendants()) do
+		if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") or child:IsA("UnreliableRemoteEvent") then
+			table.insert(remotes, child)
+		end
+	end
+	table.sort(remotes, function(a, b)
+		return a:GetFullName() < b:GetFullName()
+	end)
+	for _, remote in ipairs(remotes) do
+		count = count + 1
+		local tag = ""
+		local n = remote.Name:lower()
+		if n == "updatepetdata" or n == "addpet" then
+			tag = "  <-- server pushes pet data (rank, uid)"
+		elseif n:find("rank", 1, true) or n:find("ascend", 1, true) or n:find("fuse", 1, true) or n:find("combine", 1, true) then
+			tag = "  <-- likely rank-up/fuse (client calls this)"
+		end
+		table.insert(lines, ("  %s (%s)%s"):format(remote:GetFullName(), remote.ClassName, tag))
+	end
+	table.insert(lines, "")
+	table.insert(lines, ("Total: %d PetService remote(s)"):format(count))
+	return table.concat(lines, "\n"), count
+end
+
+local KNIT_PET_CONTROLLER_NAMES = {
+	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
+}
+local KNIT_PET_TABLE_KEYS = { "Pets", "pets", "PetList", "Inventory", "AllPets", "OwnedPets", "Data", "PetData" }
+
+local function isKnitPetRecord(value)
+	return type(value) == "table" and (value.uid or value.UID or value.id or value.Id)
+end
+
+local function findKnitPetTable(value, depth)
+	depth = depth or 0
+	if depth > 5 or type(value) ~= "table" then
+		return nil
+	end
+	local hasPet = false
+	for _, v in pairs(value) do
+		if isKnitPetRecord(v) then
+			hasPet = true
+			break
+		end
+	end
+	if hasPet then
+		return value
+	end
+	for _, key in ipairs(KNIT_PET_TABLE_KEYS) do
+		local sub = value[key]
+		if type(sub) == "table" then
+			local found = findKnitPetTable(sub, depth + 1)
+			if found then
+				return found
+			end
+		end
+	end
+	for _, sub in pairs(value) do
+		if type(sub) == "table" then
+			local found = findKnitPetTable(sub, depth + 1)
+			if found then
+				return found
+			end
+		end
+	end
+	return nil
+end
+
+local FUSE_TARGET_RANKS = { "E", "D", "C", "B" }
+local ASCEND_TO_RANK = { "E", "D", "C", "B", "A", "S", "SS", "SSS" }
+
+local function getPetRank(pet)
+	if type(pet) ~= "table" then
+		return "?"
+	end
+	if pet.rank and tostring(pet.rank) ~= "" then
+		return tostring(pet.rank)
+	end
+	if pet.Rank and tostring(pet.Rank) ~= "" then
+		return tostring(pet.Rank)
+	end
+	local ascend = tonumber(pet.ascend or pet.Ascend)
+	if ascend and ASCEND_TO_RANK[ascend + 1] then
+		return ASCEND_TO_RANK[ascend + 1]
+	end
+	return "?"
+end
+
+local function formatKnitPetLine(index, pet, nickname)
+	local parts = {}
+	if nickname and nickname ~= "" then
+		table.insert(parts, "name=" .. tostring(nickname))
+	end
+	local rank = getPetRank(pet)
+	table.insert(parts, "rank=" .. rank)
+	for _, key in ipairs({ "uid", "id", "mutation", "ascend", "level", "traits" }) do
+		local v = pet[key]
+		if v ~= nil then
+			table.insert(parts, key .. "=" .. valueToLogString(v))
+		end
+	end
+	return ("%d. %s"):format(index, table.concat(parts, " "))
+end
+
+local function isPlainKnitPet(pet)
+	if type(pet) ~= "table" then
+		return false
+	end
+	local mut = tostring(pet.mutation or pet.Mutation or "")
+	if mut ~= "" and mut ~= "MU0" and mut:lower() ~= "none" then
+		return false
+	end
+	local traits = pet.traits or pet.Traits
+	return type(traits) ~= "table" or not next(traits)
+end
+
+local function canAutoFuseRank(rank)
+	for _, r in ipairs(FUSE_TARGET_RANKS) do
+		if r == rank then
+			return true
+		end
+	end
+	return false
+end
+
+local function summarizeFuseGroups(pets)
+	local groups = {}
+	local function addPet(pet)
+		if not isPlainKnitPet(pet) then
+			return
+		end
+		local rank = getPetRank(pet)
+		if not canAutoFuseRank(rank) then
+			return
+		end
+		local species = tostring(pet.id or pet.Id or "?")
+		local key = species .. " / rank " .. rank
+		if not groups[key] then
+			groups[key] = { count = 0, uids = {} }
+		end
+		groups[key].count = groups[key].count + 1
+		if pet.uid and #groups[key].uids < 6 then
+			table.insert(groups[key].uids, tostring(pet.uid))
+		end
+	end
+	if #pets > 0 then
+		for _, pet in ipairs(pets) do
+			addPet(pet)
+		end
+	else
+		for _, pet in pairs(pets) do
+			if type(pet) == "table" then
+				addPet(pet)
+			end
+		end
+	end
+	local keys = {}
+	for key in pairs(groups) do
+		table.insert(keys, key)
+	end
+	table.sort(keys)
+	return groups, keys
+end
+
+dumpKnitPetInventoryText = function()
+	local lines = {
+		"=== Knit pet inventory ===",
+		"rank=E/D/C… | uid=fuse id | id=species | mutation MU0=none | traits{}=none",
+		"UpdatePetData events include rank=E (confirmed from your log).",
+		"",
+	}
+	local pets = nil
+	local source = nil
+
+	local okKnit, Knit = pcall(function()
+		local packages = ReplicatedStorage:FindFirstChild("Packages")
+		local knitModule = packages and packages:FindFirstChild("Knit")
+		if knitModule then
+			return require(knitModule)
+		end
+		return nil
+	end)
+
+	if okKnit and Knit and type(Knit.GetController) == "function" then
+		for _, ctrlName in ipairs(KNIT_PET_CONTROLLER_NAMES) do
+			local okCtrl, ctrl = pcall(function()
+				return Knit.GetController(ctrlName)
+			end)
+			if okCtrl and type(ctrl) == "table" then
+				pets = findKnitPetTable(ctrl)
+				if pets then
+					source = "Knit.GetController(" .. ctrlName .. ")"
+					break
+				end
+			end
+		end
+	end
+
+	if not pets then
+		for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+			if desc:IsA("ModuleScript") and desc.Name:find("PetInv", 1, true) then
+				local okReq, mod = pcall(require, desc)
+				if okReq and type(mod) == "table" then
+					pets = findKnitPetTable(mod)
+					if pets then
+						source = desc:GetFullName()
+						break
+					end
+				end
+			end
+		end
+	end
+
+	if not pets then
+		table.insert(lines, "Knit pet list not found on client.")
+		table.insert(lines, "Try opening pet inventory in-game, then dump again.")
+		table.insert(lines, "")
+		local uiText, rowCount = dumpPlayerInventoryText()
+		return table.concat(lines, "\n") .. "\n" .. uiText, rowCount
+	end
+
+	table.insert(lines, "Source: " .. tostring(source))
+	table.insert(lines, "")
+
+	local count = 0
+	local plainCount = 0
+	local index = 0
+	if #pets > 0 then
+		for _, pet in ipairs(pets) do
+			index = index + 1
+			count = count + 1
+			if isPlainKnitPet(pet) then
+				plainCount = plainCount + 1
+			end
+			if index <= 150 then
+				table.insert(lines, formatKnitPetLine(index, pet, nil))
+			end
+		end
+	else
+		for nickname, pet in pairs(pets) do
+			if type(pet) == "table" then
+				index = index + 1
+				count = count + 1
+				if isPlainKnitPet(pet) then
+					plainCount = plainCount + 1
+				end
+				if index <= 150 then
+					table.insert(lines, formatKnitPetLine(index, pet, nickname))
+				end
+			end
+		end
+	end
+
+	if count > 150 then
+		table.insert(lines, ("... +%d more pets"):format(count - 150))
+	end
+	table.insert(lines, "")
+	table.insert(lines, ("Total: %d pet(s), %d plain (MU0 + empty traits)"):format(count, plainCount))
+
+	local groups, groupKeys = summarizeFuseGroups(pets)
+	table.insert(lines, "")
+	table.insert(lines, "=== Plain fuse groups (E→D→C→B→A, need 3 same id+rank) ===")
+	if #groupKeys == 0 then
+		table.insert(lines, "  (none – need plain E/D/C/B pets with same species id)")
+	else
+		for _, key in ipairs(groupKeys) do
+			local g = groups[key]
+			local fuses = math.floor(g.count / 3)
+			local uidPreview = #g.uids > 0 and (" uids=" .. table.concat(g.uids, ", ")) or ""
+			table.insert(lines, ("  %s: %d pets → %d fuse(s)%s"):format(key, g.count, fuses, uidPreview))
+		end
+	end
+
+	return table.concat(lines, "\n"), count
+end
+
 scanFuseRelatedRemotesText = function()
+	local petText, petCount = scanPetServiceText()
 	local remotes = collectFuseRelatedRemotes()
 	local lines = {
-		"=== Fuse / inventory remotes ===",
-		("Found %d remote(s). Fuse manually once with Hook ON to log FireServer args."):format(#remotes),
+		"",
+		"=== Other fuse/inventory remotes ===",
+		("Found %d remote(s)."):format(#remotes),
 		"",
 	}
 	if #remotes == 0 then
-		table.insert(lines, "(none found – try opening Fuse menu in-game, then scan again)")
+		table.insert(lines, "  (none)")
 	else
 		for _, remote in ipairs(remotes) do
 			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
 		end
 	end
-	local text = table.concat(lines, "\n")
-	print("[BloxMonster] " .. text:gsub("\n", " | "))
-	return text, #remotes
+	local text = petText .. table.concat(lines, "\n")
+	return text, petCount + #remotes
 end
 
 local function listGameObjects(nameFilter)
@@ -1848,65 +2126,18 @@ dumpPlayerInventoryText = function()
 	end
 
 	local text = table.concat(out, "\n")
-	print("[BloxMonster] Inventory dump: " .. #rows .. " UI row(s), " .. #uiPaths .. " path(s)")
 	return text, #rows
 end
 
-disableFuseRemoteHook = function()
-	for _, conn in ipairs(fuseRemoteHookConnections) do
-		pcall(function()
-			conn:Disconnect()
-		end)
-	end
-	table.clear(fuseRemoteHookConnections)
-	restoreFuseNamecallHook()
-	fuseRemoteHookEnabled = false
-end
-
-local function enableFuseRemoteHook()
-	disableFuseRemoteHook()
-	local remotes = collectFuseRelatedRemotes()
-	for _, remote in ipairs(remotes) do
-		if remote.ClassName == "RemoteEvent" then
-			local conn = remote.OnClientEvent:Connect(function(...)
-				logFuseHook("OnClientEvent", remote, ...)
-			end)
-			table.insert(fuseRemoteHookConnections, conn)
-		end
-	end
-	installFuseNamecallHook()
-	fuseRemoteHookEnabled = true
-	return #remotes
-end
-
-toggleFuseRemoteHook = function()
-	if fuseRemoteHookEnabled then
-		disableFuseRemoteHook()
-		return false
-	end
-	enableFuseRemoteHook()
-	return true
-end
-
-updateFuseHookButton = function(btn)
-	if not btn then
-		return
-	end
-	if fuseRemoteHookEnabled then
-		btn.Text = "Fuse hook: ON (F9 logs)"
-		btn.BackgroundColor3 = Color3.fromRGB(90, 70, 40)
-		btn.TextColor3 = Color3.fromRGB(255, 230, 180)
-	else
-		btn.Text = "Fuse hook: OFF"
-		btn.BackgroundColor3 = Color3.fromRGB(55, 45, 35)
-		btn.TextColor3 = Color3.fromRGB(220, 200, 170)
-	end
-end
-
 openFuseDiscoveryWindow = function(initialText)
+	if initialText and initialText ~= "" then
+		appendFuseDiscoveryLog(initialText)
+	end
+
 	local existing = PlayerGui:FindFirstChild("BloxMonster_FuseDiscovery")
 	if existing then
 		existing:Destroy()
+		fuseWindowSetContent = nil
 	end
 
 	local fuseScreen = Instance.new("ScreenGui")
@@ -1917,8 +2148,8 @@ openFuseDiscoveryWindow = function(initialText)
 
 	local fuseMain = Instance.new("Frame")
 	fuseMain.Name = "Main"
-	fuseMain.Size = UDim2.new(0, 400, 0, 420)
-	fuseMain.Position = UDim2.new(0.5, -200, 0.5, -210)
+	fuseMain.Size = UDim2.new(0, 420, 0, 460)
+	fuseMain.Position = UDim2.new(0.5, -210, 0.5, -230)
 	fuseMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	fuseMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
 	fuseMain.BorderSizePixel = 0
@@ -1965,7 +2196,7 @@ openFuseDiscoveryWindow = function(initialText)
 	makeDraggable(fuseMain, { fuseTop, fuseTitle })
 
 	local fuseScroll = Instance.new("ScrollingFrame")
-	fuseScroll.Size = UDim2.new(1, -16, 1, -96)
+	fuseScroll.Size = UDim2.new(1, -16, 1, -120)
 	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
 	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
 	fuseScroll.BorderSizePixel = 0
@@ -1983,7 +2214,7 @@ openFuseDiscoveryWindow = function(initialText)
 	fuseContent.Size = UDim2.new(1, -8, 0, 0)
 	fuseContent.Position = UDim2.new(0, 4, 0, 4)
 	fuseContent.BackgroundTransparency = 1
-	fuseContent.Text = initialText or ""
+	fuseContent.Text = getFuseDiscoveryLogText()
 	fuseContent.TextColor3 = Color3.fromRGB(200, 220, 255)
 	fuseContent.TextSize = 11
 	fuseContent.Font = Enum.Font.Code
@@ -2004,14 +2235,22 @@ openFuseDiscoveryWindow = function(initialText)
 	fuseContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateFuseCanvasSize)
 
 	local function setContent(text)
+		if text and text ~= "" then
+			appendFuseDiscoveryLog(text)
+		else
+			fuseContent.Text = getFuseDiscoveryLogText()
+			task.defer(updateFuseCanvasSize)
+		end
+	end
+	fuseWindowSetContent = function(text)
 		fuseContent.Text = text or ""
 		task.defer(updateFuseCanvasSize)
 	end
 
-	local function makeToolBtn(text, xScale, width, color)
+	local function makeToolBtn(text, xScale, width, yOffset, color)
 		local btn = Instance.new("TextButton")
 		btn.Size = UDim2.new(width, -6, 0, 24)
-		btn.Position = UDim2.new(xScale, 4, 1, -52)
+		btn.Position = UDim2.new(xScale, 4, 1, yOffset)
 		btn.BackgroundColor3 = color
 		btn.BorderSizePixel = 0
 		btn.Text = text
@@ -2025,26 +2264,34 @@ openFuseDiscoveryWindow = function(initialText)
 		return btn
 	end
 
-	makeToolBtn("Scan Fuse objs", 0, 0.5, Color3.fromRGB(50, 70, 100)).MouseButton1Click:Connect(function()
+	makeToolBtn("Scan Fuse objs", 0, 0.5, -104, Color3.fromRGB(50, 70, 100)).MouseButton1Click:Connect(function()
 		local list = listGameObjects("Fuse")
 		setContent(#list > 0 and table.concat(list, "\n") or '(no objects containing "Fuse" found)')
 	end)
-	makeToolBtn("Read Fuse UI", 0.5, 0.5, Color3.fromRGB(60, 50, 80)).MouseButton1Click:Connect(function()
+	makeToolBtn("Read Fuse UI", 0.5, 0.5, -104, Color3.fromRGB(60, 50, 80)).MouseButton1Click:Connect(function()
 		setContent(readFuseFrameContent())
 	end)
-	makeToolBtn("Find fuse data", 0, 0.5, Color3.fromRGB(55, 80, 60)).MouseButton1Click:Connect(function()
+	makeToolBtn("Find fuse data", 0, 0.5, -76, Color3.fromRGB(55, 80, 60)).MouseButton1Click:Connect(function()
 		setContent(findFuseDataOnClient())
 	end)
-	makeToolBtn("Dump inventory", 0.5, 0.5, Color3.fromRGB(70, 55, 45)).MouseButton1Click:Connect(function()
-		local text = dumpPlayerInventoryText()
-		setContent(text)
+	makeToolBtn("Dump Knit pets", 0.5, 0.5, -76, Color3.fromRGB(70, 55, 45)).MouseButton1Click:Connect(function()
+		setContent(dumpKnitPetInventoryText())
+	end)
+	makeToolBtn("Scan PetService", 0, 0.5, -48, Color3.fromRGB(80, 60, 50)).MouseButton1Click:Connect(function()
+		setContent(scanPetServiceText())
+	end)
+
+	local fuseCopyBtn = makeToolBtn("Copy all to clipboard", 0.5, 0.5, -48, Color3.fromRGB(50, 90, 60))
+	fuseCopyBtn.MouseButton1Click:Connect(function()
+		local copied = copyFuseDiscoveryLog()
+		fuseTip.Text = copied and "Copied to clipboard." or "Clipboard unavailable – select text manually."
 	end)
 
 	local fuseTip = Instance.new("TextLabel")
 	fuseTip.Size = UDim2.new(1, -16, 0, 18)
-	fuseTip.Position = UDim2.new(0, 8, 1, -24)
+	fuseTip.Position = UDim2.new(0, 8, 1, -22)
 	fuseTip.BackgroundTransparency = 1
-	fuseTip.Text = "Select text here (Ctrl+A/C). Also check Output (F9)."
+	fuseTip.Text = "Use Copy all, or click text → Ctrl+A → Ctrl+C."
 	fuseTip.TextColor3 = Color3.fromRGB(130, 160, 140)
 	fuseTip.TextSize = 9
 	fuseTip.Font = Enum.Font.Gotham
@@ -2052,6 +2299,7 @@ openFuseDiscoveryWindow = function(initialText)
 	fuseTip.Parent = fuseMain
 
 	fuseCloseBtn.MouseButton1Click:Connect(function()
+		fuseWindowSetContent = nil
 		fuseScreen:Destroy()
 	end)
 
@@ -2073,7 +2321,6 @@ local fuseDiscoveryExisting = PlayerGui:FindFirstChild("BloxMonster_FuseDiscover
 if fuseDiscoveryExisting then
 	fuseDiscoveryExisting:Destroy()
 end
-disableFuseRemoteHook()
 
 local onWorldButtonClick
 local TAB_PANELS
@@ -3325,7 +3572,7 @@ fuseDumpInventoryBtn.Size = UDim2.new(0.5, -9, 0, 24)
 fuseDumpInventoryBtn.Position = UDim2.new(0.5, 3, 0, 24)
 fuseDumpInventoryBtn.BackgroundColor3 = Color3.fromRGB(70, 55, 45)
 fuseDumpInventoryBtn.BorderSizePixel = 0
-fuseDumpInventoryBtn.Text = "Dump inventory"
+fuseDumpInventoryBtn.Text = "Dump Knit pets"
 fuseDumpInventoryBtn.TextColor3 = Color3.fromRGB(255, 230, 200)
 fuseDumpInventoryBtn.TextSize = 10
 fuseDumpInventoryBtn.Font = Enum.Font.Gotham
@@ -3335,20 +3582,20 @@ local fuseDumpInventoryCorner = Instance.new("UICorner")
 fuseDumpInventoryCorner.CornerRadius = UDim.new(0, 4)
 fuseDumpInventoryCorner.Parent = fuseDumpInventoryBtn
 
-local fuseHookBtn = Instance.new("TextButton")
-fuseHookBtn.Size = UDim2.new(0.5, -9, 0, 24)
-fuseHookBtn.Position = UDim2.new(0, 6, 0, 54)
-fuseHookBtn.BackgroundColor3 = Color3.fromRGB(55, 45, 35)
-fuseHookBtn.BorderSizePixel = 0
-fuseHookBtn.Text = "Fuse hook: OFF"
-fuseHookBtn.TextColor3 = Color3.fromRGB(220, 200, 170)
-fuseHookBtn.TextSize = 10
-fuseHookBtn.Font = Enum.Font.GothamBold
-fuseHookBtn.Parent = fuseDiscoveryCard
+local fuseCopyLogBtn = Instance.new("TextButton")
+fuseCopyLogBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseCopyLogBtn.Position = UDim2.new(0, 6, 0, 54)
+fuseCopyLogBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+fuseCopyLogBtn.BorderSizePixel = 0
+fuseCopyLogBtn.Text = "Copy log"
+fuseCopyLogBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+fuseCopyLogBtn.TextSize = 10
+fuseCopyLogBtn.Font = Enum.Font.GothamBold
+fuseCopyLogBtn.Parent = fuseDiscoveryCard
 
-local fuseHookCorner = Instance.new("UICorner")
-fuseHookCorner.CornerRadius = UDim.new(0, 4)
-fuseHookCorner.Parent = fuseHookBtn
+local fuseCopyLogCorner = Instance.new("UICorner")
+fuseCopyLogCorner.CornerRadius = UDim.new(0, 4)
+fuseCopyLogCorner.Parent = fuseCopyLogBtn
 
 local fuseOpenToolsBtn = Instance.new("TextButton")
 fuseOpenToolsBtn.Size = UDim2.new(0.5, -9, 0, 24)
@@ -3369,7 +3616,7 @@ local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
 fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 12)
 fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 82)
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Hook OFF by default. Turn ON only while testing fuse."
+fuseDiscoveryStatusLabel.Text = "Results go to Fuse tools window. Use Copy log."
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
@@ -3488,7 +3735,7 @@ UI.farmStayApplyBtn = farmStayApplyBtn
 UI.configStatusLabel = configStatusLabel
 UI.fuseScanRemotesBtn = fuseScanRemotesBtn
 UI.fuseDumpInventoryBtn = fuseDumpInventoryBtn
-UI.fuseHookBtn = fuseHookBtn
+UI.fuseCopyLogBtn = fuseCopyLogBtn
 UI.fuseOpenToolsBtn = fuseOpenToolsBtn
 UI.fuseDiscoveryStatusLabel = fuseDiscoveryStatusLabel
 UI.farmStartBtn = farmStartBtn
@@ -4599,29 +4846,28 @@ local function connectAllUIHandlers()
 
 	UI.fuseScanRemotesBtn.MouseButton1Click:Connect(function()
 		local text, count = scanFuseRelatedRemotesText()
-		UI.fuseDiscoveryStatusLabel.Text = ("Found %d fuse remote(s) – see Output (F9)"):format(count)
+		UI.fuseDiscoveryStatusLabel.Text = ("Found %d remote(s) – open Fuse tools to copy"):format(count)
 		openFuseDiscoveryWindow(text)
 	end)
 
 	UI.fuseDumpInventoryBtn.MouseButton1Click:Connect(function()
-		local text, rowCount = dumpPlayerInventoryText()
-		UI.fuseDiscoveryStatusLabel.Text = ("Inventory dump: %d pet row(s)"):format(rowCount)
+		local text, rowCount = dumpKnitPetInventoryText()
+		UI.fuseDiscoveryStatusLabel.Text = ("Knit pets: %d row(s) – Copy log when done"):format(rowCount)
 		openFuseDiscoveryWindow(text)
 	end)
 
-	UI.fuseHookBtn.MouseButton1Click:Connect(function()
-		local enabled = toggleFuseRemoteHook()
-		updateFuseHookButton(UI.fuseHookBtn)
-		if enabled then
-			local count = #collectFuseRelatedRemotes()
-			UI.fuseDiscoveryStatusLabel.Text = ("Hook ON – watching %d remote(s). Fuse manually; check F9."):format(count)
-		else
-			UI.fuseDiscoveryStatusLabel.Text = "Fuse hook OFF"
+	UI.fuseCopyLogBtn.MouseButton1Click:Connect(function()
+		local copied = copyFuseDiscoveryLog()
+		UI.fuseDiscoveryStatusLabel.Text = copied
+			and "Log copied to clipboard"
+			or "Open Fuse tools window to select text"
+		if not copied then
+			openFuseDiscoveryWindow()
 		end
 	end)
 
 	UI.fuseOpenToolsBtn.MouseButton1Click:Connect(function()
-		openFuseDiscoveryWindow("Use the buttons below to scan fuse objects, read Fuse UI, or dump inventory.")
+		openFuseDiscoveryWindow("Fuse discovery log – use buttons below or Copy all.")
 	end)
 
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
@@ -4646,7 +4892,6 @@ local function connectAllUIHandlers()
 	UI.closeBtn.MouseButton1Click:Connect(function()
 		stopAutoRefresh()
 		stopAllFarm()
-		disableFuseRemoteHook()
 		UI.screen:Destroy()
 	end)
 
