@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.8.8"
+local VERSION = "1.9.1"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -390,6 +390,7 @@ end
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local nameFilters = {}
 local autoFarmRunning = false
+local autoFuseDuringFarm = true
 local lastAllPets = {}
 local lastScanClock = 0
 local lastLightPetsCount = -1
@@ -1376,6 +1377,7 @@ local dumpKnitPetInventoryText
 local startAutoFuse
 local stopAutoFuse
 local setAutoFuseStatusHandler
+local isAutoFuseRunning
 
 do
 -- Clean up legacy namecall hook from older script versions.
@@ -2262,17 +2264,44 @@ local function formatKnitPetLine(index, pet, nickname)
 	return ("%d. %s"):format(index, table.concat(parts, " "))
 end
 
-local function isPlainKnitPet(pet)
+local function getPetTraitKey(pet)
+	local traits = readPetField(pet, "traits", "Traits", "trait", "Trait")
+	if traits == nil then
+		return "none"
+	end
+	if type(traits) ~= "table" then
+		local s = tostring(traits)
+		return s ~= "" and s or "none"
+	end
+	local parts = {}
+	for k, v in pairs(traits) do
+		if type(k) == "number" and v ~= nil and v ~= false and v ~= "" then
+			table.insert(parts, tostring(v))
+		elseif type(k) == "string" and (v == true or v == nil or v == "") then
+			table.insert(parts, k)
+		elseif v ~= nil and v ~= false and v ~= "" then
+			table.insert(parts, tostring(k) .. "=" .. tostring(v))
+		end
+	end
+	table.sort(parts)
+	if #parts == 0 then
+		return "none"
+	end
+	return table.concat(parts, "+")
+end
+
+local function isFuseableKnitPet(pet)
 	if not isKnitPetRecord(pet, nil) then
 		return false
 	end
 	if not isNoMutation(readPetField(pet, "mutation", "Mutation", "mut", "Mut")) then
 		return false
 	end
-	if petHasTraits(pet) then
-		return false
-	end
 	return true
+end
+
+local function isPlainKnitPet(pet)
+	return isFuseableKnitPet(pet) and getPetTraitKey(pet) == "none"
 end
 
 local function canAutoFuseRank(rank)
@@ -2296,9 +2325,6 @@ local function getPetFuseBlockReason(pet)
 		return ("%s %s: has mutation %s"):format(
 			species, shortUid, tostring(readPetField(pet, "mutation", "Mutation") or "?")
 		)
-	end
-	if petHasTraits(pet) then
-		return ("%s %s: has trait(s)"):format(species, shortUid)
 	end
 	local locked = readPetField(pet, "locked", "Locked", "isLocked")
 	if locked == true or locked == 1 or tostring(locked or ""):lower() == "true" then
@@ -2326,11 +2352,14 @@ end
 local function summarizeFuseGroups(pets)
 	local groups = {}
 	local function addPet(pet)
-		if not isKnitPetRecord(pet, nil) or not isPlainKnitPet(pet) then
+		if not isKnitPetRecord(pet, nil) or not isFuseableKnitPet(pet) then
 			return
 		end
 		local rank = getPetRank(pet)
 		if not canAutoFuseRank(rank) then
+			return
+		end
+		if getPetFuseBlockReason(pet) then
 			return
 		end
 		local species = tostring(readPetField(pet, "id", "Id") or "?")
@@ -2575,10 +2604,10 @@ local function pickFuseTriple(pets, rank)
 	for _, pet in pairs(pets or {}) do
 		if isKnitPetRecord(pet, nil) and isFuseEligiblePet(pet) and getPetRank(pet) == rank then
 			local species = tostring(readPetField(pet, "id", "Id") or "?")
-			local uid = readPetField(pet, "uid", "UID")
 			if not bySpecies[species] then
 				bySpecies[species] = {}
 			end
+			local uid = readPetField(pet, "uid", "UID")
 			table.insert(bySpecies[species], { uid = tostring(uid), pet = pet })
 		end
 	end
@@ -2625,7 +2654,7 @@ startAutoFuse = function()
 		local ok, err = pcall(function()
 			ensurePetListeners()
 			local totalFused = 0
-			setAutoFuseStatus("Started – plain pets E→D→C→B→A")
+			setAutoFuseStatus("Started – MU0 pets E→D→C→B→A (any traits, not locked)")
 			while autoFuseRunning do
 				local pets, source = fetchKnitPets()
 				local total = countPets(pets)
@@ -2649,7 +2678,7 @@ startAutoFuse = function()
 				end
 				local eligible = countEligibleFusePets(pets)
 				if eligible < 3 then
-					setAutoFuseStatus(("Only %d eligible plain E-D-C-B pets (from %d total)"):format(eligible, total))
+					setAutoFuseStatus(("Only %d eligible MU0 E-D-C-B pets (from %d total, not locked)"):format(eligible, total))
 					local shown = 0
 					for _, pet in pairs(pets) do
 						if isKnitPetRecord(pet, nil) and shown < 6 then
@@ -2728,10 +2757,14 @@ stopAutoFuse = function()
 	setAutoFuseStatus("Stopped")
 end
 
+isAutoFuseRunning = function()
+	return autoFuseRunning
+end
+
 dumpKnitPetInventoryText = function()
 	local lines = {
 		"=== Knit pet inventory ===",
-		"rank=E/D/C… | uid=fuse id | id=species | mutation MU0=none | traits{}=none",
+		"rank=E/D/C… | uid=fuse id | id=species | mutation MU0 | traits=any mix OK",
 		"RankUp remote: PetInvService.RF.RankUp",
 		"",
 	}
@@ -2782,16 +2815,22 @@ dumpKnitPetInventoryText = function()
 		table.insert(lines, ("... +%d more pets"):format(count - 150))
 	end
 	table.insert(lines, "")
+	local fuseableCount = 0
+	for _, pet in pairs(pets) do
+		if isFuseableKnitPet(pet) then
+			fuseableCount = fuseableCount + 1
+		end
+	end
 	local eligibleCount = countEligibleFusePets(pets)
-	table.insert(lines, ("Total: %d pet(s), %d plain (MU0 + traits{}), %d eligible to fuse (E-D-C-B)"):format(
-		count, plainCount, eligibleCount
+	table.insert(lines, ("Total: %d pet(s), %d MU0, %d no-trait, %d eligible (E-D-C-B, not locked)"):format(
+		count, fuseableCount, plainCount, eligibleCount
 	))
 
 	local groups, groupKeys = summarizeFuseGroups(pets)
 	table.insert(lines, "")
-	table.insert(lines, "=== Plain fuse groups (E→D→C→B→A, need 3 same id+rank) ===")
+	table.insert(lines, "=== Fuse groups (3× same id + rank, E→A) ===")
 	if #groupKeys == 0 then
-		table.insert(lines, "  (none – need plain E/D/C/B pets with same species id)")
+		table.insert(lines, "  (none – need MU0 E/D/C/B pets, not locked)")
 	else
 		for _, key in ipairs(groupKeys) do
 			local g = groups[key]
@@ -4531,7 +4570,7 @@ farmStayApplyCorner.CornerRadius = UDim.new(0, 4)
 farmStayApplyCorner.Parent = farmStayApplyBtn
 
 local fuseDiscoveryCard = Instance.new("Frame")
-fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 128)
+fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 152)
 fuseDiscoveryCard.Position = UDim2.new(0, 0, 0, 230)
 fuseDiscoveryCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
 fuseDiscoveryCard.BorderSizePixel = 0
@@ -4545,7 +4584,7 @@ local fuseDiscoveryTitle = Instance.new("TextLabel")
 fuseDiscoveryTitle.Size = UDim2.new(1, -12, 0, 14)
 fuseDiscoveryTitle.Position = UDim2.new(0, 6, 0, 6)
 fuseDiscoveryTitle.BackgroundTransparency = 1
-fuseDiscoveryTitle.Text = "Pet fuse – plain E→A (MU0, no traits)"
+fuseDiscoveryTitle.Text = "Pet fuse – MU0 E→A (any traits, skip locked)"
 fuseDiscoveryTitle.TextColor3 = Color3.fromRGB(255, 220, 170)
 fuseDiscoveryTitle.TextSize = 10
 fuseDiscoveryTitle.Font = Enum.Font.GothamBold
@@ -4642,12 +4681,27 @@ local fuseAutoFuseStopCorner = Instance.new("UICorner")
 fuseAutoFuseStopCorner.CornerRadius = UDim.new(0, 4)
 fuseAutoFuseStopCorner.Parent = fuseAutoFuseStopBtn
 
+local fuseDuringFarmBtn = Instance.new("TextButton")
+fuseDuringFarmBtn.Size = UDim2.new(1, -12, 0, 20)
+fuseDuringFarmBtn.Position = UDim2.new(0, 6, 0, 108)
+fuseDuringFarmBtn.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
+fuseDuringFarmBtn.BorderSizePixel = 0
+fuseDuringFarmBtn.Text = "Auto-fuse during farm: ON"
+fuseDuringFarmBtn.TextColor3 = Color3.fromRGB(200, 255, 210)
+fuseDuringFarmBtn.TextSize = 9
+fuseDuringFarmBtn.Font = Enum.Font.GothamBold
+fuseDuringFarmBtn.Parent = fuseDiscoveryCard
+
+local fuseDuringFarmCorner = Instance.new("UICorner")
+fuseDuringFarmCorner.CornerRadius = UDim.new(0, 4)
+fuseDuringFarmCorner.Parent = fuseDuringFarmBtn
+
 local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
 fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 24)
-fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 100)
+fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 130)
 fuseDiscoveryStatusLabel.TextWrapped = true
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Inventory: DataController.PlayerData.Pets.freepool – dump, then auto-fuse plain MU0 + traits{}"
+fuseDiscoveryStatusLabel.Text = "MU0 + not locked – any traits mix OK. Toggle farm+fuse below."
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
@@ -4657,7 +4711,7 @@ fuseDiscoveryStatusLabel.Parent = fuseDiscoveryCard
 
 local configStatusLabel = Instance.new("TextLabel")
 configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
-configStatusLabel.Position = UDim2.new(0, 4, 0, 364)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 388)
 configStatusLabel.BackgroundTransparency = 1
 configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
 configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
@@ -4770,6 +4824,7 @@ UI.fuseCopyLogBtn = fuseCopyLogBtn
 UI.fuseOpenToolsBtn = fuseOpenToolsBtn
 UI.fuseAutoFuseStartBtn = fuseAutoFuseStartBtn
 UI.fuseAutoFuseStopBtn = fuseAutoFuseStopBtn
+UI.fuseDuringFarmBtn = fuseDuringFarmBtn
 UI.fuseDiscoveryStatusLabel = fuseDiscoveryStatusLabel
 UI.farmStartBtn = farmStartBtn
 UI.farmStopBtn = farmStopBtn
@@ -5693,6 +5748,29 @@ local function runWorldFarmLoop(runId)
 	end
 end
 
+local function updateFuseDuringFarmBtn()
+	if not UI or not UI.fuseDuringFarmBtn then
+		return
+	end
+	if autoFuseDuringFarm then
+		UI.fuseDuringFarmBtn.Text = "Auto-fuse during farm: ON"
+		UI.fuseDuringFarmBtn.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
+	else
+		UI.fuseDuringFarmBtn.Text = "Auto-fuse during farm: OFF"
+		UI.fuseDuringFarmBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+	end
+end
+
+local function maybeStartAutoFuseWithFarm()
+	if not autoFuseDuringFarm then
+		return
+	end
+	if isAutoFuseRunning and isAutoFuseRunning() then
+		return
+	end
+	pcall(startAutoFuse)
+end
+
 local function startWorldFarm()
 	if isAnyFarmRunning() then
 		return false
@@ -5727,6 +5805,7 @@ local function startWorldFarm()
 		end
 	end)
 	worldHuntThread = autoFarmThread
+	maybeStartAutoFuseWithFarm()
 	return true
 end
 
@@ -5761,6 +5840,7 @@ local function startAutoFarm()
 	autoFarmThread = task.spawn(function()
 		local lastFarmPriority = 0
 		local ok, err = pcall(function()
+			maybeStartAutoFuseWithFarm()
 			while shouldFarmContinue(myRunId) do
 				local pets = getCachedWorldPets("auto")
 				if not shouldFarmContinue(myRunId) then
@@ -5925,6 +6005,12 @@ local function connectAllUIHandlers()
 	UI.fuseAutoFuseStopBtn.MouseButton1Click:Connect(function()
 		stopAutoFuse()
 	end)
+
+	UI.fuseDuringFarmBtn.MouseButton1Click:Connect(function()
+		autoFuseDuringFarm = not autoFuseDuringFarm
+		updateFuseDuringFarmBtn()
+	end)
+	updateFuseDuringFarmBtn()
 
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
 		task.defer(addWorldFilterFromInput)
