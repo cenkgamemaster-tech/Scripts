@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.8.6"
+local VERSION = "1.8.8"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1405,7 +1405,7 @@ appendFuseDiscoveryLog = function(text)
 	end
 	if fuseWindowSetContent then
 		task.defer(function()
-			fuseWindowSetContent(table.concat(fuseLogLines, "\n"))
+			pcall(fuseWindowSetContent, table.concat(fuseLogLines, "\n"))
 		end)
 	end
 end
@@ -1959,10 +1959,106 @@ end
 local knitPetSyncSource = nil
 local knitPetFullSyncAttempted = false
 
+local function fetchDataControllerPetPools()
+	local Knit = getKnitModule()
+	if not Knit or type(Knit.GetController) ~= "function" then
+		return nil, nil, 0
+	end
+	local ok, ctrl = pcall(function()
+		return Knit.GetController("DataController")
+	end)
+	if not ok or type(ctrl) ~= "table" then
+		return nil, nil, 0
+	end
+	local cached = readPetField(ctrl, "CachedData", "cachedData", "Cache", "cache")
+	if type(cached) ~= "table" then
+		return nil, nil, 0
+	end
+	local playerData = cached.PlayerData or cached.playerData
+	if type(playerData) ~= "table" then
+		return nil, nil, 0
+	end
+	local userId = tostring(LocalPlayer.UserId)
+	local myData = playerData[userId] or playerData[LocalPlayer.UserId]
+	if type(myData) ~= "table" then
+		for k, v in pairs(playerData) do
+			if type(v) == "table" and tostring(k) == userId then
+				myData = v
+				break
+			end
+		end
+	end
+	if type(myData) ~= "table" then
+		return nil, nil, 0
+	end
+	local petsRoot = myData.Pets or myData.pets
+	if type(petsRoot) ~= "table" then
+		return nil, nil, 0
+	end
+
+	local merged = {}
+	local poolParts = {}
+	local total = 0
+	for poolName, pool in pairs(petsRoot) do
+		if type(pool) == "table" then
+			local score = scoreTableAsPetBag(pool)
+			if score > 0 then
+				total = total + score
+				table.insert(poolParts, tostring(poolName) .. "=" .. score)
+				for key, pet in pairs(pool) do
+					if type(pet) == "table" then
+						local uidHint = looksLikeUidKey(key) and key or nil
+						if isKnitPetRecord(pet, uidHint) or (uidHint and readPetField(pet, "id", "Id", "petId")) then
+							local petUid = uidHint or readPetField(pet, "uid", "UID", "Uuid")
+							if petUid then
+								merged[tostring(petUid)] = pet
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	if not next(merged) then
+		return nil, nil, 0
+	end
+	table.sort(poolParts)
+	local source = "DataController.PlayerData.Pets [" .. table.concat(poolParts, ", ") .. "]"
+	return merged, source, total
+end
+
 local function syncKnitPetCacheFromKnit(opts)
 	opts = opts or {}
 	ensurePetListeners()
 	local sources = {}
+
+	local dcPets, dcSource, dcScore = fetchDataControllerPetPools()
+	if dcPets then
+		mergePetsIntoCache(dcPets)
+		sources[dcSource or "DataController"] = dcScore
+		knitPetSyncSource = dcSource
+	end
+
+	local cachedCount = 0
+	for _ in pairs(knitPetCache) do
+		cachedCount = cachedCount + 1
+	end
+	if cachedCount >= 50 then
+		local sourceParts = {}
+		for name, score in pairs(sources) do
+			table.insert(sourceParts, type(score) == "number" and (name .. "(" .. score .. ")") or name)
+		end
+		table.sort(sourceParts)
+		if #sourceParts > 0 then
+			knitPetSyncSource = table.concat(sourceParts, ", ")
+		end
+		local n = 0
+		for _ in pairs(knitPetCache) do
+			n = n + 1
+		end
+		return n
+	end
+
 	local best = { count = 0, bag = nil, path = "" }
 	local seenScan = {}
 
@@ -2375,16 +2471,37 @@ end
 
 local rankUpMethodId = nil
 
+local function clearKnitPetCache()
+	for uid in pairs(knitPetCache) do
+		knitPetCache[uid] = nil
+	end
+end
+
+local function refreshKnitPetCacheFromDataController()
+	clearKnitPetCache()
+	local dcPets, dcSource = fetchDataControllerPetPools()
+	if dcPets then
+		mergePetsIntoCache(dcPets)
+		if dcSource then
+			knitPetSyncSource = dcSource
+		end
+		return knitPetCacheCount()
+	end
+	syncKnitPetCacheFromKnit({ skipTrigger = true })
+	return knitPetCacheCount()
+end
+
 local function invokeRankUp(uids, petRecords)
 	local u1, u2, u3 = uids[1], uids[2], uids[3]
 	if not u1 or not u2 or not u3 then
 		return false, "need 3 uids"
 	end
-	local p1 = petRecords and petRecords[1] or knitPetCache[u1]
-	local p2 = petRecords and petRecords[2] or knitPetCache[u2]
-	local p3 = petRecords and petRecords[3] or knitPetCache[u3]
 
 	local rf = getRankUpRemote()
+	if not rf then
+		return false, "PetInvService.RF.RankUp not found"
+	end
+
 	local Knit = getKnitModule()
 
 	local function tryCall(methodId, fn)
@@ -2396,72 +2513,43 @@ local function invokeRankUp(uids, petRecords)
 		return false, res
 	end
 
-	if rankUpMethodId then
-		local ok, res = false, nil
-		if rankUpMethodId == "ctrlDoPets" and Knit and p1 and p2 and p3 then
-			ok, res = tryCall("ctrlDoPets", function()
-				return Knit.GetController("PetInvController"):DoRankUp(p1, p2, p3)
-			end)
-		elseif rankUpMethodId == "rfPets" and rf and p1 and p2 and p3 then
-			ok, res = tryCall("rfPets", function()
-				return rf:InvokeServer(p1, p2, p3)
-			end)
-		elseif rankUpMethodId == "rf3" and rf then
-			ok, res = tryCall("rf3", function()
+	local function callCached()
+		if rankUpMethodId == "rf3" then
+			return tryCall("rf3", function()
 				return rf:InvokeServer(u1, u2, u3)
 			end)
-		elseif rankUpMethodId == "rfTable" and rf then
-			ok, res = tryCall("rfTable", function()
+		elseif rankUpMethodId == "rfTable" then
+			return tryCall("rfTable", function()
 				return rf:InvokeServer({ u1, u2, u3 })
 			end)
 		elseif rankUpMethodId == "knit3" and Knit then
-			ok, res = tryCall("knit3", function()
+			return tryCall("knit3", function()
 				return Knit.GetService("PetInvService"):RankUp(u1, u2, u3)
 			end)
 		elseif rankUpMethodId == "knitTable" and Knit then
-			ok, res = tryCall("knitTable", function()
+			return tryCall("knitTable", function()
 				return Knit.GetService("PetInvService"):RankUp({ u1, u2, u3 })
 			end)
-		elseif rankUpMethodId == "ctrlDo" and Knit then
-			ok, res = tryCall("ctrlDo", function()
-				return Knit.GetController("PetInvController"):DoRankUp(u1, u2, u3)
-			end)
-		elseif rankUpMethodId == "ctrlDoTable" and Knit then
-			ok, res = tryCall("ctrlDoTable", function()
-				return Knit.GetController("PetInvController"):DoRankUp({ u1, u2, u3 })
-			end)
 		end
+		return false, "cached method unavailable"
+	end
+
+	if rankUpMethodId then
+		local ok, res = callCached()
 		if ok then
 			return true, res
 		end
 		rankUpMethodId = nil
 	end
 
-	local attempts = {}
-	if Knit and type(Knit.GetController) == "function" and p1 and p2 and p3 then
-		table.insert(attempts, { "ctrlDoPets", function()
-			return Knit.GetController("PetInvController"):DoRankUp(p1, p2, p3)
-		end })
-		table.insert(attempts, { "ctrlDoPetsT", function()
-			return Knit.GetController("PetInvController"):DoRankUp({ p1, p2, p3 })
-		end })
-	end
-	if rf and p1 and p2 and p3 then
-		table.insert(attempts, { "rfPets", function()
-			return rf:InvokeServer(p1, p2, p3)
-		end })
-		table.insert(attempts, { "rfPetsT", function()
-			return rf:InvokeServer({ p1, p2, p3 })
-		end })
-	end
-	if rf then
-		table.insert(attempts, { "rf3", function()
+	local attempts = {
+		{ "rf3", function()
 			return rf:InvokeServer(u1, u2, u3)
-		end })
-		table.insert(attempts, { "rfTable", function()
+		end },
+		{ "rfTable", function()
 			return rf:InvokeServer({ u1, u2, u3 })
-		end })
-	end
+		end },
+	}
 	if Knit and type(Knit.GetService) == "function" then
 		table.insert(attempts, { "knit3", function()
 			return Knit.GetService("PetInvService"):RankUp(u1, u2, u3)
@@ -2470,16 +2558,8 @@ local function invokeRankUp(uids, petRecords)
 			return Knit.GetService("PetInvService"):RankUp({ u1, u2, u3 })
 		end })
 	end
-	if Knit and type(Knit.GetController) == "function" then
-		table.insert(attempts, { "ctrlDo", function()
-			return Knit.GetController("PetInvController"):DoRankUp(u1, u2, u3)
-		end })
-		table.insert(attempts, { "ctrlDoTable", function()
-			return Knit.GetController("PetInvController"):DoRankUp({ u1, u2, u3 })
-		end })
-	end
 
-	local lastErr = "RankUp remote not found"
+	local lastErr = "RankUp failed"
 	for _, entry in ipairs(attempts) do
 		local ok, res = tryCall(entry[1], entry[2])
 		if ok then
@@ -2604,11 +2684,23 @@ startAutoFuse = function()
 								species, rank, nextRank, totalFused
 							))
 							task.wait(AUTO_FUSE_DELAY_SEC)
+							refreshKnitPetCacheFromDataController()
 							break
 						else
 							setAutoFuseStatus("RankUp failed: " .. tostring(res))
-							task.wait(2)
-							break
+							task.wait(0.5)
+							refreshKnitPetCacheFromDataController()
+							local retryOk, retryRes = invokeRankUp(uids, petRecords)
+							if retryOk then
+								totalFused = totalFused + 1
+								fusedThisPass = true
+								setAutoFuseStatus(("Fused on retry (%d total)"):format(totalFused))
+								task.wait(AUTO_FUSE_DELAY_SEC)
+								refreshKnitPetCacheFromDataController()
+								break
+							end
+							setAutoFuseStatus("RankUp retry failed: " .. tostring(retryRes))
+							task.wait(1)
 						end
 					end
 				end
@@ -2617,9 +2709,9 @@ startAutoFuse = function()
 						setAutoFuseStatus(("Nothing to fuse (%d pets, %d eligible – need 3× same id+rank)"):format(
 							total, eligible
 						))
-					else
-						setAutoFuseStatus(("Done – %d fusion(s) completed"):format(totalFused))
+						break
 					end
+					setAutoFuseStatus(("Paused – %d fusion(s) done, nothing left this pass"):format(totalFused))
 					break
 				end
 			end
@@ -2690,7 +2782,10 @@ dumpKnitPetInventoryText = function()
 		table.insert(lines, ("... +%d more pets"):format(count - 150))
 	end
 	table.insert(lines, "")
-	table.insert(lines, ("Total: %d pet(s), %d plain (MU0 + empty traits)"):format(count, plainCount))
+	local eligibleCount = countEligibleFusePets(pets)
+	table.insert(lines, ("Total: %d pet(s), %d plain (MU0 + traits{}), %d eligible to fuse (E-D-C-B)"):format(
+		count, plainCount, eligibleCount
+	))
 
 	local groups, groupKeys = summarizeFuseGroups(pets)
 	table.insert(lines, "")
@@ -3141,8 +3236,10 @@ openFuseDiscoveryWindow = function(initialText)
 		end
 	end
 	fuseWindowSetContent = function(text)
-		fuseContent.Text = text or ""
-		task.defer(updateFuseCanvasSize)
+		if fuseContent and fuseContent.Parent then
+			fuseContent.Text = text or ""
+			task.defer(updateFuseCanvasSize)
+		end
 	end
 
 	local function makeToolBtn(text, xScale, width, yOffset, color)
@@ -4550,7 +4647,7 @@ fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 24)
 fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 100)
 fuseDiscoveryStatusLabel.TextWrapped = true
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Reads pets from Knit on join (no inventory UI) – dump to verify, then auto-fuse"
+fuseDiscoveryStatusLabel.Text = "Inventory: DataController.PlayerData.Pets.freepool – dump, then auto-fuse plain MU0 + traits{}"
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
@@ -4691,9 +4788,12 @@ end
 local UI = UI
 
 setAutoFuseStatusHandler(function(msg)
-	if UI.fuseDiscoveryStatusLabel then
-		UI.fuseDiscoveryStatusLabel.Text = msg
-	end
+	pcall(function()
+		local lbl = UI and UI.fuseDiscoveryStatusLabel
+		if lbl and lbl.Parent then
+			lbl.Text = msg
+		end
+	end)
 end)
 
 TAB_PANELS = {
