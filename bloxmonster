@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.8.0"
+local VERSION = "1.8.1"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1567,10 +1567,72 @@ end
 local KNIT_PET_CONTROLLER_NAMES = {
 	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
 }
-local KNIT_PET_TABLE_KEYS = { "Pets", "pets", "PetList", "Inventory", "AllPets", "OwnedPets", "Data", "PetData" }
+local KNIT_PET_TABLE_KEYS = {
+	"Pets", "pets", "PetList", "Inventory", "AllPets", "OwnedPets", "Data", "PetData",
+	"_pets", "PetInventory", "Owned", "Cache", "Replica",
+}
 
 local function isKnitPetRecord(value)
 	return type(value) == "table" and (value.uid or value.UID or value.id or value.Id)
+end
+
+local knitPetCache = {}
+local petListenersConnected = false
+
+local function ingestPetRecord(data, uidOverride)
+	if type(data) ~= "table" then
+		return
+	end
+	local uid = uidOverride or data.uid or data.UID
+	if uid then
+		knitPetCache[tostring(uid)] = data
+	end
+end
+
+local function ingestPetPayload(...)
+	local args = { ... }
+	for i, arg in ipairs(args) do
+		if type(arg) == "table" then
+			if isKnitPetRecord(arg) then
+				ingestPetRecord(arg)
+			else
+				for _, v in pairs(arg) do
+					if isKnitPetRecord(v) then
+						ingestPetRecord(v)
+					end
+				end
+			end
+		elseif i >= 2 and type(args[i + 1]) == "table" and (type(arg) == "string" or type(arg) == "number") then
+			ingestPetRecord(args[i + 1], arg)
+		end
+	end
+end
+
+local function ensurePetListeners()
+	if petListenersConnected then
+		return
+	end
+	local petService = findPetServiceFolder()
+	if not petService then
+		return
+	end
+	local re = petService:FindFirstChild("RE")
+	if not re then
+		return
+	end
+	local function hook(name)
+		local remote = re:FindFirstChild(name)
+		if remote and remote:IsA("RemoteEvent") then
+			remote.OnClientEvent:Connect(function(...)
+				ingestPetPayload(...)
+			end)
+		end
+	end
+	hook("AddPet")
+	hook("UpdatePetData")
+	hook("LoadClient")
+	hook("ReloadPlayer")
+	petListenersConnected = true
 end
 
 local function findKnitPetTable(value, depth)
@@ -1726,6 +1788,8 @@ local function getKnitModule()
 end
 
 local function fetchKnitPets()
+	ensurePetListeners()
+
 	local pets = nil
 	local source = nil
 	local Knit = getKnitModule()
@@ -1757,7 +1821,74 @@ local function fetchKnitPets()
 			end
 		end
 	end
+	if next(knitPetCache) then
+		if not pets then
+			pets = knitPetCache
+			source = "PetService event cache"
+		else
+			local merged = {}
+			if #pets > 0 then
+				for _, pet in ipairs(pets) do
+					if type(pet) == "table" and pet.uid then
+						merged[tostring(pet.uid)] = pet
+					end
+				end
+			else
+				for key, pet in pairs(pets) do
+					if type(pet) == "table" then
+						local uid = pet.uid or pet.UID or key
+						merged[tostring(uid)] = pet
+					end
+				end
+			end
+			for uid, pet in pairs(knitPetCache) do
+				merged[uid] = pet
+			end
+			pets = merged
+			source = (source or "client") .. " + PetService events"
+		end
+	end
 	return pets, source
+end
+
+local function countPets(pets)
+	if not pets then
+		return 0
+	end
+	local n = 0
+	if #pets > 0 then
+		return #pets
+	end
+	for _, pet in pairs(pets) do
+		if type(pet) == "table" then
+			n = n + 1
+		end
+	end
+	return n
+end
+
+local function countEligibleFusePets(pets)
+	local n = 0
+	local function consider(pet)
+		if isFuseEligiblePet(pet) then
+			n = n + 1
+		end
+	end
+	if not pets then
+		return 0
+	end
+	if #pets > 0 then
+		for _, pet in ipairs(pets) do
+			consider(pet)
+		end
+	else
+		for _, pet in pairs(pets) do
+			if type(pet) == "table" then
+				consider(pet)
+			end
+		end
+	end
+	return n
 end
 
 local function isFuseEligiblePet(pet)
@@ -1923,6 +2054,7 @@ end
 
 local function setAutoFuseStatus(msg)
 	appendFuseDiscoveryLog("[AutoFuse] " .. msg)
+	warn("[BloxMonster AutoFuse]", msg)
 	if autoFuseStatusCallback then
 		autoFuseStatusCallback(msg)
 	end
@@ -1930,50 +2062,67 @@ end
 
 startAutoFuse = function()
 	if autoFuseRunning then
+		setAutoFuseStatus("Already running – press Stop first")
 		return
 	end
 	autoFuseRunning = true
+	setAutoFuseStatus("Starting…")
 	task.spawn(function()
-		local totalFused = 0
-		setAutoFuseStatus("Started – plain pets only, E→D→C→B→A")
-		while autoFuseRunning do
-			local pets = fetchKnitPets()
-			if not pets then
-				setAutoFuseStatus("No pet list – open inventory in-game first")
-				break
-			end
-			local fusedThisPass = false
-			for _, rank in ipairs(FUSE_TARGET_RANKS) do
-				if not autoFuseRunning then
+		local ok, err = pcall(function()
+			ensurePetListeners()
+			local totalFused = 0
+			setAutoFuseStatus("Started – plain pets E→D→C→B→A")
+			while autoFuseRunning do
+				local pets, source = fetchKnitPets()
+				local total = countPets(pets)
+				if not pets or total == 0 then
+					setAutoFuseStatus("No pets found – open inventory, wait 2s, try again")
 					break
 				end
-				local species, _, uids = pickFuseTriple(pets, rank)
-				if uids then
-					local ok, res = invokeRankUp(uids)
-					if ok then
-						totalFused = totalFused + 1
-						fusedThisPass = true
-						local nextRank = ASCEND_TO_RANK[rankIndexFromRank(rank) + 1] or "?"
-						setAutoFuseStatus(("Fused 3× %s %s → %s (%d total)"):format(
-							species, rank, nextRank, totalFused
-						))
-						task.wait(AUTO_FUSE_DELAY_SEC)
-						break
-					else
-						setAutoFuseStatus("RankUp failed: " .. tostring(res))
-						task.wait(2)
+				local eligible = countEligibleFusePets(pets)
+				if eligible < 3 then
+					setAutoFuseStatus(("Only %d eligible plain E-D-C-B pets (from %d total)"):format(eligible, total))
+					break
+				end
+				local fusedThisPass = false
+				for _, rank in ipairs(FUSE_TARGET_RANKS) do
+					if not autoFuseRunning then
 						break
 					end
+					local species, _, uids = pickFuseTriple(pets, rank)
+					if uids then
+						setAutoFuseStatus(("RankUp %s %s ×3 (%s)…"):format(species, rank, source or "?"))
+						local fuseOk, res = invokeRankUp(uids)
+						if fuseOk then
+							totalFused = totalFused + 1
+							fusedThisPass = true
+							local nextRank = ASCEND_TO_RANK[rankIndexFromRank(rank) + 1] or "?"
+							setAutoFuseStatus(("Fused 3× %s %s → %s (%d total)"):format(
+								species, rank, nextRank, totalFused
+							))
+							task.wait(AUTO_FUSE_DELAY_SEC)
+							break
+						else
+							setAutoFuseStatus("RankUp failed: " .. tostring(res))
+							task.wait(2)
+							break
+						end
+					end
+				end
+				if not fusedThisPass then
+					if totalFused == 0 then
+						setAutoFuseStatus(("Nothing to fuse (%d pets, %d eligible – need 3× same id+rank)"):format(
+							total, eligible
+						))
+					else
+						setAutoFuseStatus(("Done – %d fusion(s) completed"):format(totalFused))
+					end
+					break
 				end
 			end
-			if not fusedThisPass then
-				if totalFused == 0 then
-					setAutoFuseStatus("Nothing to fuse (need 3× plain same id+rank)")
-				else
-					setAutoFuseStatus(("Done – %d fusion(s) completed"):format(totalFused))
-				end
-				break
-			end
+		end)
+		if not ok then
+			setAutoFuseStatus("Error: " .. tostring(err))
 		end
 		autoFuseRunning = false
 	end)
@@ -2551,6 +2700,8 @@ openFuseDiscoveryWindow = function(initialText)
 	task.defer(updateFuseCanvasSize)
 end
 
+task.defer(ensurePetListeners)
+
 end -- fuse discovery scope
 
 -- Remove existing UI
@@ -2570,7 +2721,7 @@ end
 local onWorldButtonClick
 local TAB_PANELS
 local CONTENT_TOP = 60
-local CONTENT_HEIGHT = 420
+local CONTENT_HEIGHT = 430
 
 local uiBuildOk, uiBuildErr = pcall(function()
 UI = {}
@@ -2585,8 +2736,8 @@ screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 480, 0, 556)
-main.Position = UDim2.new(0, 16, 0.5, -278)
+main.Size = UDim2.new(0, 480, 0, 566)
+main.Position = UDim2.new(0, 16, 0.5, -283)
 main.AnchorPoint = Vector2.new(0, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 main.BorderSizePixel = 0
@@ -3776,7 +3927,7 @@ farmStayApplyCorner.CornerRadius = UDim.new(0, 4)
 farmStayApplyCorner.Parent = farmStayApplyBtn
 
 local fuseDiscoveryCard = Instance.new("Frame")
-fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 118)
+fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 128)
 fuseDiscoveryCard.Position = UDim2.new(0, 0, 0, 230)
 fuseDiscoveryCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
 fuseDiscoveryCard.BorderSizePixel = 0
@@ -3888,8 +4039,9 @@ fuseAutoFuseStopCorner.CornerRadius = UDim.new(0, 4)
 fuseAutoFuseStopCorner.Parent = fuseAutoFuseStopBtn
 
 local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
-fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 12)
-fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 104)
+fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 24)
+fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 100)
+fuseDiscoveryStatusLabel.TextWrapped = true
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
 fuseDiscoveryStatusLabel.Text = "Uses PetInvService.RF.RankUp – dump pets first to verify groups"
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
@@ -3901,7 +4053,7 @@ fuseDiscoveryStatusLabel.Parent = fuseDiscoveryCard
 
 local configStatusLabel = Instance.new("TextLabel")
 configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
-configStatusLabel.Position = UDim2.new(0, 4, 0, 354)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 364)
 configStatusLabel.BackgroundTransparency = 1
 configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
 configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
@@ -4030,6 +4182,12 @@ if not uiBuildOk then
 end
 
 local UI = UI
+
+setAutoFuseStatusHandler(function(msg)
+	if UI.fuseDiscoveryStatusLabel then
+		UI.fuseDiscoveryStatusLabel.Text = msg
+	end
+end)
 
 TAB_PANELS = {
 	{ id = "pets", panel = UI.petsPanel },
@@ -5148,7 +5306,13 @@ local function connectAllUIHandlers()
 	end)
 
 	UI.fuseAutoFuseStartBtn.MouseButton1Click:Connect(function()
-		startAutoFuse()
+		UI.fuseDiscoveryStatusLabel.Text = "Auto-fuse starting…"
+		openFuseDiscoveryWindow()
+		local ok, err = pcall(startAutoFuse)
+		if not ok then
+			warn("[BloxMonster] startAutoFuse error:", err)
+			UI.fuseDiscoveryStatusLabel.Text = "Error: " .. tostring(err)
+		end
 	end)
 
 	UI.fuseAutoFuseStopBtn.MouseButton1Click:Connect(function()
@@ -5214,11 +5378,6 @@ if not connectOk then
 end
 
 task.defer(function()
-	setAutoFuseStatusHandler(function(msg)
-		if UI.fuseDiscoveryStatusLabel then
-			UI.fuseDiscoveryStatusLabel.Text = msg
-		end
-	end)
 	local initOk, initErr = pcall(function()
 		setActiveTab("pets")
 		rebuildWorldFilterChips()
