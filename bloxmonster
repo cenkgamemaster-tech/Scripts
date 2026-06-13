@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.43"
+local VERSION = "1.8.0"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1373,6 +1373,9 @@ local appendFuseDiscoveryLog
 local collectFuseRelatedRemotes
 local scanPetServiceText
 local dumpKnitPetInventoryText
+local startAutoFuse
+local stopAutoFuse
+local setAutoFuseStatusHandler
 
 do
 -- Clean up legacy namecall hook from older script versions.
@@ -1549,8 +1552,10 @@ scanPetServiceText = function()
 		local n = remote.Name:lower()
 		if n == "updatepetdata" or n == "addpet" then
 			tag = "  <-- server pushes pet data (rank, uid)"
+		elseif n == "rankup" then
+			tag = "  <-- AUTO-FUSE uses this (3 uids)"
 		elseif n:find("rank", 1, true) or n:find("ascend", 1, true) or n:find("fuse", 1, true) or n:find("combine", 1, true) then
-			tag = "  <-- likely rank-up/fuse (client calls this)"
+			tag = "  <-- rank-up / fuse related"
 		end
 		table.insert(lines, ("  %s (%s)%s"):format(remote:GetFullName(), remote.ClassName, tag))
 	end
@@ -1660,6 +1665,15 @@ local function canAutoFuseRank(rank)
 	return false
 end
 
+local function rankIndexFromRank(rank)
+	for i, r in ipairs(ASCEND_TO_RANK) do
+		if r == rank then
+			return i
+		end
+	end
+	return 99
+end
+
 local function summarizeFuseGroups(pets)
 	local groups = {}
 	local function addPet(pet)
@@ -1699,26 +1713,23 @@ local function summarizeFuseGroups(pets)
 	return groups, keys
 end
 
-dumpKnitPetInventoryText = function()
-	local lines = {
-		"=== Knit pet inventory ===",
-		"rank=E/D/C… | uid=fuse id | id=species | mutation MU0=none | traits{}=none",
-		"UpdatePetData events include rank=E (confirmed from your log).",
-		"",
-	}
+local function getKnitModule()
+	local packages = ReplicatedStorage:FindFirstChild("Packages")
+	local knitModule = packages and packages:FindFirstChild("Knit")
+	if knitModule then
+		local ok, knit = pcall(require, knitModule)
+		if ok then
+			return knit
+		end
+	end
+	return nil
+end
+
+local function fetchKnitPets()
 	local pets = nil
 	local source = nil
-
-	local okKnit, Knit = pcall(function()
-		local packages = ReplicatedStorage:FindFirstChild("Packages")
-		local knitModule = packages and packages:FindFirstChild("Knit")
-		if knitModule then
-			return require(knitModule)
-		end
-		return nil
-	end)
-
-	if okKnit and Knit and type(Knit.GetController) == "function" then
+	local Knit = getKnitModule()
+	if Knit and type(Knit.GetController) == "function" then
 		for _, ctrlName in ipairs(KNIT_PET_CONTROLLER_NAMES) do
 			local okCtrl, ctrl = pcall(function()
 				return Knit.GetController(ctrlName)
@@ -1732,7 +1743,6 @@ dumpKnitPetInventoryText = function()
 			end
 		end
 	end
-
 	if not pets then
 		for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
 			if desc:IsA("ModuleScript") and desc.Name:find("PetInv", 1, true) then
@@ -1747,6 +1757,241 @@ dumpKnitPetInventoryText = function()
 			end
 		end
 	end
+	return pets, source
+end
+
+local function isFuseEligiblePet(pet)
+	if not isPlainKnitPet(pet) then
+		return false
+	end
+	if pet.locked == true then
+		return false
+	end
+	local rank = getPetRank(pet)
+	if not canAutoFuseRank(rank) then
+		return false
+	end
+	return pet.uid ~= nil and pet.uid ~= ""
+end
+
+local function getRankUpRemote()
+	local svc = ReplicatedStorage:FindFirstChild("Packages")
+		and ReplicatedStorage.Packages:FindFirstChild("Knit")
+		and ReplicatedStorage.Packages.Knit:FindFirstChild("Services")
+		and ReplicatedStorage.Packages.Knit.Services:FindFirstChild("PetInvService")
+	if not svc then
+		return nil
+	end
+	local rfFolder = svc:FindFirstChild("RF")
+	return rfFolder and rfFolder:FindFirstChild("RankUp")
+end
+
+local rankUpMethodId = nil
+
+local function invokeRankUp(uids)
+	local u1, u2, u3 = uids[1], uids[2], uids[3]
+	if not u1 or not u2 or not u3 then
+		return false, "need 3 uids"
+	end
+
+	local rf = getRankUpRemote()
+	local Knit = getKnitModule()
+
+	local function tryCall(methodId, fn)
+		local ok, res = pcall(fn)
+		if ok then
+			rankUpMethodId = methodId
+			return true, res
+		end
+		return false, res
+	end
+
+	if rankUpMethodId then
+		local ok, res = false, nil
+		if rankUpMethodId == "rf3" and rf then
+			ok, res = tryCall("rf3", function()
+				return rf:InvokeServer(u1, u2, u3)
+			end)
+		elseif rankUpMethodId == "rfTable" and rf then
+			ok, res = tryCall("rfTable", function()
+				return rf:InvokeServer({ u1, u2, u3 })
+			end)
+		elseif rankUpMethodId == "knit3" and Knit then
+			ok, res = tryCall("knit3", function()
+				return Knit.GetService("PetInvService"):RankUp(u1, u2, u3)
+			end)
+		elseif rankUpMethodId == "knitTable" and Knit then
+			ok, res = tryCall("knitTable", function()
+				return Knit.GetService("PetInvService"):RankUp({ u1, u2, u3 })
+			end)
+		elseif rankUpMethodId == "ctrlDo" and Knit then
+			ok, res = tryCall("ctrlDo", function()
+				return Knit.GetController("PetInvController"):DoRankUp(u1, u2, u3)
+			end)
+		elseif rankUpMethodId == "ctrlDoTable" and Knit then
+			ok, res = tryCall("ctrlDoTable", function()
+				return Knit.GetController("PetInvController"):DoRankUp({ u1, u2, u3 })
+			end)
+		end
+		if ok then
+			return true, res
+		end
+		rankUpMethodId = nil
+	end
+
+	local attempts = {}
+	if rf then
+		table.insert(attempts, { "rf3", function()
+			return rf:InvokeServer(u1, u2, u3)
+		end })
+		table.insert(attempts, { "rfTable", function()
+			return rf:InvokeServer({ u1, u2, u3 })
+		end })
+	end
+	if Knit and type(Knit.GetService) == "function" then
+		table.insert(attempts, { "knit3", function()
+			return Knit.GetService("PetInvService"):RankUp(u1, u2, u3)
+		end })
+		table.insert(attempts, { "knitTable", function()
+			return Knit.GetService("PetInvService"):RankUp({ u1, u2, u3 })
+		end })
+	end
+	if Knit and type(Knit.GetController) == "function" then
+		table.insert(attempts, { "ctrlDo", function()
+			return Knit.GetController("PetInvController"):DoRankUp(u1, u2, u3)
+		end })
+		table.insert(attempts, { "ctrlDoTable", function()
+			return Knit.GetController("PetInvController"):DoRankUp({ u1, u2, u3 })
+		end })
+	end
+
+	local lastErr = "RankUp remote not found"
+	for _, entry in ipairs(attempts) do
+		local ok, res = tryCall(entry[1], entry[2])
+		if ok then
+			return true, res
+		end
+		lastErr = tostring(res)
+	end
+	return false, lastErr
+end
+
+local function pickFuseTriple(pets, rank)
+	local bySpecies = {}
+	local function consider(pet)
+		if not isFuseEligiblePet(pet) or getPetRank(pet) ~= rank then
+			return
+		end
+		local species = tostring(pet.id or pet.Id or "?")
+		if not bySpecies[species] then
+			bySpecies[species] = {}
+		end
+		table.insert(bySpecies[species], tostring(pet.uid))
+	end
+	if #pets > 0 then
+		for _, pet in ipairs(pets) do
+			consider(pet)
+		end
+	else
+		for _, pet in pairs(pets) do
+			if type(pet) == "table" then
+				consider(pet)
+			end
+		end
+	end
+	local speciesList = {}
+	for species in pairs(bySpecies) do
+		table.insert(speciesList, species)
+	end
+	table.sort(speciesList)
+	for _, species in ipairs(speciesList) do
+		local uids = bySpecies[species]
+		if #uids >= 3 then
+			return species, rank, { uids[1], uids[2], uids[3] }
+		end
+	end
+	return nil
+end
+
+local AUTO_FUSE_DELAY_SEC = 1
+local autoFuseRunning = false
+local autoFuseStatusCallback = nil
+
+setAutoFuseStatusHandler = function(callback)
+	autoFuseStatusCallback = callback
+end
+
+local function setAutoFuseStatus(msg)
+	appendFuseDiscoveryLog("[AutoFuse] " .. msg)
+	if autoFuseStatusCallback then
+		autoFuseStatusCallback(msg)
+	end
+end
+
+startAutoFuse = function()
+	if autoFuseRunning then
+		return
+	end
+	autoFuseRunning = true
+	task.spawn(function()
+		local totalFused = 0
+		setAutoFuseStatus("Started – plain pets only, E→D→C→B→A")
+		while autoFuseRunning do
+			local pets = fetchKnitPets()
+			if not pets then
+				setAutoFuseStatus("No pet list – open inventory in-game first")
+				break
+			end
+			local fusedThisPass = false
+			for _, rank in ipairs(FUSE_TARGET_RANKS) do
+				if not autoFuseRunning then
+					break
+				end
+				local species, _, uids = pickFuseTriple(pets, rank)
+				if uids then
+					local ok, res = invokeRankUp(uids)
+					if ok then
+						totalFused = totalFused + 1
+						fusedThisPass = true
+						local nextRank = ASCEND_TO_RANK[rankIndexFromRank(rank) + 1] or "?"
+						setAutoFuseStatus(("Fused 3× %s %s → %s (%d total)"):format(
+							species, rank, nextRank, totalFused
+						))
+						task.wait(AUTO_FUSE_DELAY_SEC)
+						break
+					else
+						setAutoFuseStatus("RankUp failed: " .. tostring(res))
+						task.wait(2)
+						break
+					end
+				end
+			end
+			if not fusedThisPass then
+				if totalFused == 0 then
+					setAutoFuseStatus("Nothing to fuse (need 3× plain same id+rank)")
+				else
+					setAutoFuseStatus(("Done – %d fusion(s) completed"):format(totalFused))
+				end
+				break
+			end
+		end
+		autoFuseRunning = false
+	end)
+end
+
+stopAutoFuse = function()
+	autoFuseRunning = false
+	setAutoFuseStatus("Stopped")
+end
+
+dumpKnitPetInventoryText = function()
+	local lines = {
+		"=== Knit pet inventory ===",
+		"rank=E/D/C… | uid=fuse id | id=species | mutation MU0=none | traits{}=none",
+		"RankUp remote: PetInvService.RF.RankUp",
+		"",
+	}
+	local pets, source = fetchKnitPets()
 
 	if not pets then
 		table.insert(lines, "Knit pet list not found on client.")
@@ -2325,7 +2570,7 @@ end
 local onWorldButtonClick
 local TAB_PANELS
 local CONTENT_TOP = 60
-local CONTENT_HEIGHT = 392
+local CONTENT_HEIGHT = 420
 
 local uiBuildOk, uiBuildErr = pcall(function()
 UI = {}
@@ -2340,8 +2585,8 @@ screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 480, 0, 528)
-main.Position = UDim2.new(0, 16, 0.5, -264)
+main.Size = UDim2.new(0, 480, 0, 556)
+main.Position = UDim2.new(0, 16, 0.5, -278)
 main.AnchorPoint = Vector2.new(0, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 main.BorderSizePixel = 0
@@ -3531,7 +3776,7 @@ farmStayApplyCorner.CornerRadius = UDim.new(0, 4)
 farmStayApplyCorner.Parent = farmStayApplyBtn
 
 local fuseDiscoveryCard = Instance.new("Frame")
-fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 96)
+fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 118)
 fuseDiscoveryCard.Position = UDim2.new(0, 0, 0, 230)
 fuseDiscoveryCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
 fuseDiscoveryCard.BorderSizePixel = 0
@@ -3545,7 +3790,7 @@ local fuseDiscoveryTitle = Instance.new("TextLabel")
 fuseDiscoveryTitle.Size = UDim2.new(1, -12, 0, 14)
 fuseDiscoveryTitle.Position = UDim2.new(0, 6, 0, 6)
 fuseDiscoveryTitle.BackgroundTransparency = 1
-fuseDiscoveryTitle.Text = "Fuse discovery (Phase 1 – find inventory API)"
+fuseDiscoveryTitle.Text = "Pet fuse – plain E→A (MU0, no traits)"
 fuseDiscoveryTitle.TextColor3 = Color3.fromRGB(255, 220, 170)
 fuseDiscoveryTitle.TextSize = 10
 fuseDiscoveryTitle.Font = Enum.Font.GothamBold
@@ -3612,11 +3857,41 @@ local fuseOpenToolsCorner = Instance.new("UICorner")
 fuseOpenToolsCorner.CornerRadius = UDim.new(0, 4)
 fuseOpenToolsCorner.Parent = fuseOpenToolsBtn
 
+local fuseAutoFuseStartBtn = Instance.new("TextButton")
+fuseAutoFuseStartBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseAutoFuseStartBtn.Position = UDim2.new(0, 6, 0, 82)
+fuseAutoFuseStartBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 55)
+fuseAutoFuseStartBtn.BorderSizePixel = 0
+fuseAutoFuseStartBtn.Text = "Start auto-fuse"
+fuseAutoFuseStartBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+fuseAutoFuseStartBtn.TextSize = 10
+fuseAutoFuseStartBtn.Font = Enum.Font.GothamBold
+fuseAutoFuseStartBtn.Parent = fuseDiscoveryCard
+
+local fuseAutoFuseStartCorner = Instance.new("UICorner")
+fuseAutoFuseStartCorner.CornerRadius = UDim.new(0, 4)
+fuseAutoFuseStartCorner.Parent = fuseAutoFuseStartBtn
+
+local fuseAutoFuseStopBtn = Instance.new("TextButton")
+fuseAutoFuseStopBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseAutoFuseStopBtn.Position = UDim2.new(0.5, 3, 0, 82)
+fuseAutoFuseStopBtn.BackgroundColor3 = Color3.fromRGB(90, 45, 45)
+fuseAutoFuseStopBtn.BorderSizePixel = 0
+fuseAutoFuseStopBtn.Text = "Stop auto-fuse"
+fuseAutoFuseStopBtn.TextColor3 = Color3.fromRGB(255, 210, 210)
+fuseAutoFuseStopBtn.TextSize = 10
+fuseAutoFuseStopBtn.Font = Enum.Font.GothamBold
+fuseAutoFuseStopBtn.Parent = fuseDiscoveryCard
+
+local fuseAutoFuseStopCorner = Instance.new("UICorner")
+fuseAutoFuseStopCorner.CornerRadius = UDim.new(0, 4)
+fuseAutoFuseStopCorner.Parent = fuseAutoFuseStopBtn
+
 local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
 fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 12)
-fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 82)
+fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 104)
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "Results go to Fuse tools window. Use Copy log."
+fuseDiscoveryStatusLabel.Text = "Uses PetInvService.RF.RankUp – dump pets first to verify groups"
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
@@ -3626,7 +3901,7 @@ fuseDiscoveryStatusLabel.Parent = fuseDiscoveryCard
 
 local configStatusLabel = Instance.new("TextLabel")
 configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
-configStatusLabel.Position = UDim2.new(0, 4, 0, 332)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 354)
 configStatusLabel.BackgroundTransparency = 1
 configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
 configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
@@ -3737,6 +4012,8 @@ UI.fuseScanRemotesBtn = fuseScanRemotesBtn
 UI.fuseDumpInventoryBtn = fuseDumpInventoryBtn
 UI.fuseCopyLogBtn = fuseCopyLogBtn
 UI.fuseOpenToolsBtn = fuseOpenToolsBtn
+UI.fuseAutoFuseStartBtn = fuseAutoFuseStartBtn
+UI.fuseAutoFuseStopBtn = fuseAutoFuseStopBtn
 UI.fuseDiscoveryStatusLabel = fuseDiscoveryStatusLabel
 UI.farmStartBtn = farmStartBtn
 UI.farmStopBtn = farmStopBtn
@@ -4867,7 +5144,15 @@ local function connectAllUIHandlers()
 	end)
 
 	UI.fuseOpenToolsBtn.MouseButton1Click:Connect(function()
-		openFuseDiscoveryWindow("Fuse discovery log – use buttons below or Copy all.")
+		openFuseDiscoveryWindow("Fuse log – use Copy all or Copy log on Config.")
+	end)
+
+	UI.fuseAutoFuseStartBtn.MouseButton1Click:Connect(function()
+		startAutoFuse()
+	end)
+
+	UI.fuseAutoFuseStopBtn.MouseButton1Click:Connect(function()
+		stopAutoFuse()
 	end)
 
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
@@ -4892,6 +5177,7 @@ local function connectAllUIHandlers()
 	UI.closeBtn.MouseButton1Click:Connect(function()
 		stopAutoRefresh()
 		stopAllFarm()
+		stopAutoFuse()
 		UI.screen:Destroy()
 	end)
 
@@ -4928,6 +5214,11 @@ if not connectOk then
 end
 
 task.defer(function()
+	setAutoFuseStatusHandler(function(msg)
+		if UI.fuseDiscoveryStatusLabel then
+			UI.fuseDiscoveryStatusLabel.Text = msg
+		end
+	end)
 	local initOk, initErr = pcall(function()
 		setActiveTab("pets")
 		rebuildWorldFilterChips()
