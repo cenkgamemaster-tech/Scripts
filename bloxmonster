@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.7.37"
+local VERSION = "1.7.38"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1364,6 +1364,655 @@ local function teleportToPet(model)
 	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
 end
 
+-- Fuse / inventory discovery (Phase 1 – reverse-engineer auto-fuse API).
+local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot" }
+local FUSE_REMOTE_CANDIDATES = {
+	"ReplicatedStorage.Remotes.Fuse",
+	"ReplicatedStorage.Remotes.FusePet",
+	"ReplicatedStorage.Remotes.PetFuse",
+}
+local INVENTORY_UI_KEYWORDS = { "inventory", "pet", "collection", "fuse", "storage", "backpack" }
+local INVENTORY_ROW_LABELS = {
+	"NpcName", "PetName", "Name", "MonsterName",
+	"Rarity", "Rank", "Tier", "Mutation", "Trait", "Shiny", "Level",
+}
+local INVENTORY_ID_LABELS = { "Id", "UUID", "PetId", "UniqueId", "Guid" }
+
+local fuseRemoteHookConnections = {}
+local fuseRemoteHookEnabled = false
+local fuseNamecallHookRestore = nil
+
+local function resolveRemotePath(pathString)
+	local node = game
+	for part in string.gmatch(pathString, "[^.]+") do
+		node = node and node:FindFirstChild(part)
+		if not node then
+			return nil
+		end
+	end
+	if node and (node:IsA("RemoteEvent") or node:IsA("RemoteFunction")) then
+		return node
+	end
+	return nil
+end
+
+local function remoteNameMatchesFuse(name)
+	local lower = string.lower(name or "")
+	for _, kw in ipairs(FUSE_REMOTE_KEYWORDS) do
+		if lower:find(kw, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function valueToLogString(value, depth)
+	depth = depth or 0
+	if depth > 3 then
+		return "(nested)"
+	end
+	local t = typeof(value)
+	if t == "table" then
+		local parts = {}
+		for i, v in ipairs(value) do
+			table.insert(parts, valueToLogString(v, depth + 1))
+		end
+		if #parts == 0 then
+			for k, v in pairs(value) do
+				table.insert(parts, tostring(k) .. "=" .. valueToLogString(v, depth + 1))
+			end
+		end
+		return "{" .. table.concat(parts, ", ") .. "}"
+	end
+	return tostring(value)
+end
+
+local function logFuseHook(direction, remote, ...)
+	local args = { ... }
+	local parts = {}
+	for i, v in ipairs(args) do
+		parts[i] = valueToLogString(v)
+	end
+	local line = ("[FuseHook] %s %s | %s"):format(direction, remote:GetFullName(), table.concat(parts, ", "))
+	print(line)
+end
+
+local function collectFuseRelatedRemotes()
+	local seen = {}
+	local list = {}
+	local function add(remote)
+		local key = remote:GetFullName()
+		if seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(list, remote)
+	end
+	for _, path in ipairs(FUSE_REMOTE_CANDIDATES) do
+		local remote = resolveRemotePath(path)
+		if remote then
+			add(remote)
+		end
+	end
+	for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
+		if (inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction")) and remoteNameMatchesFuse(inst.Name) then
+			add(inst)
+		end
+	end
+	table.sort(list, function(a, b)
+		return a:GetFullName() < b:GetFullName()
+	end)
+	return list
+end
+
+local function scanFuseRelatedRemotesText()
+	local remotes = collectFuseRelatedRemotes()
+	local lines = {
+		"=== Fuse / inventory remotes ===",
+		("Found %d remote(s). Fuse manually once with Hook ON to log FireServer args."):format(#remotes),
+		"",
+	}
+	if #remotes == 0 then
+		table.insert(lines, "(none found – try opening Fuse menu in-game, then scan again)")
+	else
+		for _, remote in ipairs(remotes) do
+			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
+		end
+	end
+	local text = table.concat(lines, "\n")
+	print("[BloxMonster] " .. text:gsub("\n", " | "))
+	return text, #remotes
+end
+
+local function listGameObjects(nameFilter)
+	local filter = (type(nameFilter) == "string" and nameFilter ~= "") and nameFilter:lower() or nil
+	local function matches(inst)
+		if not filter then
+			return true
+		end
+		local name = (inst.Name or ""):lower()
+		local full = (inst:GetFullName() or ""):lower()
+		return name:find(filter, 1, true) or full:find(filter, 1, true)
+	end
+	local list = {}
+	local function scan(parent)
+		for _, child in ipairs(parent:GetChildren()) do
+			if matches(child) then
+				table.insert(list, child:GetFullName())
+			end
+			scan(child)
+		end
+	end
+	for _, service in ipairs({ Workspace, PlayerGui, ReplicatedStorage }) do
+		pcall(function()
+			if matches(service) then
+				table.insert(list, service:GetFullName())
+			end
+			scan(service)
+		end)
+	end
+	table.sort(list)
+	return list
+end
+
+local function readGuiLabels(parent, labelNames)
+	local labels = {}
+	for _, name in ipairs(labelNames) do
+		local el = parent:FindFirstChild(name, true)
+		if el and el:IsA("GuiObject") and el.Text and el.Text ~= "" then
+			labels[name] = el.Text
+		end
+	end
+	return labels
+end
+
+local function formatPetRow(labels, idLabels)
+	local order = { "NpcName", "PetName", "Name", "MonsterName", "Rarity", "Rank", "Tier", "Mutation", "Trait", "Shiny", "Level" }
+	local parts = {}
+	for _, key in ipairs(order) do
+		if labels[key] and labels[key] ~= "" then
+			table.insert(parts, key .. "=" .. labels[key])
+		end
+	end
+	for _, key in ipairs(idLabels or INVENTORY_ID_LABELS) do
+		if labels[key] and labels[key] ~= "" then
+			table.insert(parts, key .. "=" .. labels[key])
+		end
+	end
+	return table.concat(parts, " | ")
+end
+
+local function readFuseFrameContent()
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then
+		return "PlayerGui not found."
+	end
+	local mainUI = gui:FindFirstChild("MainUI") or gui:FindFirstChild("Main")
+	if not mainUI then
+		return "MainUI not found. Open the game menu first."
+	end
+	local menus = mainUI:FindFirstChild("Menus") or mainUI
+	local fuseFrame = menus:FindFirstChild("FuseFrame") or mainUI:FindFirstChild("FuseFrame", true)
+	if not fuseFrame then
+		return "FuseFrame not found. Open the Fuse menu in-game first."
+	end
+	local frame = fuseFrame:FindFirstChild("Frame") or fuseFrame
+	local out = { "=== Fuse UI (" .. fuseFrame:GetFullName() .. ") ===", "" }
+
+	local possibleFrame = frame:FindFirstChild("PossibleFrame")
+	if possibleFrame then
+		table.insert(out, "=== Possible (outcomes) ===")
+		local count = 0
+		for _, child in ipairs(possibleFrame:GetChildren()) do
+			if child:FindFirstChild("NpcName", true) or child:FindFirstChild("PetName", true) then
+				count = count + 1
+				local labels = readGuiLabels(child, { "NpcName", "PetName", "Mutation", "Rarity", "Rank", "Trait", "Chance" })
+				table.insert(out, ("  %d. %s"):format(count, formatPetRow(labels)))
+			end
+		end
+		if count == 0 then
+			table.insert(out, "  (no rows found)")
+		end
+		table.insert(out, "")
+	end
+
+	local bringFrame = frame:FindFirstChild("BringFrame") or frame:FindFirstChild("SelectedFrame")
+	if bringFrame then
+		table.insert(out, "=== Selected for fuse ===")
+		local count = 0
+		for _, child in ipairs(bringFrame:GetChildren()) do
+			if child:FindFirstChild("NpcName", true) or child:FindFirstChild("PetName", true) then
+				count = count + 1
+				local labels = readGuiLabels(child, { "NpcName", "PetName", "Mutation", "Rarity", "Rank", "Trait" })
+				table.insert(out, ("  %d. %s"):format(count, formatPetRow(labels)))
+			end
+		end
+		if count == 0 then
+			table.insert(out, "  (no rows found)")
+		end
+	end
+	return table.concat(out, "\n")
+end
+
+local function tableToString(t, depth, maxDepth)
+	depth = depth or 0
+	maxDepth = maxDepth or 4
+	if depth > maxDepth then
+		return "(max depth)"
+	end
+	if type(t) ~= "table" then
+		return tostring(t)
+	end
+	local lines = {}
+	for k, v in pairs(t) do
+		local keyStr = type(k) == "string" and k or ("[" .. tostring(k) .. "]")
+		if type(v) == "table" then
+			table.insert(lines, ("%s%s = { %s }"):format(string.rep("  ", depth), keyStr, tableToString(v, depth + 1, maxDepth)))
+		else
+			table.insert(lines, ("%s%s = %s"):format(string.rep("  ", depth), keyStr, tostring(v)))
+		end
+	end
+	return table.concat(lines, "\n")
+end
+
+local function findFuseDataOnClient()
+	local out = { "=== Client fuse data search ===", "" }
+	table.insert(out, "=== ReplicatedStorage ModuleScripts (name contains fuse) ===")
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc:IsA("ModuleScript") and desc.Name:lower():find("fuse", 1, true) then
+			local ok, result = pcall(function()
+				return require(desc)
+			end)
+			if ok and type(result) == "table" then
+				local keyCount = 0
+				for _ in pairs(result) do
+					keyCount = keyCount + 1
+				end
+				table.insert(out, ("[%s] table (%d keys):"):format(desc:GetFullName(), keyCount))
+				local preview = tableToString(result, 0, 3)
+				if #preview > 4000 then
+					preview = preview:sub(1, 4000) .. "\n... (truncated)"
+				end
+				table.insert(out, preview)
+			elseif ok then
+				table.insert(out, ("[%s] => %s"):format(desc:GetFullName(), tostring(result)))
+			else
+				table.insert(out, ("[%s] require error: %s"):format(desc:GetFullName(), tostring(result)))
+			end
+		end
+	end
+	table.insert(out, "")
+	table.insert(out, readFuseFrameContent())
+	table.insert(out, "")
+	table.insert(out, "--- End fuse data search ---")
+	return table.concat(out, "\n")
+end
+
+local function isInventoryLikeGui(inst)
+	if not inst:IsA("GuiObject") then
+		return false
+	end
+	local lower = inst.Name:lower()
+	for _, kw in ipairs(INVENTORY_UI_KEYWORDS) do
+		if lower:find(kw, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function looksLikePetRow(frame)
+	if not frame:IsA("GuiObject") then
+		return false
+	end
+	return frame:FindFirstChild("NpcName", true)
+		or frame:FindFirstChild("PetName", true)
+		or frame:FindFirstChild("MonsterName", true)
+end
+
+local function collectRowAttributes(frame)
+	local attrs = {}
+	for _, name in ipairs(frame:GetAttributeNames()) do
+		attrs[name] = frame:GetAttribute(name)
+	end
+	return attrs
+end
+
+local function dumpPlayerInventoryText()
+	local out = {
+		"=== Inventory dump (UI scan) ===",
+		"Open your pet inventory in-game first for best results.",
+		"",
+	}
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then
+		return "PlayerGui not found."
+	end
+
+	local uiPaths = {}
+	for _, desc in ipairs(gui:GetDescendants()) do
+		if isInventoryLikeGui(desc) then
+			table.insert(uiPaths, desc:GetFullName())
+		end
+	end
+	table.sort(uiPaths)
+	table.insert(out, ("=== PlayerGui paths matching inventory keywords (%d) ==="):format(#uiPaths))
+	if #uiPaths == 0 then
+		table.insert(out, "  (none – open pet inventory, then dump again)")
+	else
+		for i, path in ipairs(uiPaths) do
+			if i <= 40 then
+				table.insert(out, "  " .. path)
+			end
+		end
+		if #uiPaths > 40 then
+			table.insert(out, ("  ... +%d more"):format(#uiPaths - 40))
+		end
+	end
+	table.insert(out, "")
+
+	local rows = {}
+	local seenRows = {}
+	for _, desc in ipairs(gui:GetDescendants()) do
+		if looksLikePetRow(desc) then
+			local key = desc:GetFullName()
+			if not seenRows[key] then
+				seenRows[key] = true
+				local labels = readGuiLabels(desc, INVENTORY_ROW_LABELS)
+				for _, idName in ipairs(INVENTORY_ID_LABELS) do
+					local idEl = desc:FindFirstChild(idName, true)
+					if idEl and idEl:IsA("GuiObject") and idEl.Text and idEl.Text ~= "" then
+						labels[idName] = idEl.Text
+					end
+				end
+				local attrs = collectRowAttributes(desc)
+				for k, v in pairs(attrs) do
+					if v ~= nil and tostring(v) ~= "" then
+						labels["@" .. k] = tostring(v)
+					end
+				end
+				if next(labels) then
+					table.insert(rows, {
+						path = key,
+						text = formatPetRow(labels),
+					})
+				end
+			end
+		end
+	end
+	table.sort(rows, function(a, b)
+		return a.text < b.text
+	end)
+	table.insert(out, ("=== Pet rows from UI (%d) ==="):format(#rows))
+	if #rows == 0 then
+		table.insert(out, "  (no NpcName/PetName rows found)")
+	else
+		for i, row in ipairs(rows) do
+			if i <= 120 then
+				table.insert(out, ("  %d. %s"):format(i, row.text))
+				table.insert(out, ("      %s"):format(row.path))
+			end
+		end
+		if #rows > 120 then
+			table.insert(out, ("  ... +%d more rows"):format(#rows - 120))
+		end
+	end
+
+	table.insert(out, "")
+	table.insert(out, "=== ReplicatedStorage modules (pet/inventory) ===")
+	local modCount = 0
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc:IsA("ModuleScript") then
+			local n = desc.Name:lower()
+			if n:find("pet", 1, true) or n:find("inventory", 1, true) then
+				modCount = modCount + 1
+				if modCount <= 25 then
+					table.insert(out, "  " .. desc:GetFullName())
+				end
+			end
+		end
+	end
+	if modCount == 0 then
+		table.insert(out, "  (none found)")
+	elseif modCount > 25 then
+		table.insert(out, ("  ... +%d more modules"):format(modCount - 25))
+	end
+
+	local text = table.concat(out, "\n")
+	print("[BloxMonster] Inventory dump: " .. #rows .. " UI row(s), " .. #uiPaths .. " path(s)")
+	return text, #rows
+end
+
+local function disableFuseRemoteHook()
+	for _, conn in ipairs(fuseRemoteHookConnections) do
+		pcall(function()
+			conn:Disconnect()
+		end)
+	end
+	table.clear(fuseRemoteHookConnections)
+	if fuseNamecallHookRestore then
+		pcall(fuseNamecallHookRestore)
+		fuseNamecallHookRestore = nil
+	end
+	fuseRemoteHookEnabled = false
+end
+
+local function enableFuseRemoteHook()
+	disableFuseRemoteHook()
+	local remotes = collectFuseRelatedRemotes()
+	for _, remote in ipairs(remotes) do
+		if remote:IsA("RemoteEvent") then
+			local conn = remote.OnClientEvent:Connect(function(...)
+				logFuseHook("OnClientEvent", remote, ...)
+			end)
+			table.insert(fuseRemoteHookConnections, conn)
+		end
+	end
+	if typeof(hookmetamethod) == "function" and typeof(getnamecallmethod) == "function" then
+		local ok, restore = pcall(function()
+			local old
+			old = hookmetamethod(game, "__namecall", function(self, ...)
+				local method = getnamecallmethod()
+				if self and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
+					if method == "FireServer" or method == "InvokeServer" then
+						if remoteNameMatchesFuse(self.Name) then
+							logFuseHook(method, self, ...)
+						end
+					end
+				end
+				return old(self, ...)
+			end)
+			return function()
+				hookmetamethod(game, "__namecall", old)
+			end
+		end)
+		if ok and restore then
+			fuseNamecallHookRestore = restore
+		end
+	end
+	fuseRemoteHookEnabled = true
+	return #remotes
+end
+
+local function toggleFuseRemoteHook()
+	if fuseRemoteHookEnabled then
+		disableFuseRemoteHook()
+		return false
+	end
+	enableFuseRemoteHook()
+	return true
+end
+
+local function updateFuseHookButton(btn)
+	if not btn then
+		return
+	end
+	if fuseRemoteHookEnabled then
+		btn.Text = "Fuse hook: ON (F9 logs)"
+		btn.BackgroundColor3 = Color3.fromRGB(90, 70, 40)
+		btn.TextColor3 = Color3.fromRGB(255, 230, 180)
+	else
+		btn.Text = "Fuse hook: OFF"
+		btn.BackgroundColor3 = Color3.fromRGB(55, 45, 35)
+		btn.TextColor3 = Color3.fromRGB(220, 200, 170)
+	end
+end
+
+local function openFuseDiscoveryWindow(initialText)
+	local existing = PlayerGui:FindFirstChild("BloxMonster_FuseDiscovery")
+	if existing then
+		existing:Destroy()
+	end
+
+	local fuseScreen = Instance.new("ScreenGui")
+	fuseScreen.Name = "BloxMonster_FuseDiscovery"
+	fuseScreen.ResetOnSpawn = false
+	fuseScreen.DisplayOrder = 55
+	fuseScreen.Parent = PlayerGui
+
+	local fuseMain = Instance.new("Frame")
+	fuseMain.Name = "Main"
+	fuseMain.Size = UDim2.new(0, 400, 0, 420)
+	fuseMain.Position = UDim2.new(0.5, -200, 0.5, -210)
+	fuseMain.AnchorPoint = Vector2.new(0.5, 0.5)
+	fuseMain.BackgroundColor3 = Color3.fromRGB(20, 30, 50)
+	fuseMain.BorderSizePixel = 0
+	fuseMain.Active = true
+	fuseMain.Parent = fuseScreen
+
+	local fuseCorner = Instance.new("UICorner")
+	fuseCorner.CornerRadius = UDim.new(0, 10)
+	fuseCorner.Parent = fuseMain
+
+	local fuseTop = Instance.new("Frame")
+	fuseTop.Size = UDim2.new(1, 0, 0, 28)
+	fuseTop.BackgroundColor3 = Color3.fromRGB(45, 70, 55)
+	fuseTop.BorderSizePixel = 0
+	fuseTop.Active = true
+	fuseTop.Parent = fuseMain
+
+	local fuseTopCorner = Instance.new("UICorner")
+	fuseTopCorner.CornerRadius = UDim.new(0, 10)
+	fuseTopCorner.Parent = fuseTop
+
+	local fuseTitle = Instance.new("TextLabel")
+	fuseTitle.Size = UDim2.new(1, -44, 1, 0)
+	fuseTitle.Position = UDim2.new(0, 8, 0, 0)
+	fuseTitle.BackgroundTransparency = 1
+	fuseTitle.Active = true
+	fuseTitle.Text = "Fuse discovery"
+	fuseTitle.TextColor3 = Color3.fromRGB(200, 255, 200)
+	fuseTitle.TextSize = 13
+	fuseTitle.Font = Enum.Font.GothamBold
+	fuseTitle.TextXAlignment = Enum.TextXAlignment.Left
+	fuseTitle.Parent = fuseTop
+
+	local fuseCloseBtn = Instance.new("TextButton")
+	fuseCloseBtn.Size = UDim2.new(0, 28, 0, 28)
+	fuseCloseBtn.Position = UDim2.new(1, -28, 0, 0)
+	fuseCloseBtn.BackgroundTransparency = 1
+	fuseCloseBtn.Text = "×"
+	fuseCloseBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
+	fuseCloseBtn.TextSize = 20
+	fuseCloseBtn.Font = Enum.Font.GothamBold
+	fuseCloseBtn.Parent = fuseTop
+
+	makeDraggable(fuseMain, { fuseTop, fuseTitle })
+
+	local fuseScroll = Instance.new("ScrollingFrame")
+	fuseScroll.Size = UDim2.new(1, -16, 1, -96)
+	fuseScroll.Position = UDim2.new(0, 8, 0, 36)
+	fuseScroll.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+	fuseScroll.BorderSizePixel = 0
+	fuseScroll.ScrollBarThickness = 8
+	fuseScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+	fuseScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	fuseScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	fuseScroll.Parent = fuseMain
+
+	local fuseScrollCorner = Instance.new("UICorner")
+	fuseScrollCorner.CornerRadius = UDim.new(0, 6)
+	fuseScrollCorner.Parent = fuseScroll
+
+	local fuseContent = Instance.new("TextBox")
+	fuseContent.Size = UDim2.new(1, -8, 0, 0)
+	fuseContent.Position = UDim2.new(0, 4, 0, 4)
+	fuseContent.BackgroundTransparency = 1
+	fuseContent.Text = initialText or ""
+	fuseContent.TextColor3 = Color3.fromRGB(200, 220, 255)
+	fuseContent.TextSize = 11
+	fuseContent.Font = Enum.Font.Code
+	fuseContent.TextXAlignment = Enum.TextXAlignment.Left
+	fuseContent.TextYAlignment = Enum.TextYAlignment.Top
+	fuseContent.TextWrapped = true
+	fuseContent.ClearTextOnFocus = false
+	fuseContent.MultiLine = true
+	fuseContent.TextEditable = false
+	fuseContent.AutomaticSize = Enum.AutomaticSize.Y
+	fuseContent.Parent = fuseScroll
+
+	local function updateFuseCanvasSize()
+		local contentY = fuseContent.AbsoluteSize.Y
+		local scrollY = fuseScroll.AbsoluteWindowSize.Y
+		fuseScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+	end
+	fuseContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateFuseCanvasSize)
+
+	local function setContent(text)
+		fuseContent.Text = text or ""
+		task.defer(updateFuseCanvasSize)
+	end
+
+	local function makeToolBtn(text, xScale, width, color)
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(width, -6, 0, 24)
+		btn.Position = UDim2.new(xScale, 4, 1, -52)
+		btn.BackgroundColor3 = color
+		btn.BorderSizePixel = 0
+		btn.Text = text
+		btn.TextColor3 = Color3.fromRGB(220, 240, 255)
+		btn.TextSize = 10
+		btn.Font = Enum.Font.Gotham
+		btn.Parent = fuseMain
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = btn
+		return btn
+	end
+
+	makeToolBtn("Scan Fuse objs", 0, 0.5, Color3.fromRGB(50, 70, 100)).MouseButton1Click:Connect(function()
+		local list = listGameObjects("Fuse")
+		setContent(#list > 0 and table.concat(list, "\n") or '(no objects containing "Fuse" found)')
+	end)
+	makeToolBtn("Read Fuse UI", 0.5, 0.5, Color3.fromRGB(60, 50, 80)).MouseButton1Click:Connect(function()
+		setContent(readFuseFrameContent())
+	end)
+	makeToolBtn("Find fuse data", 0, 0.5, Color3.fromRGB(55, 80, 60)).MouseButton1Click:Connect(function()
+		setContent(findFuseDataOnClient())
+	end)
+	makeToolBtn("Dump inventory", 0.5, 0.5, Color3.fromRGB(70, 55, 45)).MouseButton1Click:Connect(function()
+		local text = dumpPlayerInventoryText()
+		setContent(text)
+	end)
+
+	local fuseTip = Instance.new("TextLabel")
+	fuseTip.Size = UDim2.new(1, -16, 0, 18)
+	fuseTip.Position = UDim2.new(0, 8, 1, -24)
+	fuseTip.BackgroundTransparency = 1
+	fuseTip.Text = "Select text here (Ctrl+A/C). Also check Output (F9)."
+	fuseTip.TextColor3 = Color3.fromRGB(130, 160, 140)
+	fuseTip.TextSize = 9
+	fuseTip.Font = Enum.Font.Gotham
+	fuseTip.TextXAlignment = Enum.TextXAlignment.Left
+	fuseTip.Parent = fuseMain
+
+	fuseCloseBtn.MouseButton1Click:Connect(function()
+		fuseScreen:Destroy()
+	end)
+
+	task.defer(updateFuseCanvasSize)
+end
+
 -- Remove existing UI
 local existing = PlayerGui:FindFirstChild("BloxMonster")
 if existing then
@@ -1373,11 +2022,16 @@ local errExisting = PlayerGui:FindFirstChild("BloxMonsterError")
 if errExisting then
 	errExisting:Destroy()
 end
+local fuseDiscoveryExisting = PlayerGui:FindFirstChild("BloxMonster_FuseDiscovery")
+if fuseDiscoveryExisting then
+	fuseDiscoveryExisting:Destroy()
+end
+disableFuseRemoteHook()
 
 local onWorldButtonClick
 local TAB_PANELS
 local CONTENT_TOP = 60
-local CONTENT_HEIGHT = 352
+local CONTENT_HEIGHT = 392
 
 local uiBuildOk, uiBuildErr = pcall(function()
 UI = {}
@@ -1392,8 +2046,8 @@ screen.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 480, 0, 488)
-main.Position = UDim2.new(0, 16, 0.5, -244)
+main.Size = UDim2.new(0, 480, 0, 528)
+main.Position = UDim2.new(0, 16, 0.5, -264)
 main.AnchorPoint = Vector2.new(0, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 main.BorderSizePixel = 0
@@ -2499,18 +3153,6 @@ local farmWaitApplyCorner = Instance.new("UICorner")
 farmWaitApplyCorner.CornerRadius = UDim.new(0, 4)
 farmWaitApplyCorner.Parent = farmWaitApplyBtn
 
-local configStatusLabel = Instance.new("TextLabel")
-configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
-configStatusLabel.Position = UDim2.new(0, 4, 0, 236)
-configStatusLabel.BackgroundTransparency = 1
-configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
-configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
-configStatusLabel.TextSize = 11
-configStatusLabel.Font = Enum.Font.Gotham
-configStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-configStatusLabel.TextWrapped = true
-configStatusLabel.Parent = configPanel
-
 local farmLocCard = Instance.new("Frame")
 farmLocCard.Size = UDim2.new(1, 0, 0, 100)
 farmLocCard.Position = UDim2.new(0, 0, 0, 126)
@@ -2593,6 +3235,112 @@ farmStayApplyBtn.Parent = farmLocCard
 local farmStayApplyCorner = Instance.new("UICorner")
 farmStayApplyCorner.CornerRadius = UDim.new(0, 4)
 farmStayApplyCorner.Parent = farmStayApplyBtn
+
+local fuseDiscoveryCard = Instance.new("Frame")
+fuseDiscoveryCard.Size = UDim2.new(1, 0, 0, 96)
+fuseDiscoveryCard.Position = UDim2.new(0, 0, 0, 230)
+fuseDiscoveryCard.BackgroundColor3 = Color3.fromRGB(22, 36, 52)
+fuseDiscoveryCard.BorderSizePixel = 0
+fuseDiscoveryCard.Parent = configPanel
+
+local fuseDiscoveryCardCorner = Instance.new("UICorner")
+fuseDiscoveryCardCorner.CornerRadius = UDim.new(0, 6)
+fuseDiscoveryCardCorner.Parent = fuseDiscoveryCard
+
+local fuseDiscoveryTitle = Instance.new("TextLabel")
+fuseDiscoveryTitle.Size = UDim2.new(1, -12, 0, 14)
+fuseDiscoveryTitle.Position = UDim2.new(0, 6, 0, 6)
+fuseDiscoveryTitle.BackgroundTransparency = 1
+fuseDiscoveryTitle.Text = "Fuse discovery (Phase 1 – find inventory API)"
+fuseDiscoveryTitle.TextColor3 = Color3.fromRGB(255, 220, 170)
+fuseDiscoveryTitle.TextSize = 10
+fuseDiscoveryTitle.Font = Enum.Font.GothamBold
+fuseDiscoveryTitle.TextXAlignment = Enum.TextXAlignment.Left
+fuseDiscoveryTitle.Parent = fuseDiscoveryCard
+
+local fuseScanRemotesBtn = Instance.new("TextButton")
+fuseScanRemotesBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseScanRemotesBtn.Position = UDim2.new(0, 6, 0, 24)
+fuseScanRemotesBtn.BackgroundColor3 = Color3.fromRGB(55, 75, 55)
+fuseScanRemotesBtn.BorderSizePixel = 0
+fuseScanRemotesBtn.Text = "Scan fuse remotes"
+fuseScanRemotesBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+fuseScanRemotesBtn.TextSize = 10
+fuseScanRemotesBtn.Font = Enum.Font.Gotham
+fuseScanRemotesBtn.Parent = fuseDiscoveryCard
+
+local fuseScanRemotesCorner = Instance.new("UICorner")
+fuseScanRemotesCorner.CornerRadius = UDim.new(0, 4)
+fuseScanRemotesCorner.Parent = fuseScanRemotesBtn
+
+local fuseDumpInventoryBtn = Instance.new("TextButton")
+fuseDumpInventoryBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseDumpInventoryBtn.Position = UDim2.new(0.5, 3, 0, 24)
+fuseDumpInventoryBtn.BackgroundColor3 = Color3.fromRGB(70, 55, 45)
+fuseDumpInventoryBtn.BorderSizePixel = 0
+fuseDumpInventoryBtn.Text = "Dump inventory"
+fuseDumpInventoryBtn.TextColor3 = Color3.fromRGB(255, 230, 200)
+fuseDumpInventoryBtn.TextSize = 10
+fuseDumpInventoryBtn.Font = Enum.Font.Gotham
+fuseDumpInventoryBtn.Parent = fuseDiscoveryCard
+
+local fuseDumpInventoryCorner = Instance.new("UICorner")
+fuseDumpInventoryCorner.CornerRadius = UDim.new(0, 4)
+fuseDumpInventoryCorner.Parent = fuseDumpInventoryBtn
+
+local fuseHookBtn = Instance.new("TextButton")
+fuseHookBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseHookBtn.Position = UDim2.new(0, 6, 0, 54)
+fuseHookBtn.BackgroundColor3 = Color3.fromRGB(55, 45, 35)
+fuseHookBtn.BorderSizePixel = 0
+fuseHookBtn.Text = "Fuse hook: OFF"
+fuseHookBtn.TextColor3 = Color3.fromRGB(220, 200, 170)
+fuseHookBtn.TextSize = 10
+fuseHookBtn.Font = Enum.Font.GothamBold
+fuseHookBtn.Parent = fuseDiscoveryCard
+
+local fuseHookCorner = Instance.new("UICorner")
+fuseHookCorner.CornerRadius = UDim.new(0, 4)
+fuseHookCorner.Parent = fuseHookBtn
+
+local fuseOpenToolsBtn = Instance.new("TextButton")
+fuseOpenToolsBtn.Size = UDim2.new(0.5, -9, 0, 24)
+fuseOpenToolsBtn.Position = UDim2.new(0.5, 3, 0, 54)
+fuseOpenToolsBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
+fuseOpenToolsBtn.BorderSizePixel = 0
+fuseOpenToolsBtn.Text = "Fuse tools window"
+fuseOpenToolsBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+fuseOpenToolsBtn.TextSize = 10
+fuseOpenToolsBtn.Font = Enum.Font.Gotham
+fuseOpenToolsBtn.Parent = fuseDiscoveryCard
+
+local fuseOpenToolsCorner = Instance.new("UICorner")
+fuseOpenToolsCorner.CornerRadius = UDim.new(0, 4)
+fuseOpenToolsCorner.Parent = fuseOpenToolsBtn
+
+local fuseDiscoveryStatusLabel = Instance.new("TextLabel")
+fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 12)
+fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 82)
+fuseDiscoveryStatusLabel.BackgroundTransparency = 1
+fuseDiscoveryStatusLabel.Text = "Open inventory, turn hook ON, fuse 3× E manually."
+fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
+fuseDiscoveryStatusLabel.TextSize = 9
+fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
+fuseDiscoveryStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+fuseDiscoveryStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+fuseDiscoveryStatusLabel.Parent = fuseDiscoveryCard
+
+local configStatusLabel = Instance.new("TextLabel")
+configStatusLabel.Size = UDim2.new(1, -8, 0, 36)
+configStatusLabel.Position = UDim2.new(0, 4, 0, 332)
+configStatusLabel.BackgroundTransparency = 1
+configStatusLabel.Text = ("Farm wait: %ds"):format(DEFAULT_FARM_WAIT_SEC)
+configStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
+configStatusLabel.TextSize = 11
+configStatusLabel.Font = Enum.Font.Gotham
+configStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+configStatusLabel.TextWrapped = true
+configStatusLabel.Parent = configPanel
 
 local bottom = Instance.new("Frame")
 bottom.Size = UDim2.new(1, -16, 0, 68)
@@ -2691,6 +3439,11 @@ UI.farmLocationEnableBtn = farmLocationEnableBtn
 UI.farmStayInput = farmStayInput
 UI.farmStayApplyBtn = farmStayApplyBtn
 UI.configStatusLabel = configStatusLabel
+UI.fuseScanRemotesBtn = fuseScanRemotesBtn
+UI.fuseDumpInventoryBtn = fuseDumpInventoryBtn
+UI.fuseHookBtn = fuseHookBtn
+UI.fuseOpenToolsBtn = fuseOpenToolsBtn
+UI.fuseDiscoveryStatusLabel = fuseDiscoveryStatusLabel
 UI.farmStartBtn = farmStartBtn
 UI.farmStopBtn = farmStopBtn
 UI.farmStatusLabel = farmStatusLabel
@@ -3797,6 +4550,33 @@ local function connectAllUIHandlers()
 		applyFarmStayFromInput()
 	end)
 
+	UI.fuseScanRemotesBtn.MouseButton1Click:Connect(function()
+		local text, count = scanFuseRelatedRemotesText()
+		UI.fuseDiscoveryStatusLabel.Text = ("Found %d fuse remote(s) – see Output (F9)"):format(count)
+		openFuseDiscoveryWindow(text)
+	end)
+
+	UI.fuseDumpInventoryBtn.MouseButton1Click:Connect(function()
+		local text, rowCount = dumpPlayerInventoryText()
+		UI.fuseDiscoveryStatusLabel.Text = ("Inventory dump: %d pet row(s)"):format(rowCount)
+		openFuseDiscoveryWindow(text)
+	end)
+
+	UI.fuseHookBtn.MouseButton1Click:Connect(function()
+		local enabled = toggleFuseRemoteHook()
+		updateFuseHookButton(UI.fuseHookBtn)
+		if enabled then
+			local count = #collectFuseRelatedRemotes()
+			UI.fuseDiscoveryStatusLabel.Text = ("Hook ON – watching %d remote(s). Fuse manually; check F9."):format(count)
+		else
+			UI.fuseDiscoveryStatusLabel.Text = "Fuse hook OFF"
+		end
+	end)
+
+	UI.fuseOpenToolsBtn.MouseButton1Click:Connect(function()
+		openFuseDiscoveryWindow("Use the buttons below to scan fuse objects, read Fuse UI, or dump inventory.")
+	end)
+
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
 		task.defer(addWorldFilterFromInput)
 	end)
@@ -3819,6 +4599,7 @@ local function connectAllUIHandlers()
 	UI.closeBtn.MouseButton1Click:Connect(function()
 		stopAutoRefresh()
 		stopAllFarm()
+		disableFuseRemoteHook()
 		UI.screen:Destroy()
 	end)
 
