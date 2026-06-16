@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.2"
+local VERSION = "1.9.3"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -71,7 +71,7 @@ local WORLD_ZONES = {
 local WORLD_SPAWN_LOCATIONS = {
 	misty_forest = { x = 296.908, y = 8.279, z = 751.616 },
 	lava_volcano = { x = 1831.778, y = 48.990, z = 2097.601 },
-	iceberg = { x = 2167.745, y = 138.188, z = 260.928 },
+	iceberg = { x = 2840.684, y = 85.969, z = 611.374 },
 	astral_grove = { x = 896.615, y = 45.178, z = -1551.753 },
 	bamboo_temple = { x = -1909.778, y = 4.971, z = 106.222 },
 }
