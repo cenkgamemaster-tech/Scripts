@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.3"
+local VERSION = "1.9.5"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -391,6 +391,7 @@ end
 local nameFilters = {}
 local autoFarmRunning = false
 local autoFuseDuringFarm = true
+local autoFuseAllowMutation = false
 local lastAllPets = {}
 local lastScanClock = 0
 local lastLightPetsCount = -1
@@ -2287,14 +2288,34 @@ local function getPetTraitKey(pet)
 	return table.concat(parts, "+")
 end
 
+local function getPetMutationKey(pet)
+	local mut = readPetField(pet, "mutation", "Mutation", "mut", "Mut")
+	if isNoMutation(mut) then
+		return "MU0"
+	end
+	return tostring(mut or "?")
+end
+
+local function petMutationAllowed(pet)
+	if autoFuseAllowMutation then
+		return true
+	end
+	return isNoMutation(readPetField(pet, "mutation", "Mutation", "mut", "Mut"))
+end
+
+local function getFuseGroupKey(pet)
+	local species = tostring(readPetField(pet, "id", "Id") or "?")
+	local rank = getPetRank(pet)
+	-- When mutations are enabled, the game allows fusing mixed mutations together.
+	-- Keep grouping to species+rank only, so triples can mix MU0/MU11/etc.
+	return species .. " / rank " .. rank
+end
+
 local function isFuseableKnitPet(pet)
 	if not isKnitPetRecord(pet, nil) then
 		return false
 	end
-	if not isNoMutation(readPetField(pet, "mutation", "Mutation", "mut", "Mut")) then
-		return false
-	end
-	return true
+	return petMutationAllowed(pet)
 end
 
 local function isPlainKnitPet(pet)
@@ -2318,8 +2339,8 @@ local function getPetFuseBlockReason(pet)
 	local species = tostring(readPetField(pet, "id", "Id", "petId") or "?")
 	local uid = tostring(readPetField(pet, "uid", "UID") or "?")
 	local shortUid = #uid > 8 and uid:sub(1, 8) .. "…" or uid
-	if not isNoMutation(readPetField(pet, "mutation", "Mutation", "mut", "Mut")) then
-		return ("%s %s: has mutation %s"):format(
+	if not petMutationAllowed(pet) then
+		return ("%s %s: has mutation %s (mutations OFF)"):format(
 			species, shortUid, tostring(readPetField(pet, "mutation", "Mutation") or "?")
 		)
 	end
@@ -2359,8 +2380,7 @@ local function summarizeFuseGroups(pets)
 		if getPetFuseBlockReason(pet) then
 			return
 		end
-		local species = tostring(readPetField(pet, "id", "Id") or "?")
-		local key = species .. " / rank " .. rank
+		local key = getFuseGroupKey(pet)
 		if not groups[key] then
 			groups[key] = { count = 0, uids = {} }
 		end
@@ -2597,25 +2617,26 @@ local function invokeRankUp(uids, petRecords)
 end
 
 local function pickFuseTriple(pets, rank)
-	local bySpecies = {}
+	local byGroup = {}
 	for _, pet in pairs(pets or {}) do
 		if isKnitPetRecord(pet, nil) and isFuseEligiblePet(pet) and getPetRank(pet) == rank then
-			local species = tostring(readPetField(pet, "id", "Id") or "?")
-			if not bySpecies[species] then
-				bySpecies[species] = {}
+			local groupKey = getFuseGroupKey(pet)
+			if not byGroup[groupKey] then
+				byGroup[groupKey] = {}
 			end
 			local uid = readPetField(pet, "uid", "UID")
-			table.insert(bySpecies[species], { uid = tostring(uid), pet = pet })
+			table.insert(byGroup[groupKey], { uid = tostring(uid), pet = pet })
 		end
 	end
-	local speciesList = {}
-	for species in pairs(bySpecies) do
-		table.insert(speciesList, species)
+	local groupKeys = {}
+	for key in pairs(byGroup) do
+		table.insert(groupKeys, key)
 	end
-	table.sort(speciesList)
-	for _, species in ipairs(speciesList) do
-		local entries = bySpecies[species]
+	table.sort(groupKeys)
+	for _, groupKey in ipairs(groupKeys) do
+		local entries = byGroup[groupKey]
 		if #entries >= 3 then
+			local species = tostring(readPetField(entries[1].pet, "id", "Id") or "?")
 			return species, rank,
 				{ entries[1].uid, entries[2].uid, entries[3].uid },
 				{ entries[1].pet, entries[2].pet, entries[3].pet }
@@ -2652,7 +2673,8 @@ startAutoFuse = function()
 		local ok, err = pcall(function()
 			ensurePetListeners()
 			local totalFused = 0
-			setAutoFuseStatus("Started – MU0 pets E→D→C→B→A (runs until Stop)")
+			local mutLabel = autoFuseAllowMutation and "MU0+mutated" or "MU0 only"
+			setAutoFuseStatus(("Started – %s E→D→C→B→A (runs until Stop)"):format(mutLabel))
 			while autoFuseRunning do
 				refreshKnitPetCacheFromDataController()
 				local pets, source = fetchKnitPets()
@@ -2675,7 +2697,10 @@ startAutoFuse = function()
 							end
 							local species, _, uids, petRecords = pickFuseTriple(pets, rank)
 							if uids then
-								setAutoFuseStatus(("RankUp %s %s ×3 (%s)…"):format(species, rank, source or "?"))
+								local mutKey = autoFuseAllowMutation and "MIX" or (petRecords[1] and getPetMutationKey(petRecords[1]) or "?")
+								setAutoFuseStatus(("RankUp %s %s %s ×3 (%s)…"):format(
+									species, rank, mutKey, source or "?"
+								))
 								local fuseOk, res = invokeRankUp(uids, petRecords)
 								if fuseOk then
 									totalFused = totalFused + 1
@@ -2793,15 +2818,17 @@ dumpKnitPetInventoryText = function()
 		end
 	end
 	local eligibleCount = countEligibleFusePets(pets)
-	table.insert(lines, ("Total: %d pet(s), %d MU0, %d no-trait, %d eligible (E-D-C-B, not locked)"):format(
-		count, fuseableCount, plainCount, eligibleCount
+	table.insert(lines, ("Total: %d pet(s), %d fuseable, %d no-trait, %d eligible (mutations %s)"):format(
+		count, fuseableCount, plainCount, eligibleCount, autoFuseAllowMutation and "ON" or "MU0 only"
 	))
 
 	local groups, groupKeys = summarizeFuseGroups(pets)
 	table.insert(lines, "")
 	table.insert(lines, "=== Fuse groups (3× same id + rank, E→A) ===")
 	if #groupKeys == 0 then
-		table.insert(lines, "  (none – need MU0 E/D/C/B pets, not locked)")
+		table.insert(lines, autoFuseAllowMutation
+			and "  (none – need E/D/C/B pets, not locked)"
+			or "  (none – need MU0 E/D/C/B pets, not locked)")
 	else
 		for _, key in ipairs(groupKeys) do
 			local g = groups[key]
@@ -4555,7 +4582,7 @@ local fuseDiscoveryTitle = Instance.new("TextLabel")
 fuseDiscoveryTitle.Size = UDim2.new(1, -12, 0, 14)
 fuseDiscoveryTitle.Position = UDim2.new(0, 6, 0, 6)
 fuseDiscoveryTitle.BackgroundTransparency = 1
-fuseDiscoveryTitle.Text = "Pet fuse – MU0 E→A (any traits, skip locked)"
+fuseDiscoveryTitle.Text = "Pet fuse – E→A (any traits, skip locked)"
 fuseDiscoveryTitle.TextColor3 = Color3.fromRGB(255, 220, 170)
 fuseDiscoveryTitle.TextSize = 10
 fuseDiscoveryTitle.Font = Enum.Font.GothamBold
@@ -4652,9 +4679,24 @@ local fuseAutoFuseStopCorner = Instance.new("UICorner")
 fuseAutoFuseStopCorner.CornerRadius = UDim.new(0, 4)
 fuseAutoFuseStopCorner.Parent = fuseAutoFuseStopBtn
 
+local fuseMutationsBtn = Instance.new("TextButton")
+fuseMutationsBtn.Size = UDim2.new(0.5, -9, 0, 20)
+fuseMutationsBtn.Position = UDim2.new(0, 6, 0, 108)
+fuseMutationsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+fuseMutationsBtn.BorderSizePixel = 0
+fuseMutationsBtn.Text = "Mutations: OFF"
+fuseMutationsBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
+fuseMutationsBtn.TextSize = 9
+fuseMutationsBtn.Font = Enum.Font.GothamBold
+fuseMutationsBtn.Parent = fuseDiscoveryCard
+
+local fuseMutationsCorner = Instance.new("UICorner")
+fuseMutationsCorner.CornerRadius = UDim.new(0, 4)
+fuseMutationsCorner.Parent = fuseMutationsBtn
+
 local fuseDuringFarmBtn = Instance.new("TextButton")
-fuseDuringFarmBtn.Size = UDim2.new(1, -12, 0, 20)
-fuseDuringFarmBtn.Position = UDim2.new(0, 6, 0, 108)
+fuseDuringFarmBtn.Size = UDim2.new(0.5, -9, 0, 20)
+fuseDuringFarmBtn.Position = UDim2.new(0.5, 3, 0, 108)
 fuseDuringFarmBtn.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
 fuseDuringFarmBtn.BorderSizePixel = 0
 fuseDuringFarmBtn.Text = "Auto-fuse during farm: ON"
@@ -4672,7 +4714,7 @@ fuseDiscoveryStatusLabel.Size = UDim2.new(1, -12, 0, 24)
 fuseDiscoveryStatusLabel.Position = UDim2.new(0, 6, 0, 130)
 fuseDiscoveryStatusLabel.TextWrapped = true
 fuseDiscoveryStatusLabel.BackgroundTransparency = 1
-fuseDiscoveryStatusLabel.Text = "MU0 + not locked – any traits mix OK. Toggle farm+fuse below."
+fuseDiscoveryStatusLabel.Text = "Mutations OFF = MU0 only. ON = mutated pets too (can mix mutations)."
 fuseDiscoveryStatusLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
 fuseDiscoveryStatusLabel.TextSize = 9
 fuseDiscoveryStatusLabel.Font = Enum.Font.Gotham
@@ -4795,6 +4837,7 @@ UI.fuseCopyLogBtn = fuseCopyLogBtn
 UI.fuseOpenToolsBtn = fuseOpenToolsBtn
 UI.fuseAutoFuseStartBtn = fuseAutoFuseStartBtn
 UI.fuseAutoFuseStopBtn = fuseAutoFuseStopBtn
+UI.fuseMutationsBtn = fuseMutationsBtn
 UI.fuseDuringFarmBtn = fuseDuringFarmBtn
 UI.fuseDiscoveryStatusLabel = fuseDiscoveryStatusLabel
 UI.farmStartBtn = farmStartBtn
@@ -5719,6 +5762,19 @@ local function runWorldFarmLoop(runId)
 	end
 end
 
+local function updateFuseMutationsBtn()
+	if not UI or not UI.fuseMutationsBtn then
+		return
+	end
+	if autoFuseAllowMutation then
+		UI.fuseMutationsBtn.Text = "Mutations: ON"
+		UI.fuseMutationsBtn.BackgroundColor3 = Color3.fromRGB(75, 55, 90)
+	else
+		UI.fuseMutationsBtn.Text = "Mutations: OFF"
+		UI.fuseMutationsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
+	end
+end
+
 local function updateFuseDuringFarmBtn()
 	if not UI or not UI.fuseDuringFarmBtn then
 		return
@@ -5977,10 +6033,16 @@ local function connectAllUIHandlers()
 		stopAutoFuse()
 	end)
 
+	UI.fuseMutationsBtn.MouseButton1Click:Connect(function()
+		autoFuseAllowMutation = not autoFuseAllowMutation
+		updateFuseMutationsBtn()
+	end)
+
 	UI.fuseDuringFarmBtn.MouseButton1Click:Connect(function()
 		autoFuseDuringFarm = not autoFuseDuringFarm
 		updateFuseDuringFarmBtn()
 	end)
+	updateFuseMutationsBtn()
 	updateFuseDuringFarmBtn()
 
 	UI.worldFilterAddBtn.MouseButton1Click:Connect(function()
