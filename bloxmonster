@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.5"
+local VERSION = "1.9.6"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1427,6 +1427,8 @@ copyFuseDiscoveryLog = function()
 	return false
 end
 
+do -- fuse helpers scope (Luau 200-local register limit)
+do -- remotes + PetService scan (local register limit)
 local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot", "rank" }
 local FUSE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.Fuse",
@@ -1564,6 +1566,9 @@ scanPetServiceText = function()
 	return table.concat(lines, "\n"), count
 end
 
+end -- remotes + PetService scan
+
+do -- knit pet cache + auto-fuse (local register limit)
 local KNIT_PET_CONTROLLER_NAMES = {
 	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
 	"PetServiceController", "PetClientController", "DataController", "PlayerDataController",
@@ -2841,6 +2846,9 @@ dumpKnitPetInventoryText = function()
 	return table.concat(lines, "\n"), count
 end
 
+end -- knit pet cache + auto-fuse
+
+do -- fuse scan + inventory UI dump (local register limit)
 scanFuseRelatedRemotesText = function()
 	local petText, petCount = scanPetServiceText()
 	local remotes = collectFuseRelatedRemotes()
@@ -3158,6 +3166,10 @@ dumpPlayerInventoryText = function()
 	local text = table.concat(out, "\n")
 	return text, #rows
 end
+
+end -- fuse scan + inventory UI dump
+
+end -- fuse helpers scope
 
 openFuseDiscoveryWindow = function(initialText)
 	if initialText and initialText ~= "" then
