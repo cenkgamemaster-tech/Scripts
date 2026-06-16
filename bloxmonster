@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.6"
+local VERSION = "1.9.7"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -1428,6 +1428,22 @@ copyFuseDiscoveryLog = function()
 end
 
 do -- fuse helpers scope (Luau 200-local register limit)
+local function findPetServiceFolder()
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc.Name == "PetService" and desc:FindFirstChild("RE") then
+			return desc
+		end
+	end
+	return nil
+end
+
+local INVENTORY_UI_KEYWORDS = { "inventory", "pet", "collection", "fuse", "storage", "backpack" }
+local INVENTORY_ROW_LABELS = {
+	"NpcName", "PetName", "Name", "MonsterName",
+	"Rarity", "Rank", "Tier", "Mutation", "Trait", "Shiny", "Level",
+}
+local INVENTORY_ID_LABELS = { "Id", "UUID", "PetId", "UniqueId", "Guid" }
+
 do -- remotes + PetService scan (local register limit)
 local FUSE_REMOTE_KEYWORDS = { "fuse", "inventory", "pet", "combine", "merge", "slot", "rank" }
 local FUSE_REMOTE_CANDIDATES = {
@@ -1435,12 +1451,6 @@ local FUSE_REMOTE_CANDIDATES = {
 	"ReplicatedStorage.Remotes.FusePet",
 	"ReplicatedStorage.Remotes.PetFuse",
 }
-local INVENTORY_UI_KEYWORDS = { "inventory", "pet", "collection", "fuse", "storage", "backpack" }
-local INVENTORY_ROW_LABELS = {
-	"NpcName", "PetName", "Name", "MonsterName",
-	"Rarity", "Rank", "Tier", "Mutation", "Trait", "Shiny", "Level",
-}
-local INVENTORY_ID_LABELS = { "Id", "UUID", "PetId", "UniqueId", "Guid" }
 
 local function resolveRemotePath(pathString)
 	local node = game
@@ -1513,15 +1523,6 @@ collectFuseRelatedRemotes = function()
 		return a:GetFullName() < b:GetFullName()
 	end)
 	return list
-end
-
-local function findPetServiceFolder()
-	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
-		if desc.Name == "PetService" and desc:FindFirstChild("RE") then
-			return desc
-		end
-	end
-	return nil
 end
 
 scanPetServiceText = function()
