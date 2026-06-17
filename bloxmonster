@@ -13,10 +13,12 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.10.6"
-local AUTO_REFRESH_SEC = 5
-local SCAN_CACHE_SEC = 5
-local FARM_LIST_REFRESH_SEC = 3
+local VERSION = "1.10.7"
+local AUTO_REFRESH_SEC = 10
+local SCAN_CACHE_SEC = 10
+local FULL_SCAN_MIN_INTERVAL = 12
+local FARM_LIST_REFRESH_SEC = 8
+local FARM_LOCATION_HOLD_INTERVAL = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
 local DEFAULT_FARM_WAIT_SEC = 30
 local MIN_FARM_WAIT_SEC = 5
@@ -274,6 +276,38 @@ local function isEquippedPetPath(fullName)
 	return false
 end
 
+local function modelLooksLikeWildPet(model)
+	if model:FindFirstChildOfClass("Humanoid") then
+		return true
+	end
+	if model:FindFirstChildWhichIsA("BillboardGui", true) then
+		return true
+	end
+	if model:FindFirstChildWhichIsA("ProximityPrompt", true) then
+		return true
+	end
+	for _, key in ipairs(PET_ATTR_KEYS) do
+		if getAttr(model, key) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
+local function readBillboardFromGui(billboardGui, bb)
+	if not billboardGui then
+		return
+	end
+	for _, labelName in ipairs(BILLBOARD_LABELS) do
+		if not bb[labelName] then
+			local lbl = billboardGui:FindFirstChild(labelName, true)
+			if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and lbl.Text and lbl.Text ~= "" then
+				bb[labelName] = lbl.Text
+			end
+		end
+	end
+end
+
 local function tryBuildPetEntry(model, playerChars)
 	if not model or model.ClassName ~= "Model" or playerChars[model] then
 		return nil
@@ -287,10 +321,9 @@ local function tryBuildPetEntry(model, playerChars)
 		return nil
 	end
 
-	local score = model:FindFirstChildOfClass("Humanoid") and 1 or 0
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local score = humanoid and 1 or 0
 	local bb = {}
-	local hasBillboard = false
-	local hasCatchPrompt = false
 
 	for _, key in ipairs(PET_ATTR_KEYS) do
 		if getAttr(model, key) ~= nil then
@@ -299,32 +332,30 @@ local function tryBuildPetEntry(model, playerChars)
 		end
 	end
 
-	for _, desc in ipairs(model:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
-			hasBillboard = true
-		elseif desc:IsA("ProximityPrompt") then
-			local action = (desc.ActionText or ""):lower()
-			local obj = (desc.ObjectText or ""):lower()
-			if action:find("catch", 1, true) or action:find("battle", 1, true)
-				or action:find("fight", 1, true) or obj:find("catch", 1, true) then
-				hasCatchPrompt = true
-			end
-		elseif (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
-			if BILLBOARD_LABEL_SET[desc.Name] then
-				bb[desc.Name] = desc.Text
-			end
-		elseif desc.GetAttribute then
-			for _, key in ipairs(PET_ATTR_KEYS) do
-				if getAttr(desc, key) ~= nil then
-					score = score + 1
-					break
-				end
-			end
+	local billboard = model:FindFirstChildWhichIsA("BillboardGui", true)
+	local hasBillboard = billboard ~= nil
+	local hasCatchPrompt = false
+	local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if prompt then
+		local action = (prompt.ActionText or ""):lower()
+		local obj = (prompt.ObjectText or ""):lower()
+		if action:find("catch", 1, true) or action:find("battle", 1, true)
+			or action:find("fight", 1, true) or obj:find("catch", 1, true) then
+			hasCatchPrompt = true
 		end
 	end
 
 	if hasBillboard then
 		score = score + 2
+		readBillboardFromGui(billboard, bb)
+		if not next(bb) then
+			for _, labelName in ipairs(BILLBOARD_LABELS) do
+				local text = getBillboardLabel(model, labelName)
+				if text then
+					bb[labelName] = text
+				end
+			end
+		end
 	end
 	if hasCatchPrompt then
 		score = score + 2
@@ -374,7 +405,7 @@ local function getWorldPets()
 
 	if root then
 		for _, desc in ipairs(root:GetDescendants()) do
-			if desc.ClassName == "Model" then
+			if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
 				consider(desc)
 			end
 		end
@@ -407,6 +438,7 @@ local autoFuseDuringFarm = true
 local autoFuseAllowMutation = false
 local lastAllPets = {}
 local lastScanClock = 0
+local lastFullScanClock = 0
 local lastLightPetsCount = -1
 local lastLightWorldCount = -1
 
@@ -424,6 +456,12 @@ end
 
 local function getCachedWorldPets(scanMode)
 	scanMode = scanMode or "auto"
+	if farmLocationStayActive then
+		if #lastAllPets > 0 then
+			return refreshCachedPetsLight()
+		end
+		return {}
+	end
 	if scanMode == "light" then
 		if #lastAllPets == 0 then
 			scanMode = "full"
@@ -431,11 +469,19 @@ local function getCachedWorldPets(scanMode)
 			return refreshCachedPetsLight()
 		end
 	end
+	local farmActive = worldHuntRunning or autoFarmRunning
+	local cacheSec = farmActive and math.max(SCAN_CACHE_SEC, FULL_SCAN_MIN_INTERVAL) or SCAN_CACHE_SEC
 	local now = nowSeconds()
-	if scanMode ~= "full" and #lastAllPets > 0 and (now - lastScanClock) < SCAN_CACHE_SEC then
+	if scanMode ~= "full" and #lastAllPets > 0 and (now - lastScanClock) < cacheSec then
+		return refreshCachedPetsLight()
+	end
+	if scanMode == "full" and #lastAllPets > 0 and (now - lastFullScanClock) < FULL_SCAN_MIN_INTERVAL then
 		return refreshCachedPetsLight()
 	end
 	lastScanClock = now
+	if scanMode == "full" then
+		lastFullScanClock = now
+	end
 	local ok, pets = pcall(getWorldPets)
 	if ok and pets then
 		lastAllPets = pets
@@ -5355,6 +5401,9 @@ local function tickFarmLists(runId, world, filters, scanMode, mode)
 		return false
 	end
 	scanMode = scanMode or "light"
+	if (worldHuntRunning or autoFarmRunning) and scanMode == "auto" then
+		scanMode = "light"
+	end
 	local pets = getCachedWorldPets(scanMode)
 	local filtersForWorld = filters or (world and worldPetFilters[world.id]) or {}
 	local filteredPets = applyNameFilters(pets, nameFilters)
@@ -5583,7 +5632,9 @@ local function runFarmLocationPhase(runId)
 			return false
 		end
 		setWorldFarmStatus(("Farm location (%s left) – waiting before worlds"):format(formatFarmStayTimeLeft(sec)))
-		setCharacterAtPosition(pos, true, 0)
+		if sec == staySec or sec % FARM_LOCATION_HOLD_INTERVAL == 0 then
+			setCharacterAtPosition(pos, true, 0)
+		end
 		if not farmWait(1, runId, "world") then
 			farmLocationStayActive = false
 			return false
@@ -5802,7 +5853,7 @@ local function runWorldFarmLoop(runId)
 
 				local lastWorldPriority = 0
 				while shouldFarmContinue(runId, "world") do
-					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
+					if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
 						break
 					end
 					local targets = getWorldHuntTargets(world, highFilters)
@@ -5828,7 +5879,7 @@ local function runWorldFarmLoop(runId)
 					end
 
 					lastWorldPriority = prio
-					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
+					if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
 						break
 					end
 				end
@@ -5986,7 +6037,7 @@ local function startAutoFarm()
 
 					lastFarmPriority = prio
 					UI.farmStatusLabel.Text = "Refreshing list..."
-					pets = getCachedWorldPets("full")
+					pets = getCachedWorldPets("auto")
 					populateList(applyNameFilters(pets), #pets)
 				end
 			end
@@ -6170,11 +6221,11 @@ local function connectAllUIHandlers()
 		end
 		autoRefreshThread = task.spawn(function()
 			while autoRefreshRunning do
-				if not autoFarmRunning and not worldHuntRunning then
+				if not autoFarmRunning and not worldHuntRunning and not farmLocationStayActive then
 					if activeTab == "worlds" then
-						refreshWorldList(true)
+						refreshWorldList()
 					elseif activeTab == "pets" then
-						refreshList(true)
+						refreshList()
 					end
 				end
 				task.wait(AUTO_REFRESH_SEC)
