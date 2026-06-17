@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.10.0"
+local VERSION = "1.10.1"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -461,30 +461,48 @@ local activeTab = "pets"
 local farmWaitSec = DEFAULT_FARM_WAIT_SEC
 local farmLocationEnabled = false
 local farmStaySec = DEFAULT_FARM_STAY_SEC
-local farmRunId = 0
+local petFarmRunId = 0
+local worldFarmRunId = 0
 
-local function shouldFarmContinue(runId)
-	if runId then
-		return (autoFarmRunning or worldHuntRunning) and farmRunId == runId
+local function shouldFarmContinue(runId, mode)
+	mode = mode or "pet"
+	if mode == "world" then
+		if runId then
+			return worldHuntRunning and worldFarmRunId == runId
+		end
+		return worldHuntRunning
 	end
-	return autoFarmRunning or worldHuntRunning
+	if runId then
+		return autoFarmRunning and petFarmRunId == runId
+	end
+	return autoFarmRunning
 end
 
-local function farmWait(seconds, runId)
+local function farmWait(seconds, runId, mode)
+	mode = mode or "pet"
 	local elapsed = 0
 	while elapsed < seconds do
-		if runId and not shouldFarmContinue(runId) then
+		if runId and not shouldFarmContinue(runId, mode) then
 			return false
 		end
-		if not runId and not autoFarmRunning then
-			return false
+		if not runId then
+			if mode == "world" then
+				if not worldHuntRunning then
+					return false
+				end
+			elseif not autoFarmRunning then
+				return false
+			end
 		end
 		local step = math.min(0.25, seconds - elapsed)
 		task.wait(step)
 		elapsed = elapsed + step
 	end
 	if runId then
-		return shouldFarmContinue(runId)
+		return shouldFarmContinue(runId, mode)
+	end
+	if mode == "world" then
+		return worldHuntRunning
 	end
 	return autoFarmRunning
 end
@@ -5320,8 +5338,9 @@ local function applyListsFromPets(pets, worldConfig, worldFilters)
 	end
 end
 
-local function tickFarmLists(runId, world, filters, scanMode)
-	if runId and not shouldFarmContinue(runId) then
+local function tickFarmLists(runId, world, filters, scanMode, mode)
+	mode = mode or (world and "world" or "pet")
+	if runId and not shouldFarmContinue(runId, mode) then
 		return false
 	end
 	scanMode = scanMode or "light"
@@ -5352,16 +5371,17 @@ local function tickFarmLists(runId, world, filters, scanMode)
 			lastLightWorldCount = #filteredWorld
 		end
 	end
-	return runId == nil or shouldFarmContinue(runId)
+	return runId == nil or shouldFarmContinue(runId, mode)
 end
 
-local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting)
+local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
+	mode = mode or (world and "world" or "pet")
 	local nextRefreshIn = 0
 	for sec = waitSec, 1, -1 do
 		if keepWaiting and not keepWaiting() then
 			return false
 		end
-		if runId and not shouldFarmContinue(runId) then
+		if runId and not shouldFarmContinue(runId, mode) then
 			return false
 		end
 		if onEachSecond and onEachSecond(sec) then
@@ -5371,11 +5391,11 @@ local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, o
 			onTick(sec)
 		end
 		if nextRefreshIn <= 0 then
-			tickFarmLists(runId, world, filters, "light")
+			tickFarmLists(runId, world, filters, "light", mode)
 			nextRefreshIn = FARM_LIST_REFRESH_SEC
 		end
 		nextRefreshIn = nextRefreshIn - 1
-		if not farmWait(1, runId) then
+		if not farmWait(1, runId, mode) then
 			return false
 		end
 	end
@@ -5514,8 +5534,11 @@ local function formatFarmStayTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-local function setFarmStatus(text)
+local function setPetFarmStatus(text)
 	UI.farmStatusLabel.Text = text
+end
+
+local function setWorldFarmStatus(text)
 	UI.worldHuntStatusLabel.Text = text
 end
 
@@ -5525,28 +5548,28 @@ local function runFarmLocationPhase(runId)
 	end
 	local pos = getFarmLocationPosition()
 	if not pos then
-		setFarmStatus("Farm location not set – skipping")
+		setWorldFarmStatus("Farm location not set – skipping")
 		return true
 	end
 
-	setFarmStatus("Going to farm location...")
+	setWorldFarmStatus("Going to farm location...")
 	if not setCharacterAtPosition(pos, true, 0) then
-		setFarmStatus("Farm location teleport failed")
-		return farmWait(FARM_NO_TARGET_WAIT_SEC, runId)
+		setWorldFarmStatus("Farm location teleport failed")
+		return farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world")
 	end
-	if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
+	if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId, "world") then
 		return false
 	end
 
 	local endTime = nowSeconds() + getFarmStaySec()
-	while shouldFarmContinue(runId) and nowSeconds() < endTime do
+	while shouldFarmContinue(runId, "world") and nowSeconds() < endTime do
 		local left = math.ceil(endTime - nowSeconds())
-		setFarmStatus(("Farm location (%s left)"):format(formatFarmStayTimeLeft(left)))
-		if not farmWait(1, runId) then
+		setWorldFarmStatus(("Farm location (%s left)"):format(formatFarmStayTimeLeft(left)))
+		if not farmWait(1, runId, "world") then
 			return false
 		end
 	end
-	return shouldFarmContinue(runId)
+	return shouldFarmContinue(runId, "world")
 end
 
 local function styleTabButton(btn, active)
@@ -5592,42 +5615,47 @@ local function isAnyFarmRunning()
 	return autoFarmRunning or worldHuntRunning
 end
 
-local function stopAllFarm()
-	farmRunId = farmRunId + 1
+local function stopAutoFarm()
+	petFarmRunId = petFarmRunId + 1
 	autoFarmRunning = false
-	worldHuntRunning = false
 	UI.farmStatusLabel.Text = "Farm idle"
-	UI.worldHuntStatusLabel.Text = "World hunt idle"
 	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
-	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
 	if autoFarmThread then
 		pcall(task.cancel, autoFarmThread)
 		autoFarmThread = nil
 	end
-	if worldHuntThread and worldHuntThread ~= autoFarmThread then
-		pcall(task.cancel, worldHuntThread)
-	end
-	worldHuntThread = nil
 end
 
 local function stopWorldHunt()
-	stopAllFarm()
+	worldFarmRunId = worldFarmRunId + 1
+	worldHuntRunning = false
+	UI.worldHuntStatusLabel.Text = "World hunt idle"
+	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+	if worldHuntThread then
+		pcall(task.cancel, worldHuntThread)
+		worldHuntThread = nil
+	end
+end
+
+local function stopAllFarm()
+	stopAutoFarm()
+	stopWorldHunt()
 end
 
 local function refreshWorldFarmList(world, statusText, runId, scanMode)
-	if runId and not shouldFarmContinue(runId) then
+	if runId and not shouldFarmContinue(runId, "world") then
 		return false
 	end
 	if statusText then
-		setFarmStatus(statusText)
+		setWorldFarmStatus(statusText)
 	end
 	local pets = getCachedWorldPets(scanMode or "auto")
-	if runId and not shouldFarmContinue(runId) then
+	if runId and not shouldFarmContinue(runId, "world") then
 		return false
 	end
 	local filters = worldPetFilters[world.id] or {}
 	applyListsFromPets(pets, world, filters)
-	return runId == nil or shouldFarmContinue(runId)
+	return runId == nil or shouldFarmContinue(runId, "world")
 end
 
 local function collectBonusFarmFilters()
@@ -5667,12 +5695,12 @@ local function runPostCycleBonusFarm(runId)
 	local bonusEnd = nowSeconds() + WORLD_CYCLE_BONUS_SEC
 	local lastBonusPriority = WORLD_CYCLE_BONUS_MIN_PRIORITY - 1
 
-	while shouldFarmContinue(runId) and nowSeconds() < bonusEnd do
+	while shouldFarmContinue(runId, "world") and nowSeconds() < bonusEnd do
 		local timeLeft = math.ceil(bonusEnd - nowSeconds())
-		setFarmStatus(("Bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
+		setWorldFarmStatus(("Bonus P3+ (%s left) – scanning..."):format(formatBonusTimeLeft(timeLeft)))
 
 		local pets = getCachedWorldPets("auto")
-		if not shouldFarmContinue(runId) then
+		if not shouldFarmContinue(runId, "world") then
 			break
 		end
 		applyListsFromPets(pets, nil, nil)
@@ -5680,33 +5708,33 @@ local function runPostCycleBonusFarm(runId)
 		local target, targetP = pickNextFarmTarget(targets, lastBonusPriority, bonusFilters)
 
 		if not target then
-			setFarmStatus(("Bonus P3+ (%s left) – no targets, waiting..."):format(formatBonusTimeLeft(timeLeft)))
-			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
+			setWorldFarmStatus(("Bonus P3+ (%s left) – no targets, waiting..."):format(formatBonusTimeLeft(timeLeft)))
+			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world") then
 				break
 			end
 		else
 			local prio = targetP or getPetFilterPriority(target.name, bonusFilters)
-			setFarmStatus(("Bonus P%s: %s (%s left)"):format(
+			setWorldFarmStatus(("Bonus P%s: %s (%s left)"):format(
 				tostring(prio),
 				target.name,
 				formatBonusTimeLeft(timeLeft)
 			))
 			teleportToPet(target.model)
-			tickFarmLists(runId, nil, nil, "auto")
+			tickFarmLists(runId, nil, nil, "auto", "world")
 
 			farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
 				timeLeft = math.ceil(bonusEnd - nowSeconds())
-				setFarmStatus(("Bonus P%s: %s – %ds (%s left)"):format(
+				setWorldFarmStatus(("Bonus P%s: %s – %ds (%s left)"):format(
 					tostring(prio),
 					target.name,
 					sec,
 					formatBonusTimeLeft(timeLeft)
 				))
 			end, nil, nil, nil, function()
-				return shouldFarmContinue(runId) and nowSeconds() < bonusEnd
-			end)
+				return shouldFarmContinue(runId, "world") and nowSeconds() < bonusEnd
+			end, "world")
 
-			if not shouldFarmContinue(runId) then
+			if not shouldFarmContinue(runId, "world") then
 				break
 			end
 
@@ -5718,13 +5746,13 @@ local function runPostCycleBonusFarm(runId)
 end
 
 local function runWorldFarmLoop(runId)
-	while shouldFarmContinue(runId) do
+	while shouldFarmContinue(runId, "world") do
 		if not runFarmLocationPhase(runId) then
 			break
 		end
 
 		for _, world in ipairs(WORLD_ZONES) do
-			if not shouldFarmContinue(runId) then
+			if not shouldFarmContinue(runId, "world") then
 				break
 			end
 			local filters = worldPetFilters[world.id]
@@ -5734,22 +5762,22 @@ local function runWorldFarmLoop(runId)
 				highlightWorldButtons()
 				rebuildWorldFilterChips()
 
-				setFarmStatus("Going to " .. world.name .. "...")
+				setWorldFarmStatus("Going to " .. world.name .. "...")
 				local tpOk, tpMethod = teleportToWorld(world)
 				if not tpOk then
-					setFarmStatus("No travel to " .. world.name .. ", trying pets anyway...")
-					if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId) then
+					setWorldFarmStatus("No travel to " .. world.name .. ", trying pets anyway...")
+					if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world") then
 						break
 					end
 				else
-					setFarmStatus(("At %s (%s)"):format(world.name, tostring(tpMethod)))
-					if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId) then
+					setWorldFarmStatus(("At %s (%s)"):format(world.name, tostring(tpMethod)))
+					if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId, "world") then
 						break
 					end
 				end
 
 				local lastWorldPriority = 0
-				while shouldFarmContinue(runId) do
+				while shouldFarmContinue(runId, "world") do
 					if not refreshWorldFarmList(world, "Refreshing list...", runId, "full") then
 						break
 					end
@@ -5761,17 +5789,17 @@ local function runWorldFarmLoop(runId)
 					end
 
 					local prio = targetP or getPetFilterPriority(target.name, highFilters)
-					setFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
+					setWorldFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
 					teleportToPet(target.model)
-					tickFarmLists(runId, world, highFilters, "auto")
+					tickFarmLists(runId, world, highFilters, "auto", "world")
 
 					if not farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
-						setFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
-					end, world, highFilters) then
+						setWorldFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
+					end, world, highFilters, nil, nil, "world") then
 						break
 					end
 
-					if not shouldFarmContinue(runId) then
+					if not shouldFarmContinue(runId, "world") then
 						break
 					end
 
@@ -5782,7 +5810,7 @@ local function runWorldFarmLoop(runId)
 				end
 			end
 		end
-		if shouldFarmContinue(runId) then
+		if shouldFarmContinue(runId, "world") then
 			runPostCycleBonusFarm(runId)
 		end
 	end
@@ -5825,39 +5853,38 @@ local function maybeStartAutoFuseWithFarm()
 end
 
 local function startWorldFarm()
-	if isAnyFarmRunning() then
+	if worldHuntRunning then
+		return false
+	end
+	if autoFarmRunning then
+		setWorldFarmStatus("Stop pet farm first")
 		return false
 	end
 	if not anyWorldPetsConfigured() then
-		setFarmStatus("Configure pets on Worlds tab first")
+		setWorldFarmStatus("Configure pets on Worlds tab first")
 		return false
 	end
-	farmRunId = farmRunId + 1
-	local myRunId = farmRunId
-	autoFarmRunning = true
+	worldFarmRunId = worldFarmRunId + 1
+	local myRunId = worldFarmRunId
 	worldHuntRunning = true
-	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
 	UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
-	setFarmStatus("World farm starting...")
-	if autoFarmThread then
-		pcall(task.cancel, autoFarmThread)
-	end
+	setWorldFarmStatus("World hunt starting...")
 	if worldHuntThread then
 		pcall(task.cancel, worldHuntThread)
 	end
-	autoFarmThread = task.spawn(function()
+	worldHuntThread = task.spawn(function()
 		local ok, err = pcall(function()
 			runWorldFarmLoop(myRunId)
 		end)
 		if not ok and not tostring(err):find("cancelled", 1, true) then
-			warn("[BloxMonster] World farm error:", err)
+			warn("[BloxMonster] World hunt error:", err)
 		end
-		if farmRunId == myRunId then
-			autoFarmRunning = false
+		if worldFarmRunId == myRunId then
 			worldHuntRunning = false
+			UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
+			UI.worldHuntStatusLabel.Text = "World hunt idle"
 		end
 	end)
-	worldHuntThread = autoFarmThread
 	maybeStartAutoFuseWithFarm()
 	return true
 end
@@ -5866,24 +5893,20 @@ local function startWorldHunt()
 	startWorldFarm()
 end
 
-local function stopAutoFarm()
-	stopAllFarm()
-end
-
 local function startAutoFarm()
-	if isAnyFarmRunning() then
+	if autoFarmRunning then
+		return
+	end
+	if worldHuntRunning then
+		UI.farmStatusLabel.Text = "Stop world hunt first"
 		return
 	end
 	if #nameFilters == 0 then
-		if anyWorldPetsConfigured() then
-			startWorldFarm()
-		else
-			UI.farmStatusLabel.Text = "Add pets on Pets tab or Worlds tab"
-		end
+		UI.farmStatusLabel.Text = "Add pets on Pets tab first"
 		return
 	end
-	farmRunId = farmRunId + 1
-	local myRunId = farmRunId
+	petFarmRunId = petFarmRunId + 1
+	local myRunId = petFarmRunId
 	autoFarmRunning = true
 	UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 70)
 	UI.farmStatusLabel.Text = "Farm starting..."
@@ -5894,9 +5917,9 @@ local function startAutoFarm()
 		local lastFarmPriority = 0
 		local ok, err = pcall(function()
 			maybeStartAutoFuseWithFarm()
-			while shouldFarmContinue(myRunId) do
+			while shouldFarmContinue(myRunId, "pet") do
 				local pets = getCachedWorldPets("auto")
-				if not shouldFarmContinue(myRunId) then
+				if not shouldFarmContinue(myRunId, "pet") then
 					break
 				end
 				populateList(applyNameFilters(pets), #pets)
@@ -5906,7 +5929,7 @@ local function startAutoFarm()
 				if not target then
 					lastFarmPriority = 0
 					UI.farmStatusLabel.Text = "Waiting for pets..."
-					if not farmWait(FARM_NO_TARGET_WAIT_SEC, myRunId) then
+					if not farmWait(FARM_NO_TARGET_WAIT_SEC, myRunId, "pet") then
 						break
 					end
 				else
@@ -5914,15 +5937,15 @@ local function startAutoFarm()
 					local prio = targetP or getPetFilterPriority(target.name)
 					UI.farmStatusLabel.Text = ("TP P%s: %s"):format(tostring(prio), target.name)
 					teleportToPet(model)
-					tickFarmLists(myRunId, nil, nil, "auto")
+					tickFarmLists(myRunId, nil, nil, "auto", "pet")
 
 					if not farmWaitWithListRefresh(getFarmWaitSec(), myRunId, function(sec)
 						UI.farmStatusLabel.Text = ("P%s: %s – %ds"):format(tostring(prio), target.name, sec)
-					end, nil, nameFilters) then
+					end, nil, nameFilters, nil, nil, "pet") then
 						break
 					end
 
-					if not shouldFarmContinue(myRunId) then
+					if not shouldFarmContinue(myRunId, "pet") then
 						break
 					end
 
@@ -5936,8 +5959,10 @@ local function startAutoFarm()
 		if not ok and not tostring(err):find("cancelled", 1, true) then
 			warn("[BloxMonster] Farm error:", err)
 		end
-		if farmRunId == myRunId then
+		if petFarmRunId == myRunId then
 			autoFarmRunning = false
+			UI.farmStartBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 55)
+			UI.farmStatusLabel.Text = "Farm idle"
 		end
 	end)
 end
