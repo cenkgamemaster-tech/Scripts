@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.8"
+local VERSION = "1.9.9"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -394,7 +394,14 @@ local function getWorldPets()
 end
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
+local DEFAULT_PET_FILTERS = {
+	{ name = "Rio", priority = 1 },
+	{ name = "Dori", priority = 3 },
+}
 local nameFilters = {}
+for _, entry in ipairs(DEFAULT_PET_FILTERS) do
+	table.insert(nameFilters, { name = entry.name, priority = entry.priority })
+end
 local autoFarmRunning = false
 local autoFuseDuringFarm = true
 local autoFuseAllowMutation = false
@@ -3612,7 +3619,7 @@ local filterHint = Instance.new("TextLabel")
 filterHint.Size = UDim2.new(1, -12, 0, 14)
 filterHint.Position = UDim2.new(0, 6, 0, 4)
 filterHint.BackgroundTransparency = 1
-filterHint.Text = "Format: Name@priority (1 = farm first). e.g. Orbitfin@1, Phant@3, Pico@2"
+filterHint.Text = "Format: Name@priority (1 = farm first). e.g. Rio@1, Dori@3"
 filterHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 filterHint.TextSize = 10
 filterHint.Font = Enum.Font.Gotham
@@ -3626,7 +3633,7 @@ filterInput.Position = UDim2.new(0, 6, 0, 20)
 filterInput.BackgroundColor3 = Color3.fromRGB(30, 45, 65)
 filterInput.BorderSizePixel = 0
 filterInput.ClearTextOnFocus = false
-filterInput.PlaceholderText = "Orbitfin@1, Phant@3, Pico@2"
+filterInput.PlaceholderText = "Rio@1, Dori@3"
 filterInput.PlaceholderColor3 = Color3.fromRGB(100, 130, 110)
 filterInput.Text = ""
 filterInput.TextColor3 = Color3.fromRGB(220, 255, 220)
@@ -5087,7 +5094,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 			if #filters > 0 and totalUnfiltered and totalUnfiltered > 0 then
 				emptyMsg = "No pets match your filters. Try different names or tap Clear."
 			elseif #filters > 0 then
-				emptyMsg = "No pets match your filters yet. Add e.g. Orbitfin@1, Phant@3, Pico@2"
+				emptyMsg = "No pets match your filters yet. Add e.g. Rio@1, Dori@3"
 			end
 		end
 		empty.Text = emptyMsg
@@ -5255,7 +5262,7 @@ end
 local function addFilterFromInput()
 	local raw = UI.filterInput.Text
 	if raw == "" then
-		UI.filterHint.Text = "Type: Orbitfin@1, Phant@3, Pico@2"
+		UI.filterHint.Text = "Type: Rio@1, Dori@3"
 		return
 	end
 
@@ -5281,7 +5288,7 @@ local function addFilterFromInput()
 			refreshList(false)
 		end
 	else
-		UI.filterHint.Text = "Invalid format – use Name@priority (e.g. Orbitfin@1, Phant@3)"
+		UI.filterHint.Text = "Invalid format – use Name@priority (e.g. Rio@1, Dori@3)"
 		warn("[BloxMonster] Could not parse:", raw)
 	end
 end
@@ -6105,9 +6112,9 @@ local function connectAllUIHandlers()
 			while autoRefreshRunning do
 				if not autoFarmRunning and not worldHuntRunning then
 					if activeTab == "worlds" then
-						refreshWorldList(false)
-					else
-						refreshList(false)
+						refreshWorldList(true)
+					elseif activeTab == "pets" then
+						refreshList(true)
 					end
 				end
 				task.wait(AUTO_REFRESH_SEC)
@@ -6125,6 +6132,7 @@ end
 task.defer(function()
 	local initOk, initErr = pcall(function()
 		setActiveTab("pets")
+		rebuildFilterChips()
 		rebuildWorldFilterChips()
 		refreshLocationRows()
 		refreshList()
