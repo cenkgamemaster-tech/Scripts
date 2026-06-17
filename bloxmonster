@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.9.7"
+local VERSION = "1.9.8"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -62,6 +62,11 @@ local WORLD_ZONES = {
 		name = "Bamboo Temple",
 		keywords = { "bamboo", "temple", "bambootemple" },
 	},
+	{
+		id = "heaven_island",
+		name = "Heaven Island",
+		keywords = { "heaven", "island", "heavenisland" },
+	},
 }
 
 -- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
@@ -74,10 +79,11 @@ local WORLD_SPAWN_LOCATIONS = {
 	iceberg = { x = 2840.684, y = 85.969, z = 611.374 },
 	astral_grove = { x = 896.615, y = 45.178, z = -1551.753 },
 	bamboo_temple = { x = -1909.778, y = 4.971, z = 106.222 },
+	heaven_island = { x = -1240.435, y = 1030.503, z = -1450.890 },
 }
 
 local FARM_LOCATION_ID = "farm_location"
-local FARM_SPAWN_LOCATION = { x = -1629.027, y = 10.694, z = 315.471 }
+local FARM_SPAWN_LOCATION = { x = -1240.435, y = 1030.503, z = -1450.890 }
 
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
@@ -433,8 +439,8 @@ local function getCachedWorldPets(scanMode)
 end
 
 local worldPetFilters = {
-	bamboo_temple = {
-		{ name = "Bambit", priority = 1 },
+	heaven_island = {
+		{ name = "Rio", priority = 1 },
 	},
 }
 
