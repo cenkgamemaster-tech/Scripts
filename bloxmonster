@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.10.5"
+local VERSION = "1.10.6"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -459,7 +459,7 @@ local worldHuntRunning = false
 local worldHuntThread = nil
 local activeTab = "pets"
 local farmWaitSec = DEFAULT_FARM_WAIT_SEC
-local farmLocationEnabled = false
+local farmLocationEnabled = true
 local farmStaySec = DEFAULT_FARM_STAY_SEC
 local petFarmRunId = 0
 local worldFarmRunId = 0
@@ -1311,6 +1311,9 @@ local function teleportPlayerToPosition(pos)
 end
 
 local function teleportToWorld(worldConfig)
+	if farmLocationStayActive then
+		return false, nil
+	end
 	local filters = worldPetFilters[worldConfig.id]
 
 	local savedPos = getSavedWorldPosition(worldConfig.id)
@@ -1389,6 +1392,9 @@ local function makeDraggable(frame, dragHandles)
 end
 
 local function teleportToPet(model)
+	if farmLocationStayActive then
+		return false
+	end
 	if not model then
 		return false
 	end
@@ -5437,7 +5443,7 @@ local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
 	highlightWorldButtons()
 	rebuildWorldFilterChips()
-	if teleport then
+	if teleport and not farmLocationStayActive then
 		local world = getWorldConfigById(worldId)
 		if world then
 			UI.worldHuntStatusLabel.Text = "Teleporting to " .. world.name .. "..."
@@ -5557,32 +5563,34 @@ local function runFarmLocationPhase(runId)
 		return true
 	end
 
-	local staySec = getFarmStaySec()
+	local staySec = math.max(MIN_FARM_STAY_SEC, getFarmStaySec())
+	farmLocationStayActive = true
 	setWorldFarmStatus(("Going to farm location (%ds stay)..."):format(staySec))
 	if not setCharacterAtPosition(pos, true, 0) then
 		setWorldFarmStatus("Farm location teleport failed")
-		return farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world")
+		local ok = farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world")
+		farmLocationStayActive = false
+		return ok
 	end
 	if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId, "world") then
 		farmLocationStayActive = false
 		return false
 	end
 
-	farmLocationStayActive = true
-	local endTime = wallClockSeconds() + staySec
-	while shouldFarmContinue(runId, "world") and wallClockSeconds() < endTime do
-		local left = math.max(0, math.ceil(endTime - wallClockSeconds()))
-		setWorldFarmStatus(("Farm location (%s left)"):format(formatFarmStayTimeLeft(left)))
+	for sec = staySec, 1, -1 do
+		if not shouldFarmContinue(runId, "world") then
+			farmLocationStayActive = false
+			return false
+		end
+		setWorldFarmStatus(("Farm location (%s left) – waiting before worlds"):format(formatFarmStayTimeLeft(sec)))
 		setCharacterAtPosition(pos, true, 0)
 		if not farmWait(1, runId, "world") then
 			farmLocationStayActive = false
 			return false
 		end
 	end
+
 	farmLocationStayActive = false
-	if not shouldFarmContinue(runId, "world") then
-		return false
-	end
 	setWorldFarmStatus("Farm location stay complete – starting world cycle")
 	return true
 end
@@ -5768,7 +5776,7 @@ local function runWorldFarmLoop(runId)
 		end
 
 		for _, world in ipairs(WORLD_ZONES) do
-			if not shouldFarmContinue(runId, "world") then
+			if farmLocationStayActive or not shouldFarmContinue(runId, "world") then
 				break
 			end
 			local filters = worldPetFilters[world.id]
@@ -5882,6 +5890,11 @@ local function startWorldFarm()
 		return false
 	end
 	applyFarmSettingsFromUI()
+	if getFarmStaySec() >= MIN_FARM_STAY_SEC then
+		farmLocationEnabled = true
+		updateFarmLocationEnableButton()
+		refreshConfigStatusLabel()
+	end
 	if not anyWorldPetsConfigured() then
 		setWorldFarmStatus("Configure pets on Worlds tab first")
 		return false
@@ -6183,6 +6196,8 @@ task.defer(function()
 		rebuildWorldFilterChips()
 		refreshLocationRows()
 		refreshList()
+		updateFarmLocationEnableButton()
+		refreshConfigStatusLabel()
 	end)
 	if not initOk then
 		warn("[BloxMonster] Init error:", initErr)
