@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.10.2"
+local VERSION = "1.10.3"
 local AUTO_REFRESH_SEC = 5
 local SCAN_CACHE_SEC = 5
 local FARM_LIST_REFRESH_SEC = 3
@@ -397,7 +397,6 @@ end
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local DEFAULT_PET_FILTERS = {
 	{ name = "Rio", priority = 1 },
-	{ name = "Dori", priority = 3 },
 }
 local nameFilters = {}
 for _, entry in ipairs(DEFAULT_PET_FILTERS) do
