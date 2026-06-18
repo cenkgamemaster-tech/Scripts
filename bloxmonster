@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.1"
+local VERSION = "1.14.2"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2341,52 +2341,9 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	return false
 end
 
-local function tryCombatEngage(model)
-	local setTarget = resolveContestRemotePath(COMBAT_RF.SetTarget)
-	if not setTarget or not model then
-		return false
-	end
-	local uid = model:GetAttribute("UID") or model:GetAttribute("Id") or model:GetAttribute("PetId")
-	local argSets = {
-		{ model },
-		{ model.Name },
-		{ uid },
-		{ tostring(uid) },
-	}
-	for _, args in ipairs(argSets) do
-		if args[1] and pcall(function()
-			fireRemote(setTarget, table.unpack(args))
-		end) then
-			task.wait(0.25)
-			local attack = resolveContestRemotePath(COMBAT_RF.RequestPetAttack)
-			if attack then
-				pcall(function()
-					fireRemote(attack)
-				end)
-			end
-			return true
-		end
-	end
-	return false
-end
-
-local function tryStartContest(difficulty, useKey)
-	local started, result = startDungeonKnit(difficulty, useKey)
-	if started then
-		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return true, result
-	end
-	return false, result
-end
-
-local function engageContestEnemy(model)
+local function tryStartBattlePrompt(model)
 	if not model then
 		return false
-	end
-	teleportToPet(model)
-	task.wait(0.35)
-	if tryCombatEngage(model) then
-		return true
 	end
 	for _, prompt in ipairs(model:GetDescendants()) do
 		if prompt:IsA("ProximityPrompt") then
@@ -2408,22 +2365,35 @@ local function engageContestEnemy(model)
 	return false
 end
 
+local function tryStartContest(difficulty, useKey)
+	local started, result = startDungeonKnit(difficulty, useKey)
+	if started then
+		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		return true, result
+	end
+	return false, result
+end
+
+local function engageContestEnemy(model)
+	if not model then
+		return false
+	end
+	-- Pets tab style: TP near mob, let equipped pets auto-fight with skills.
+	-- Do NOT spam SetTarget / RequestPetAttack — that resets combat.
+	teleportToPet(model)
+	task.wait(0.5)
+	tryStartBattlePrompt(model)
+	return true
+end
+
 local function waitForFloorBattle(durationSec, runId)
 	local start = wallClockSeconds()
-	local lastAttack = 0
 	while wallClockSeconds() - start < durationSec do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false, "stopped"
 		end
 		if #getDungeonPetTargets() == 0 then
 			return true, "cleared"
-		end
-		if wallClockSeconds() - lastAttack > 2 then
-			local targets = getDungeonPetTargets()
-			if #targets > 0 then
-				tryCombatEngage(targets[1].model)
-				lastAttack = wallClockSeconds()
-			end
 		end
 		task.wait(0.5)
 	end
