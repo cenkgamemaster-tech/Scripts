@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.3"
+local VERSION = "1.11.5"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -92,6 +92,9 @@ local FARM_SPAWN_LOCATION = { x = -1248.016, y = 1030.503, z = -1451.140 }
 local WORKSPACE_PREFIX = nil
 
 -- Wild mobs live here in Blox Monsters (Instance names are often UUIDs; use billboard English names).
+local getWorldPets
+
+do -- wild pet scan (local register limit)
 local WILD_MOB_PATH_SUFFIX = "live.mobs.client"
 
 local function findChildInsensitive(parent, name)
@@ -516,7 +519,7 @@ local function tryBuildPetEntry(model, playerChars)
 	}
 end
 
-local function getWorldPets()
+getWorldPets = function()
 	local found = {}
 	local seen = {}
 	local playerChars = getPlayerCharacterSet()
@@ -567,6 +570,8 @@ local function getWorldPets()
 
 	return found
 end
+
+end -- wild pet scan
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local DEFAULT_PET_FILTERS = {
@@ -6186,9 +6191,11 @@ local refreshConfigStatusLabel
 local getFarmStaySec
 local runPostCycleBonusFarm
 local runWorldFarmLoop
+local connectAllUIHandlers
 
 
 do -- app handlers part 1 (local register limit)
+
 
 getWorldConfigById = function(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
@@ -6209,6 +6216,11 @@ getSelectedWorldFilters = function()
 	end
 	return worldPetFilters[selectedWorldId]
 end
+
+end -- app handlers part 1
+
+do -- app handlers part 2 (local register limit)
+
 
 local function findWorldFilterIndexByName(name)
 	local filters = getSelectedWorldFilters()
@@ -6342,6 +6354,11 @@ setFilterBarVisible = function(visible)
 		UI.filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
 	end
 end
+
+end -- app handlers part 2
+
+do -- app handlers part 3 (local register limit)
+
 
 local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfiltered, filters, countLbl, totalScanned)
 	for _, child in ipairs(targetScroll:GetChildren()) do
@@ -6696,9 +6713,10 @@ refreshWorldList = function(rescan, worldConfig)
 	end
 end
 
-end -- app handlers part 1
+end -- app handlers part 3
 
-do -- app handlers part 2 (local register limit)
+do -- app handlers part 4 (local register limit)
+
 
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
@@ -6757,6 +6775,11 @@ toggleFarmLocationEnabled = function()
 	refreshConfigStatusLabel()
 end
 
+end -- app handlers part 4
+
+do -- app handlers part 5 (local register limit)
+
+
 local function parseFarmWaitSec(text)
 	local n = tonumber(text)
 	if not n then
@@ -6801,6 +6824,11 @@ applyFarmStayFromInput = function()
 	refreshConfigStatusLabel()
 	return true
 end
+
+end -- app handlers part 5
+
+do -- app handlers part 6 (local register limit)
+
 
 local function formatFarmStayTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
@@ -6858,9 +6886,10 @@ runFarmLocationPhase = function(runId)
 	return true
 end
 
-end -- app handlers part 2
+end -- app handlers part 6
 
-do -- app handlers part 3 (local register limit)
+do -- app handlers part 7 (local register limit)
+
 
 local function styleTabButton(btn, active)
 	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
@@ -6947,6 +6976,11 @@ setActiveTab = function(tabName)
 	end
 end
 
+end -- app handlers part 7
+
+do -- app handlers part 8 (local register limit)
+
+
 local function isAnyFarmRunning()
 	return autoFarmRunning or worldHuntRunning
 end
@@ -6995,9 +7029,10 @@ refreshWorldFarmList = function(world, statusText, runId, scanMode)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
 
-end -- app handlers part 3
+end -- app handlers part 8
 
-do -- app handlers part 4 (local register limit)
+do -- app handlers part 9 (local register limit)
+
 
 local function collectBonusFarmFilters()
 	local out = {}
@@ -7157,9 +7192,10 @@ runWorldFarmLoop = function(runId)
 	end
 end
 
-end -- app handlers part 4
+end -- app handlers part 9
 
-do -- app handlers part 5 (local register limit)
+do -- app handlers part 10 (local register limit)
+
 
 updateFuseMutationsBtn = function()
 	if not UI or not UI.fuseMutationsBtn then
@@ -7197,9 +7233,10 @@ local function maybeStartAutoFuseWithFarm()
 	pcall(startAutoFuse)
 end
 
-end -- app handlers part 5
+end -- app handlers part 10
 
-do -- app handlers part 6 (local register limit)
+do -- app handlers part 11 (local register limit)
+
 
 local function applyFarmSettingsFromUI()
 	pcall(applyFarmWaitFromInput)
@@ -7248,6 +7285,11 @@ local function startWorldFarm()
 	maybeStartAutoFuseWithFarm()
 	return true
 end
+
+end -- app handlers part 11
+
+do -- app handlers part 12 (local register limit)
+
 
 local function startWorldHunt()
 	startWorldFarm()
@@ -7327,9 +7369,10 @@ local function startAutoFarm()
 	end)
 end
 
-end -- app handlers part 6
+end -- app handlers part 12
 
-do -- app handlers part 7 (local register limit)
+do -- app handlers part 13 (local register limit)
+
 
 local function stopAutoRefresh()
 	autoRefreshRunning = false
@@ -7337,7 +7380,12 @@ local function stopAutoRefresh()
 	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
 end
 
-local function connectAllUIHandlers()
+end -- app handlers part 13
+
+do -- app handlers part 14 (local register limit)
+
+
+connectAllUIHandlers = function()
 	UI.refreshBtn.MouseButton1Click:Connect(function()
 		if activeTab == "worlds" then
 			refreshWorldList(true)
@@ -7552,6 +7600,8 @@ local function connectAllUIHandlers()
 	end)
 end
 
+end -- app handlers part 14
+
 local connectOk, connectErr = pcall(connectAllUIHandlers)
 if not connectOk then
 	warn("[BloxMonster] UI handler connect error:", connectErr)
@@ -7577,5 +7627,3 @@ task.defer(function()
 	print(("[BloxMonster] v%s loaded"):format(VERSION))
 	task.defer(getWorldRemotes)
 end)
-
-end -- app handlers part 7
