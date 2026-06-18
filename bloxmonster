@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.3"
+local VERSION = "1.13.4"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -6192,17 +6192,29 @@ TAB_PANELS = {
 }
 
 
-do -- app handlers (local register limit)
-
+-- Shared across app handler blocks (Luau 200-local register limit).
+local refreshList
+local refreshWorldList
+local populateList
+local rebuildFilterChips
+local addFilterFromInput
+local setFilterBarVisible
+local rebuildWorldFilterChips
+local addWorldFilterFromInput
+local highlightWorldButtons
+local getWorldConfigById
+local applyListsFromPets
+local tickFarmLists
+local farmWaitWithListRefresh
+local filterBarVisible = true
 local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
-local filterBarVisible = true
 
-local refreshList
-local refreshWorldList
 
-local function getWorldConfigById(worldId)
+do -- app handlers part 1 (local register limit)
+
+getWorldConfigById = function(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
 		if world.id == worldId then
 			return world
@@ -6244,7 +6256,7 @@ local function updateWorldSelectedLabel()
 	UI.worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
 end
 
-local function highlightWorldButtons()
+highlightWorldButtons = function()
 	for worldId, btn in pairs(UI.worldButtons) do
 		if worldId == selectedWorldId then
 			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
@@ -6254,7 +6266,7 @@ local function highlightWorldButtons()
 	end
 end
 
-local function rebuildWorldFilterChips()
+rebuildWorldFilterChips = function()
 	for _, child in ipairs(UI.worldFilterChipScroll:GetChildren()) do
 		if child ~= UI.worldFilterChipLayout then
 			child:Destroy()
@@ -6305,7 +6317,7 @@ local function rebuildWorldFilterChips()
 	updateWorldSelectedLabel()
 end
 
-local function addWorldFilterFromInput()
+addWorldFilterFromInput = function()
 	local raw = UI.worldFilterInput.Text
 	if raw == "" then
 		UI.worldFilterHint.Text = "Type: Thornshade@1"
@@ -6339,7 +6351,7 @@ local function addWorldFilterFromInput()
 	end
 end
 
-local function setFilterBarVisible(visible)
+setFilterBarVisible = function(visible)
 	filterBarVisible = visible
 	UI.filterBar.Visible = visible
 	if visible then
@@ -6497,7 +6509,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 	end
 end
 
-local function populateList(pets, totalUnfiltered)
+populateList = function(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
@@ -6506,7 +6518,7 @@ local function populateWorldList(pets, totalUnfiltered, totalScanned)
 	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
 
-local function rebuildFilterChips()
+rebuildFilterChips = function()
 	for _, child in ipairs(UI.filterChipScroll:GetChildren()) do
 		if child ~= UI.filterChipLayout then
 			child:Destroy()
@@ -6554,7 +6566,7 @@ local function rebuildFilterChips()
 	end
 end
 
-local function addFilterFromInput()
+addFilterFromInput = function()
 	local raw = UI.filterInput.Text
 	if raw == "" then
 		UI.filterHint.Text = "Type: Rio@1, Dori@3"
@@ -6605,7 +6617,7 @@ refreshList = function(rescan)
 	end
 end
 
-local function applyListsFromPets(pets, worldConfig, worldFilters)
+applyListsFromPets = function(pets, worldConfig, worldFilters)
 	local filteredPets = applyNameFilters(pets)
 	populateList(filteredPets, #pets)
 	if worldConfig then
@@ -6615,7 +6627,7 @@ local function applyListsFromPets(pets, worldConfig, worldFilters)
 	end
 end
 
-local function tickFarmLists(runId, world, filters, scanMode, mode)
+tickFarmLists = function(runId, world, filters, scanMode, mode)
 	mode = mode or (world and "world" or "pet")
 	if runId and not shouldFarmContinue(runId, mode) then
 		return false
@@ -6654,7 +6666,7 @@ local function tickFarmLists(runId, world, filters, scanMode, mode)
 	return runId == nil or shouldFarmContinue(runId, mode)
 end
 
-local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
+farmWaitWithListRefresh = function(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
 	mode = mode or (world and "world" or "pet")
 	local nextRefreshIn = 0
 	for sec = waitSec, 1, -1 do
@@ -6707,6 +6719,10 @@ refreshWorldList = function(rescan, worldConfig)
 		warn("[BloxMonster] World refresh error:", err)
 	end
 end
+
+end -- app handlers part 1
+
+do -- app handlers part 2 (local register limit)
 
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
@@ -7649,4 +7665,4 @@ task.defer(function()
 	task.defer(getWorldRemotes)
 end)
 
-end -- app handlers
+end -- app handlers part 2
