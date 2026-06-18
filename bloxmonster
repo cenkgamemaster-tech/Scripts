@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.1"
+local VERSION = "1.12.2"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2452,6 +2452,124 @@ stopContestDungeon = function()
 end
 
 end -- Capture Contest scope
+
+local contestScanRawText = ""
+
+openContestScanWindow = function(text)
+	text = text or ""
+	contestScanRawText = text
+
+	local existing = PlayerGui:FindFirstChild("BloxMonster_ContestScan")
+	if existing then
+		existing:Destroy()
+	end
+
+	local lineCount = math.max(1, select(2, text:gsub("\n", "\n")) + 1)
+	local bodyHeight = math.max(320, math.min(6000, lineCount * 14 + 12))
+
+	local scanScreen = Instance.new("ScreenGui")
+	scanScreen.Name = "BloxMonster_ContestScan"
+	scanScreen.ResetOnSpawn = false
+	scanScreen.DisplayOrder = 100
+	scanScreen.Parent = PlayerGui
+
+	local scanMain = Instance.new("Frame")
+	scanMain.Size = UDim2.new(0, 480, 0, 460)
+	scanMain.Position = UDim2.new(0.5, -240, 0.5, -230)
+	scanMain.AnchorPoint = Vector2.new(0.5, 0.5)
+	scanMain.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
+	scanMain.BorderSizePixel = 0
+	scanMain.Active = true
+	scanMain.Parent = scanScreen
+
+	Instance.new("UICorner", scanMain).CornerRadius = UDim.new(0, 10)
+
+	local scanTop = Instance.new("Frame")
+	scanTop.Size = UDim2.new(1, 0, 0, 30)
+	scanTop.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
+	scanTop.BorderSizePixel = 0
+	scanTop.Active = true
+	scanTop.Parent = scanMain
+	Instance.new("UICorner", scanTop).CornerRadius = UDim.new(0, 10)
+
+	local scanTitle = Instance.new("TextLabel")
+	scanTitle.Size = UDim2.new(1, -130, 1, 0)
+	scanTitle.Position = UDim2.new(0, 10, 0, 0)
+	scanTitle.BackgroundTransparency = 1
+	scanTitle.Text = ("Remotes (%d lines)"):format(lineCount)
+	scanTitle.TextColor3 = Color3.fromRGB(200, 255, 200)
+	scanTitle.TextSize = 13
+	scanTitle.Font = Enum.Font.GothamBold
+	scanTitle.TextXAlignment = Enum.TextXAlignment.Left
+	scanTitle.Parent = scanTop
+
+	local scanCopyBtn = Instance.new("TextButton")
+	scanCopyBtn.Size = UDim2.new(0, 56, 0, 22)
+	scanCopyBtn.Position = UDim2.new(1, -92, 0, 4)
+	scanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+	scanCopyBtn.BorderSizePixel = 0
+	scanCopyBtn.Text = "Copy"
+	scanCopyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanCopyBtn.TextSize = 11
+	scanCopyBtn.Font = Enum.Font.GothamBold
+	scanCopyBtn.Parent = scanTop
+	Instance.new("UICorner", scanCopyBtn).CornerRadius = UDim.new(0, 4)
+
+	local scanCloseBtn = Instance.new("TextButton")
+	scanCloseBtn.Size = UDim2.new(0, 30, 0, 30)
+	scanCloseBtn.Position = UDim2.new(1, -30, 0, 0)
+	scanCloseBtn.BackgroundTransparency = 1
+	scanCloseBtn.Text = "X"
+	scanCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanCloseBtn.TextSize = 16
+	scanCloseBtn.Font = Enum.Font.GothamBold
+	scanCloseBtn.Parent = scanTop
+
+	local scanScroll = Instance.new("ScrollingFrame")
+	scanScroll.Size = UDim2.new(1, -20, 1, -56)
+	scanScroll.Position = UDim2.new(0, 10, 0, 38)
+	scanScroll.BackgroundColor3 = Color3.fromRGB(10, 15, 25)
+	scanScroll.BorderSizePixel = 0
+	scanScroll.ScrollBarThickness = 10
+	scanScroll.CanvasSize = UDim2.new(0, 0, 0, bodyHeight + 8)
+	scanScroll.Parent = scanMain
+	Instance.new("UICorner", scanScroll).CornerRadius = UDim.new(0, 6)
+
+	local scanBody = Instance.new("TextLabel")
+	scanBody.Name = "Body"
+	scanBody.Size = UDim2.new(1, -8, 0, bodyHeight)
+	scanBody.Position = UDim2.new(0, 4, 0, 4)
+	scanBody.BackgroundTransparency = 1
+	scanBody.Text = text
+	scanBody.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanBody.TextSize = 12
+	scanBody.Font = Enum.Font.Gotham
+	scanBody.TextXAlignment = Enum.TextXAlignment.Left
+	scanBody.TextYAlignment = Enum.TextYAlignment.Top
+	scanBody.TextWrapped = false
+	scanBody.Parent = scanScroll
+
+	local scanTip = Instance.new("TextLabel")
+	scanTip.Size = UDim2.new(1, -20, 0, 18)
+	scanTip.Position = UDim2.new(0, 10, 1, -20)
+	scanTip.BackgroundTransparency = 1
+	scanTip.Text = "Also printed to executor console (F9). Paste list in chat."
+	scanTip.TextColor3 = Color3.fromRGB(180, 200, 180)
+	scanTip.TextSize = 10
+	scanTip.Font = Enum.Font.Gotham
+	scanTip.TextXAlignment = Enum.TextXAlignment.Left
+	scanTip.Parent = scanMain
+
+	scanCopyBtn.MouseButton1Click:Connect(function()
+		local copied = copyText(contestScanRawText)
+		scanTip.Text = copied and "Copied!" or "Copy from F9 console output."
+	end)
+
+	scanCloseBtn.MouseButton1Click:Connect(function()
+		contestScanRawText = ""
+		scanScreen:Destroy()
+	end)
+end
 
 -- Fuse / inventory discovery (Phase 1 – scoped to avoid 200-local limit).
 local scanFuseRelatedRemotesText
@@ -5621,9 +5739,39 @@ local dungeonStopCorner = Instance.new("UICorner")
 dungeonStopCorner.CornerRadius = UDim.new(0, 6)
 dungeonStopCorner.Parent = dungeonStopBtn
 
+local dungeonScanBtn = Instance.new("TextButton")
+dungeonScanBtn.Size = UDim2.new(0, 72, 0, 28)
+dungeonScanBtn.Position = UDim2.new(0, 162, 0, 112)
+dungeonScanBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
+dungeonScanBtn.BorderSizePixel = 0
+dungeonScanBtn.Text = "Remotes"
+dungeonScanBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
+dungeonScanBtn.TextSize = 10
+dungeonScanBtn.Font = Enum.Font.Gotham
+dungeonScanBtn.Parent = dungeonPanel
+
+local dungeonScanCorner = Instance.new("UICorner")
+dungeonScanCorner.CornerRadius = UDim.new(0, 6)
+dungeonScanCorner.Parent = dungeonScanBtn
+
+local dungeonScanCopyBtn = Instance.new("TextButton")
+dungeonScanCopyBtn.Size = UDim2.new(0, 72, 0, 28)
+dungeonScanCopyBtn.Position = UDim2.new(0, 240, 0, 112)
+dungeonScanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+dungeonScanCopyBtn.BorderSizePixel = 0
+dungeonScanCopyBtn.Text = "Copy"
+dungeonScanCopyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+dungeonScanCopyBtn.TextSize = 10
+dungeonScanCopyBtn.Font = Enum.Font.GothamBold
+dungeonScanCopyBtn.Parent = dungeonPanel
+
+local dungeonScanCopyCorner = Instance.new("UICorner")
+dungeonScanCopyCorner.CornerRadius = UDim.new(0, 6)
+dungeonScanCopyCorner.Parent = dungeonScanCopyBtn
+
 local dungeonStatusLabel = Instance.new("TextLabel")
-dungeonStatusLabel.Size = UDim2.new(1, -12, 0, 48)
-dungeonStatusLabel.Position = UDim2.new(0, 6, 0, 148)
+dungeonStatusLabel.Size = UDim2.new(1, -12, 0, 22)
+dungeonStatusLabel.Position = UDim2.new(0, 6, 0, 146)
 dungeonStatusLabel.BackgroundTransparency = 1
 dungeonStatusLabel.Text = "Dungeon idle"
 dungeonStatusLabel.TextColor3 = Color3.fromRGB(160, 210, 170)
@@ -5632,11 +5780,53 @@ dungeonStatusLabel.Font = Enum.Font.Gotham
 dungeonStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 dungeonStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
 dungeonStatusLabel.TextWrapped = true
+dungeonStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
 dungeonStatusLabel.Parent = dungeonPanel
 
+local dungeonScanScroll = Instance.new("ScrollingFrame")
+dungeonScanScroll.Size = UDim2.new(1, -12, 1, -178)
+dungeonScanScroll.Position = UDim2.new(0, 6, 0, 172)
+dungeonScanScroll.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+dungeonScanScroll.BorderSizePixel = 0
+dungeonScanScroll.ScrollBarThickness = 6
+dungeonScanScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+dungeonScanScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+dungeonScanScroll.Parent = dungeonPanel
+
+local dungeonScanScrollCorner = Instance.new("UICorner")
+dungeonScanScrollCorner.CornerRadius = UDim.new(0, 6)
+dungeonScanScrollCorner.Parent = dungeonScanScroll
+
+local dungeonScanContent = Instance.new("TextBox")
+dungeonScanContent.Size = UDim2.new(1, -8, 0, 0)
+dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
+dungeonScanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+dungeonScanContent.BackgroundTransparency = 0
+dungeonScanContent.BorderSizePixel = 0
+dungeonScanContent.Text = "Tap Remotes to list DungeonService remotes.\nCopy and paste the list here in chat."
+dungeonScanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
+dungeonScanContent.TextSize = 11
+dungeonScanContent.Font = Enum.Font.Gotham
+dungeonScanContent.TextXAlignment = Enum.TextXAlignment.Left
+dungeonScanContent.TextYAlignment = Enum.TextYAlignment.Top
+dungeonScanContent.TextWrapped = true
+dungeonScanContent.ClearTextOnFocus = false
+dungeonScanContent.MultiLine = true
+dungeonScanContent.TextEditable = false
+dungeonScanContent.AutomaticSize = Enum.AutomaticSize.Y
+dungeonScanContent.Parent = dungeonScanScroll
+
+local function updateDungeonScanCanvas()
+	local contentY = dungeonScanContent.AbsoluteSize.Y
+	local scrollY = dungeonScanScroll.AbsoluteWindowSize.Y
+	dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 12))
+end
+dungeonScanContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateDungeonScanCanvas)
+
 local dungeonInfoLabel = Instance.new("TextLabel")
-dungeonInfoLabel.Size = UDim2.new(1, -12, 0, 60)
-dungeonInfoLabel.Position = UDim2.new(0, 6, 0, 200)
+dungeonInfoLabel.Size = UDim2.new(1, -12, 0, 0)
+dungeonInfoLabel.Visible = false
 dungeonInfoLabel.BackgroundTransparency = 1
 dungeonInfoLabel.Text = "Elite: 4 floors × 3 pets. After kills pick perk portal (best rarity). Master needs key."
 dungeonInfoLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
@@ -5652,6 +5842,9 @@ UI.dungeonMasterKeyBtn = dungeonMasterKeyBtn
 UI.dungeonPerkBtn = dungeonPerkBtn
 UI.dungeonStartBtn = dungeonStartBtn
 UI.dungeonStopBtn = dungeonStopBtn
+UI.dungeonScanBtn = dungeonScanBtn
+UI.dungeonScanCopyBtn = dungeonScanCopyBtn
+UI.dungeonScanContent = dungeonScanContent
 UI.dungeonStatusLabel = dungeonStatusLabel
 end
 
@@ -7508,7 +7701,7 @@ local function runContestRemotesDump()
 	UI.dungeonScanBtn.Text = "..."
 	local ok, text, count = pcall(function()
 		if type(scanAllRemotesText) ~= "function" then
-			error("scanAllRemotesText missing – reload bloxmonster v1.12.3")
+			error("scanAllRemotesText missing – reload bloxmonster v1.12.2")
 		end
 		return scanAllRemotesText()
 	end)
