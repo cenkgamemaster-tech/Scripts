@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.8"
+local VERSION = "1.14.0"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1602,7 +1602,6 @@ local contestInDungeon = false
 local dungeonRoomVersion = 0
 local dungeonPerkReady = false
 local dungeonPerkVersion = 0
-local dungeonPerkConsumedVersion = 0
 local dungeonRunEnded = false
 local dungeonEventsHooked = false
 local dungeonPerkPayload = nil
@@ -2098,16 +2097,6 @@ local function waitForDungeonEntry(roomBefore, timeoutSec)
 	end, timeoutSec or 18)
 end
 
-local function waitForFreshPerkDoors(afterVersion, timeoutSec)
-	return waitForContestSignal(function()
-		return (dungeonPerkVersion > afterVersion and dungeonPerkReady) or dungeonRunEnded
-	end, timeoutSec or 90)
-end
-
-local function waitForPerkDoors(timeoutSec)
-	return waitForFreshPerkDoors(dungeonPerkConsumedVersion, timeoutSec)
-end
-
 scanAllRemotesText = function()
 	local lines = {
 		"=== DungeonService remotes ===",
@@ -2332,7 +2321,6 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 				ok and formatRemoteResult(result) or tostring(result)
 			))
 			if ok and isRemoteSuccess(result) ~= false then
-				dungeonPerkConsumedVersion = dungeonPerkVersion
 				dungeonPerkReady = false
 				dungeonPerkPayload = nil
 				task.wait(0.5)
@@ -2342,7 +2330,6 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 		if tryActivatePerkDoor(tryDoor) then
 			task.wait(2)
 			if dungeonRoomVersion > roomBefore or dungeonRunEnded then
-				dungeonPerkConsumedVersion = dungeonPerkVersion
 				dungeonPerkReady = false
 				dungeonPerkPayload = nil
 				setContestStatus(("ChoosePerk portal door %d => RoomChanged"):format(tryDoor))
@@ -2428,9 +2415,6 @@ local function waitForFloorBattle(durationSec, runId)
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false, "stopped"
 		end
-		if dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion then
-			return true, "perk"
-		end
 		if #getDungeonPetTargets() == 0 then
 			return true, "cleared"
 		end
@@ -2457,13 +2441,9 @@ local function advanceToNextFloor(runId, floorNum)
 	if not contestRunning or contestRunId ~= runId then
 		return false
 	end
-	local needPerkVersion = dungeonPerkConsumedVersion
-	setContestStatus(("Floor %d – waiting PerkDoorsReady..."):format(floorNum))
-	if not waitForFreshPerkDoors(needPerkVersion, 90) then
-		return dungeonRunEnded and false or nil
-	end
+	setContestStatus(("Floor %d – cleared, ChoosePerk..."):format(floorNum))
+	task.wait(1.5)
 	local roomBefore = dungeonRoomVersion
-	setContestStatus(("Floor %d – ChoosePerk (best rarity)..."):format(floorNum))
 	local perkOk = false
 	for attempt = 1, 5 do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
@@ -2474,11 +2454,7 @@ local function advanceToNextFloor(runId, floorNum)
 			break
 		end
 		setContestStatus(("Floor %d – ChoosePerk retry %d/5"):format(floorNum, attempt))
-		dungeonPerkReady = false
-		if not waitForFreshPerkDoors(dungeonPerkConsumedVersion, 20) then
-			break
-		end
-		task.wait(1)
+		task.wait(1.5)
 	end
 	if not perkOk then
 		return nil
@@ -2495,15 +2471,15 @@ local function advanceToNextFloor(runId, floorNum)
 end
 
 local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
-	local floorTpDone = false
+	local floorCombatStarted = false
 	local idleSince = wallClockSeconds()
+	if floorNum > 1 then
+		task.wait(2)
+	end
 	while contestRunning and contestRunId == runId and not dungeonRunEnded do
-		if dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion then
-			break
-		end
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
-			if not floorTpDone then
+			if not floorCombatStarted then
 				if wallClockSeconds() - idleSince > 120 then
 					setContestStatus(("Floor %d – no pets found (120s timeout)"):format(floorNum))
 					return nil
@@ -2517,12 +2493,12 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 		else
 			idleSince = wallClockSeconds()
 			local target = targets[1]
-			if not floorTpDone then
+			if not floorCombatStarted then
 				setContestStatus(("Floor %d – TP %s, wait %ds..."):format(
 					floorNum, target.name or target.model.Name, DUNGEON_FLOOR_BATTLE_SEC
 				))
 				engageContestEnemy(target.model)
-				floorTpDone = true
+				floorCombatStarted = true
 			else
 				setContestStatus(("Floor %d – fighting %ds (%d pets left)..."):format(
 					floorNum, DUNGEON_FLOOR_BATTLE_SEC, #targets
@@ -2532,17 +2508,21 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 			if not ok then
 				return false
 			end
-			if reason == "perk" or reason == "cleared" then
+			if reason == "cleared" then
 				break
 			end
 			targets = getDungeonPetTargets()
-			if #targets == 0 or (dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion) then
+			if #targets == 0 then
 				break
 			end
 		end
 	end
 	if dungeonRunEnded then
 		return false
+	end
+	if not floorCombatStarted then
+		setContestStatus(("Floor %d – no pets fought yet, skipping perk step"):format(floorNum))
+		return nil
 	end
 	while contestRunning and contestRunId == runId and not dungeonRunEnded do
 		local advanced = advanceToNextFloor(runId, floorNum)
