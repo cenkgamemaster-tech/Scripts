@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.7"
+local VERSION = "1.14.8"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -631,6 +631,8 @@ local CONTEST_DIFFICULTIES = {
 	{ id = "master", name = "Master", index = 4, floors = 5, petsPerFloor = 3, needsKey = true },
 }
 local DUNGEON_FLOOR_BATTLE_SEC = 60
+local DUNGEON_FLOOR_CLEAR_CONFIRM_SEC = 3
+local DUNGEON_FLOOR_CLEAR_POLL_SEC = 0.5
 local DUNGEON_RUN_COOLDOWN_SEC = 15
 local selectedContestDifficultyId = "elite"
 local contestUseMasterKey = true
@@ -1956,6 +1958,31 @@ local function getDungeonPetTargets()
 	return out
 end
 
+local function confirmDungeonFloorCleared(runId, timeoutSec)
+	timeoutSec = timeoutSec or (DUNGEON_FLOOR_CLEAR_CONFIRM_SEC + 2)
+	local deadline = wallClockSeconds() + timeoutSec
+	local clearSince = nil
+	while wallClockSeconds() < deadline do
+		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
+			return false
+		end
+		local count = #getDungeonPetTargets()
+		if count == 0 then
+			clearSince = clearSince or wallClockSeconds()
+			if wallClockSeconds() - clearSince >= DUNGEON_FLOOR_CLEAR_CONFIRM_SEC then
+				return true
+			end
+		else
+			if clearSince then
+				setContestStatus(("Floor not clear – %d pet(s) still alive"):format(count))
+			end
+			clearSince = nil
+		end
+		task.wait(DUNGEON_FLOOR_CLEAR_POLL_SEC)
+	end
+	return false
+end
+
 local function collectGuiTextBlob(guiObject)
 	local parts = {}
 	if guiObject:IsA("TextLabel") or guiObject:IsA("TextButton") then
@@ -2405,6 +2432,17 @@ local function tryActivatePerkDoor(doorIndex)
 end
 
 local function chooseDungeonPerk(pickMode, roomBefore)
+	local remaining = getDungeonPetTargets()
+	if #remaining > 0 then
+		setContestStatus(("Skip perk door – %d pet(s) left (e.g. %s)"):format(
+			#remaining, remaining[1].name or "?"
+		))
+		return false
+	end
+	if not confirmDungeonFloorCleared(contestRunId, DUNGEON_FLOOR_CLEAR_CONFIRM_SEC + 3) then
+		setContestStatus("Skip perk door – floor not confirmed clear")
+		return false
+	end
 	local remote = resolveDungeonRemote("ChoosePerk", "RemoteFunction")
 		or resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
 	if not remote then
@@ -2465,10 +2503,11 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 		end
 	end
 	task.wait(0.5)
+	if resumeDungeonCombatIfNeeded() then
+		return false
+	end
 	return false
 end
-
-local function tryStartBattlePrompt(model)
 	if not model then
 		return false
 	end
@@ -2513,16 +2552,36 @@ local function engageContestEnemy(model)
 	return true
 end
 
+local function resumeDungeonCombatIfNeeded()
+	local remaining = getDungeonPetTargets()
+	if #remaining > 0 then
+		setContestStatus(("Return to fight – %d pet(s) left"):format(#remaining))
+		engageContestEnemy(remaining[1].model)
+		return true
+	end
+	return false
+end
+
 local function waitForFloorBattle(durationSec, runId)
 	local start = wallClockSeconds()
+	local clearSince = nil
 	while wallClockSeconds() - start < durationSec do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false, "stopped"
 		end
-		if #getDungeonPetTargets() == 0 then
-			return true, "cleared"
+		local count = #getDungeonPetTargets()
+		if count == 0 then
+			clearSince = clearSince or wallClockSeconds()
+			if wallClockSeconds() - clearSince >= DUNGEON_FLOOR_CLEAR_CONFIRM_SEC then
+				return true, "cleared"
+			end
+		else
+			clearSince = nil
 		end
-		task.wait(0.5)
+		task.wait(DUNGEON_FLOOR_CLEAR_POLL_SEC)
+	end
+	if confirmDungeonFloorCleared(runId, DUNGEON_FLOOR_CLEAR_CONFIRM_SEC + 1) then
+		return true, "cleared"
 	end
 	return true, "waited"
 end
@@ -2547,7 +2606,12 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 	end
 	setContestStatus(("Floor %d – pick perk (once)..."):format(floorNum))
 	task.wait(1)
-	selectPerkPortal(contestPerkPick, roomWhenCleared)
+	local perkOk = selectPerkPortal(contestPerkPick, roomWhenCleared)
+	if not perkOk then
+		if resumeDungeonCombatIfNeeded() then
+			return false
+		end
+	end
 	if dungeonRoomVersion > roomWhenCleared then
 		setContestStatus(("Floor %d → %d: next room ready, check pets"):format(floorNum, nextFloor))
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
@@ -2582,23 +2646,21 @@ local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
 				setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
 				task.wait(1.5)
 			else
-				setContestStatus(("Floor %d – cleared (no pets)"):format(floorNum))
-				return true
+				if confirmDungeonFloorCleared(runId) then
+					setContestStatus(("Floor %d – cleared (no pets)"):format(floorNum))
+					return true
+				end
+				setContestStatus(("Floor %d – pets reappeared, keep fighting"):format(floorNum))
+				task.wait(1)
 			end
 		else
 			idleSince = wallClockSeconds()
 			local target = targets[1]
-			if not floorCombatStarted then
-				setContestStatus(("Floor %d – TP %s, wait %ds..."):format(
-					floorNum, target.name or target.model.Name, DUNGEON_FLOOR_BATTLE_SEC
-				))
-				engageContestEnemy(target.model)
-				floorCombatStarted = true
-			else
-				setContestStatus(("Floor %d – fighting %ds (%d pets left)..."):format(
-					floorNum, DUNGEON_FLOOR_BATTLE_SEC, #targets
-				))
-			end
+			setContestStatus(("Floor %d – TP %s (%d pets)..."):format(
+				floorNum, target.name or target.model.Name, #targets
+			))
+			engageContestEnemy(target.model)
+			floorCombatStarted = true
 			local ok, reason = waitForFloorBattle(DUNGEON_FLOOR_BATTLE_SEC, runId)
 			if not ok then
 				return false
@@ -2607,7 +2669,7 @@ local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
 				return true
 			end
 			targets = getDungeonPetTargets()
-			if #targets == 0 then
+			if #targets == 0 and confirmDungeonFloorCleared(runId) then
 				return true
 			end
 		end
@@ -2653,6 +2715,7 @@ local function runContestDungeon(runId, difficulty)
 					if transitionOk == true or dungeonRoomVersion > roomWhenCleared then
 						moved = true
 					elseif transitionOk == false then
+						setContestStatus("Floor " .. floor .. " – resume battle")
 						break
 					else
 						setContestStatus("Floor " .. floor .. " – waiting for next room...")
