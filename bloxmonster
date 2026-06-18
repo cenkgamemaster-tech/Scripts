@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.3"
+local VERSION = "1.13.4"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1701,6 +1701,14 @@ local function formatRemoteResult(result)
 	return tostring(result)
 end
 
+local function formatInvokeArgs(args)
+	local parts = {}
+	for _, v in ipairs(args) do
+		table.insert(parts, tostring(v))
+	end
+	return table.concat(parts, ", ")
+end
+
 local function isRemoteSuccess(result)
 	if result == false then
 		return false
@@ -2067,7 +2075,8 @@ end
 local function leaveDungeonKnit()
 	contestInDungeon = false
 	resetDungeonSignals()
-	local leave = resolveContestRemotePath(DUNGEON_RF.Leave)
+	local leave = resolveDungeonRemote("LeaveDungeon", "RemoteFunction")
+		or resolveContestRemotePath(DUNGEON_RF.Leave)
 	if leave then
 		pcall(function()
 			invokeContestRemote(leave)
@@ -2078,7 +2087,8 @@ end
 local function startDungeonKnit(difficulty, useKey)
 	ensureDungeonEventHooks()
 	resetDungeonSignals()
-	local startRemote = resolveContestRemotePath(DUNGEON_RF.Start)
+	local startRemote = resolveDungeonRemote("StartDungeon", "RemoteFunction")
+		or resolveContestRemotePath(DUNGEON_RF.Start)
 	if not startRemote then
 		setContestStatus("StartDungeon remote not found")
 		return false, "no remote"
@@ -2089,7 +2099,7 @@ local function startDungeonKnit(difficulty, useKey)
 		local roomBefore = dungeonRoomVersion
 		local ok, result = invokeContestRemote(startRemote, table.unpack(args))
 		lastResult = result
-		local argText = table.concat(args, ", ")
+		local argText = formatInvokeArgs(args)
 		local resultText = ok and formatRemoteResult(result) or ("ERR:" .. tostring(result))
 		setContestStatus(("StartDungeon(%s) => %s"):format(argText, resultText))
 		if ok then
@@ -2416,16 +2426,18 @@ startContestDungeon = function()
 				return runContestDungeon(runId, getContestDifficultyById(selectedContestDifficultyId))
 			end)
 			if not pcallOk and not tostring(runResult):find("cancelled", 1, true) then
+				leaveDungeonKnit()
 				setContestStatus("Error: " .. tostring(runResult))
 				warn("[BloxMonster Contest]", runResult)
 			end
 			if contestRunning and contestRunId == runId then
-				if pcallOk and runResult == false then
-					setContestStatus("Retry in 15s (open Capture Contest menu first)")
-					task.wait(15)
-				else
+				if pcallOk and runResult == true then
 					setContestStatus("Next run in 5s...")
 					task.wait(5)
+				else
+					leaveDungeonKnit()
+					setContestStatus("Retry in 15s (open Capture Contest menu first)")
+					task.wait(15)
 				end
 			end
 		end
