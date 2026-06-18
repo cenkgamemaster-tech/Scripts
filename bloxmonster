@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.0"
+local VERSION = "1.12.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -93,6 +93,8 @@ local WORKSPACE_PREFIX = nil
 
 -- Wild mobs live here in Blox Monsters (Instance names are often UUIDs; use billboard English names).
 local getWorldPets
+local getModelPosition
+local getDistanceToPlayer
 
 do -- wild pet scan (local register limit)
 local WILD_MOB_PATH_SUFFIX = "live.mobs.client"
@@ -348,7 +350,7 @@ local function getBillboardInfo(model)
 	return info
 end
 
-local function getModelPosition(model)
+getModelPosition = function(model)
 	local ok, pivot = pcall(function() return model:GetPivot() end)
 	if ok and pivot then
 		return pivot.Position
@@ -363,7 +365,7 @@ local function getModelPosition(model)
 	return nil
 end
 
-local function getDistanceToPlayer(model)
+getDistanceToPlayer = function(model)
 	local char = LocalPlayer.Character
 	if not char then
 		return nil
@@ -574,9 +576,8 @@ end
 end -- wild pet scan
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
-local DEFAULT_PET_FILTERS = {
-	{ name = "Rio", priority = 1 },
-}
+-- Empty by default so the Pets tab lists all nearby wild pets (add e.g. Rio@1 to filter/farm).
+local DEFAULT_PET_FILTERS = {}
 local nameFilters = {}
 for _, entry in ipairs(DEFAULT_PET_FILTERS) do
 	table.insert(nameFilters, { name = entry.name, priority = entry.priority })
@@ -7246,10 +7247,6 @@ local function startAutoFarm()
 	end
 	if worldHuntRunning then
 		UI.farmStatusLabel.Text = "Stop world hunt first"
-		return
-	end
-	if #nameFilters == 0 then
-		UI.farmStatusLabel.Text = "Add pets on Pets tab first"
 		return
 	end
 	petFarmRunId = petFarmRunId + 1
