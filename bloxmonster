@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.4"
+local VERSION = "1.13.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -91,8 +91,9 @@ local FARM_SPAWN_LOCATION = { x = -1248.016, y = 1030.503, z = -1451.140 }
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
 
--- Pet scan (Pets / Worlds / Dungeon share this – same as v1.10.7 working build).
+-- Pet scan: Pets/Worlds use getWorldPets; Dungeon uses getDungeonPets (Live.Mobs.Client only).
 local getWorldPets
+local getDungeonPets
 local getModelPosition
 local getDistanceToPlayer
 
@@ -344,6 +345,142 @@ getWorldPets = function()
 		for _, desc in ipairs(root:GetDescendants()) do
 			if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
 				consider(desc)
+			end
+		end
+	end
+
+	table.sort(found, function(a, b)
+		if a.sortKey ~= b.sortKey then
+			return a.sortKey < b.sortKey
+		end
+		local da, db = a.distance or math.huge, b.distance or math.huge
+		if da ~= db then
+			return da < db
+		end
+		return a.name < b.name
+	end)
+
+	return found
+end
+
+local LIVE_MOBS_PATH_SUFFIX = "live.mobs.client"
+
+local function findChildInsensitive(parent, name)
+	if not parent then
+		return nil
+	end
+	local direct = parent:FindFirstChild(name)
+	if direct then
+		return direct
+	end
+	local lower = name:lower()
+	for _, child in ipairs(parent:GetChildren()) do
+		if child.Name:lower() == lower then
+			return child
+		end
+	end
+	return nil
+end
+
+local function getLiveMobsClientRoots()
+	local roots = {}
+	local live = findChildInsensitive(Workspace, "Live")
+	if live then
+		local mobs = findChildInsensitive(live, "Mobs")
+		if mobs then
+			local client = findChildInsensitive(mobs, "Client")
+			if client then
+				table.insert(roots, client)
+			end
+		end
+	end
+	return roots
+end
+
+local function isUnderLiveMobsClient(model)
+	local ok, fullName = pcall(function()
+		return model:GetFullName()
+	end)
+	if not ok or not fullName then
+		return false
+	end
+	return fullName:lower():find(LIVE_MOBS_PATH_SUFFIX, 1, true) ~= nil
+end
+
+local function tryBuildDungeonPetEntry(model, playerChars)
+	if not model or model.ClassName ~= "Model" or playerChars[model] then
+		return nil
+	end
+	if not isUnderLiveMobsClient(model) then
+		return nil
+	end
+
+	local okName, fullName = pcall(function() return model:GetFullName() end)
+	if not okName or not fullName or isEquippedPetPath(fullName) then
+		return nil
+	end
+
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return nil
+	end
+
+	local bb = {}
+	local billboard = model:FindFirstChildWhichIsA("BillboardGui", true)
+	if billboard then
+		readBillboardFromGui(billboard, bb)
+		if not next(bb) then
+			for _, labelName in ipairs(BILLBOARD_LABELS) do
+				local text = getBillboardLabel(model, labelName)
+				if text then
+					bb[labelName] = text
+				end
+			end
+		end
+	end
+
+	local petName = bb.PetName or bb.MonsterName or bb.Name or bb.NpcName or model.Name
+	local rarity = bb.Rarity
+	local tier = bb.Tier or getAttr(model, "Tier")
+	local level = bb.Level or getAttr(model, "Level")
+	local mutation = bb.Mutation or getAttr(model, "Mutation")
+	local shiny = bb.Shiny or getAttr(model, "Shiny")
+	local rarityKey = rarity and tostring(rarity):gsub("^%s+", ""):gsub("%s+$", "") or ""
+
+	return {
+		model = model,
+		name = tostring(petName),
+		rarity = rarity and tostring(rarity) or "—",
+		tier = tier and tostring(tier) or "—",
+		level = level and tostring(level) or "—",
+		mutation = mutation and tostring(mutation) or "—",
+		shiny = shiny and tostring(shiny) or "—",
+		distance = getDistanceToPlayer(model),
+		path = fullName,
+		sortKey = RARITY_ORDER[rarityKey] or RARITY_ORDER[tostring(tier or "")] or 99,
+	}
+end
+
+getDungeonPets = function()
+	local found = {}
+	local seen = {}
+	local playerChars = getPlayerCharacterSet()
+
+	local function consider(model)
+		if seen[model] then
+			return
+		end
+		seen[model] = true
+		local ok, entry = pcall(tryBuildDungeonPetEntry, model, playerChars)
+		if ok and entry then
+			table.insert(found, entry)
+		end
+	end
+
+	for _, clientRoot in ipairs(getLiveMobsClientRoots()) do
+		for _, child in ipairs(clientRoot:GetChildren()) do
+			if child:IsA("Model") then
+				consider(child)
 			end
 		end
 	end
@@ -1604,7 +1741,7 @@ local function getModelHumanoid(model)
 end
 
 local function getDungeonPetTargets()
-	local ok, pets = pcall(getWorldPets)
+	local ok, pets = pcall(getDungeonPets)
 	if not ok or not pets then
 		return {}
 	end
