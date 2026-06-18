@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.5"
+local VERSION = "1.12.0"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1435,13 +1435,25 @@ local CONTEST_REMOTE_KEYWORDS = {
 	"contest", "capture", "dungeon", "challenge", "tower", "raid", "floor", "perk",
 	"elite", "master", "standard", "advanced", "trial", "wave", "mode", "enter",
 }
-local CONTEST_REMOTE_CANDIDATES = {
-	"ReplicatedStorage.Remotes.CaptureContest",
-	"ReplicatedStorage.Remotes.Contest",
-	"ReplicatedStorage.Remotes.Dungeon",
-	"ReplicatedStorage.Remotes.Tower",
-	"ReplicatedStorage.Remotes.Challenge",
-	"ReplicatedStorage.Remotes.StartContest",
+local CONTEST_KNIT_SERVICE_KEYWORDS = {
+	"contest", "dungeon", "tower", "raid", "challenge", "wave", "perk", "mode", "floor", "minigame",
+}
+local CONTEST_START_RF_NAMES = {
+	"Start", "Enter", "Begin", "Challenge", "StartRun", "StartDungeon", "StartContest",
+	"SelectDifficulty", "Play", "Join", "Queue", "PickDifficulty", "RequestStart", "StartFloor",
+}
+local CONTEST_KNIT_REMOTE_CANDIDATES = {
+	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.Enter",
+	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.StartRun",
+	"ReplicatedStorage.Packages.Knit.Services.TowerService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.ContestService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.CaptureContestService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.ChallengeService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.WaveService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.ModeService.RF.Start",
+	"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget",
+	"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack",
 }
 local CONTEST_UI_KEYWORDS = {
 	"contest", "capture", "dungeon", "challenge", "tower", "elite", "master", "floor", "raid",
@@ -1518,6 +1530,229 @@ local function resolveContestRemotePath(pathString)
 	return nil
 end
 
+local function isOurGuiPath(path)
+	return path and path:find("BloxMonster", 1, true) ~= nil
+end
+
+local function getKnitServicesFolder()
+	local packages = ReplicatedStorage:FindFirstChild("Packages")
+	local knit = packages and packages:FindFirstChild("Knit")
+	return knit and knit:FindFirstChild("Services")
+end
+
+local function knitServiceMatchesContest(serviceName)
+	local n = (serviceName or ""):lower()
+	for _, kw in ipairs(CONTEST_KNIT_SERVICE_KEYWORDS) do
+		if n:find(kw, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function knitRemoteNameLooksLikeStart(name)
+	local lower = (name or ""):lower()
+	for _, sn in ipairs(CONTEST_START_RF_NAMES) do
+		if lower == sn:lower() or lower:find(sn:lower(), 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function scanKnitServicesSummary()
+	local lines = { "=== KNIT SERVICES (all names) ===" }
+	local services = getKnitServicesFolder()
+	if not services then
+		table.insert(lines, "  (Knit Services folder not found)")
+		return lines
+	end
+	for _, svc in ipairs(services:GetChildren()) do
+		local tag = knitServiceMatchesContest(svc.Name) and "  * " or "    "
+		table.insert(lines, tag .. svc.Name)
+	end
+	table.insert(lines, "")
+	table.insert(lines, "=== CONTEST-LIKE KNIT REMOTES ===")
+	local found = 0
+	for _, svc in ipairs(services:GetChildren()) do
+		if knitServiceMatchesContest(svc.Name) then
+			table.insert(lines, ("  [%s]"):format(svc.Name))
+			for _, remote in ipairs(svc:GetDescendants()) do
+				if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+					found = found + 1
+					table.insert(lines, ("    %s (%s)"):format(remote.Name, remote.ClassName))
+				end
+			end
+		end
+	end
+	if found == 0 then
+		table.insert(lines, "  (none – look for * marked services above)")
+	end
+	return lines
+end
+
+local function collectContestKnitRemotes(prioritizeStart)
+	local list = {}
+	local seen = {}
+	local function add(remote, priority)
+		local key = remote:GetFullName()
+		if seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(list, { remote = remote, priority = priority or 0 })
+	end
+	for _, path in ipairs(CONTEST_KNIT_REMOTE_CANDIDATES) do
+		local remote = resolveContestRemotePath(path)
+		if remote then
+			add(remote, 100)
+		end
+	end
+	local services = getKnitServicesFolder()
+	if services then
+		for _, svc in ipairs(services:GetChildren()) do
+			if knitServiceMatchesContest(svc.Name) then
+				for _, remote in ipairs(svc:GetDescendants()) do
+					if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+						local pri = knitRemoteNameLooksLikeStart(remote.Name) and 50 or 10
+						add(remote, pri)
+					end
+				end
+			end
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.priority ~= b.priority then
+			return a.priority > b.priority
+		end
+		return a.remote:GetFullName() < b.remote:GetFullName()
+	end)
+	local out = {}
+	for _, entry in ipairs(list) do
+		table.insert(out, entry.remote)
+	end
+	return out
+end
+
+local function buildContestStartArgSets(difficulty, useKey)
+	local argSets = {
+		{ difficulty.index },
+		{ difficulty.name },
+		{ difficulty.id },
+		{ tostring(difficulty.index) },
+		{ difficulty.name:upper() },
+		{ difficulty.index, useKey and difficulty.needsKey or false },
+		{ difficulty.name, useKey and difficulty.needsKey or false },
+	}
+	if difficulty.needsKey and useKey then
+		table.insert(argSets, { difficulty.index, true })
+		table.insert(argSets, { difficulty.name, true })
+		table.insert(argSets, { "Master", true })
+	end
+	return argSets
+end
+
+local function tryKnitRemote(remote, argSets)
+	for _, args in ipairs(argSets) do
+		local ok = pcall(function()
+			fireRemote(remote, table.unpack(args))
+		end)
+		if ok then
+			return true, args
+		end
+	end
+	return false
+end
+
+local function tryClickContestUI(difficulty)
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then
+		return false
+	end
+	local mainUI = gui:FindFirstChild("MainUI") or gui:FindFirstChild("Main")
+	local searchRoots = { gui }
+	if mainUI then
+		table.insert(searchRoots, 1, mainUI)
+	end
+	local diffLower = difficulty.name:lower()
+	local actionWords = { "start", "challenge", "play", "begin", "enter", "fight", "go" }
+	for _, root in ipairs(searchRoots) do
+		for _, fname in ipairs({ "ContestFrame", "CaptureContestFrame", "DungeonFrame", "TowerFrame", "ChallengeFrame" }) do
+			local frame = root:FindFirstChild(fname, true)
+			if frame and frame:IsA("GuiObject") and frame.Visible then
+				for _, desc in ipairs(frame:GetDescendants()) do
+					if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+						local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
+						if blob:find(diffLower, 1, true) then
+							if clickContestGuiButton(desc) then
+								setContestStatus("UI difficulty: " .. desc:GetFullName())
+								return true
+							end
+						end
+					end
+				end
+			end
+		end
+		for _, desc in ipairs(root:GetDescendants()) do
+			if isOurGuiPath(desc:GetFullName()) then
+				-- skip
+			elseif (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
+				if textMatchesContestKeywords(blob) then
+					if blob:find(diffLower, 1, true) then
+						for _, word in ipairs(actionWords) do
+							if blob:find(word, 1, true) then
+								if clickContestGuiButton(desc) then
+									setContestStatus("UI: " .. desc:GetFullName())
+									return true
+								end
+							end
+						end
+						if clickContestGuiButton(desc) then
+							setContestStatus("UI diff btn: " .. desc:GetFullName())
+							return true
+						end
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function tryCombatEngage(model)
+	local setTarget = resolveContestRemotePath(
+		"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget"
+	)
+	if not setTarget or not model then
+		return false
+	end
+	local uid = model:GetAttribute("UID") or model:GetAttribute("Id") or model:GetAttribute("PetId")
+	local argSets = {
+		{ model },
+		{ model.Name },
+		{ uid },
+		{ tostring(uid) },
+	}
+	for _, args in ipairs(argSets) do
+		if args[1] and pcall(function()
+			fireRemote(setTarget, table.unpack(args))
+		end) then
+			task.wait(0.25)
+			local attack = resolveContestRemotePath(
+				"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack"
+			)
+			if attack then
+				pcall(function()
+					fireRemote(attack)
+				end)
+			end
+			return true
+		end
+	end
+	return false
+end
+
 local function textMatchesContestKeywords(text)
 	if not text or text == "" then
 		return false
@@ -1571,19 +1806,14 @@ local function collectAllRemotes()
 end
 
 scanAllRemotesText = function()
+	local lines = {}
+	for _, line in ipairs(scanKnitServicesSummary()) do
+		table.insert(lines, line)
+	end
+	table.insert(lines, "")
 	local remotes, visited = collectAllRemotes()
-	local lines = {
-		"=== ALL REMOTES ===",
-		("Found: %d remote(s), scanned %d instance(s)"):format(#remotes, visited),
-		"",
-		"--- ReplicatedStorage top-level ---",
-	}
-	for _, child in ipairs(ReplicatedStorage:GetChildren()) do
-		table.insert(lines, ("  %s (%s)"):format(child.Name, child.ClassName))
-	end
-	if #ReplicatedStorage:GetChildren() == 0 then
-		table.insert(lines, "  (ReplicatedStorage has no children yet – wait for game load)")
-	end
+	table.insert(lines, "=== ALL REMOTES ===")
+	table.insert(lines, ("Found: %d remote(s), scanned %d instance(s)"):format(#remotes, visited))
 	table.insert(lines, "")
 	table.insert(lines, "--- Remote list ---")
 	if #remotes == 0 then
@@ -1607,20 +1837,20 @@ local function collectContestRemotes()
 		seen[key] = true
 		table.insert(list, remote)
 	end
-	for _, path in ipairs(CONTEST_REMOTE_CANDIDATES) do
-		local remote = resolveContestRemotePath(path)
-		if remote then
-			add(remote)
-		end
+	for _, remote in ipairs(collectContestKnitRemotes(true)) do
+		add(remote)
 	end
-	for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
-		if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-			local full = inst:GetFullName():lower()
-			local n = inst.Name:lower()
-			for _, kw in ipairs(CONTEST_REMOTE_KEYWORDS) do
-				if n:find(kw, 1, true) or full:find(kw, 1, true) then
-					add(inst)
-					break
+	local services = getKnitServicesFolder()
+	if services then
+		for _, inst in ipairs(services:GetDescendants()) do
+			if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+				local full = inst:GetFullName():lower()
+				local n = inst.Name:lower()
+				for _, kw in ipairs(CONTEST_REMOTE_KEYWORDS) do
+					if n:find(kw, 1, true) or full:find(kw, 1, true) then
+						add(inst)
+						break
+					end
 				end
 			end
 		end
@@ -1629,10 +1859,6 @@ local function collectContestRemotes()
 		return a:GetFullName() < b:GetFullName()
 	end)
 	return list
-end
-
-local function isOurGuiPath(path)
-	return path and path:find("BloxMonster", 1, true) ~= nil
 end
 
 local function scanContestUIButtons()
@@ -1857,73 +2083,28 @@ local function tryContestProximityStart()
 end
 
 local function tryStartContest(difficulty, useKey)
-	local remotes = collectContestRemotes()
-	local argSets = {
-		{ difficulty.name },
-		{ difficulty.id },
-		{ difficulty.index },
-		{ tostring(difficulty.index) },
-		{ difficulty.name:upper() },
-		{ "CaptureContest", difficulty.id },
-		{ "CaptureContest", difficulty.name },
-		{ "CaptureContest", difficulty.index },
-		{ "Contest", difficulty.id },
-		{ "Contest", difficulty.name },
-		{ "Start", difficulty.id },
-		{ "Start", difficulty.index },
-		{ "Start", difficulty.name },
-		{ "Challenge", difficulty.id },
-		{ "Challenge", difficulty.name },
-		{ "Enter", difficulty.id },
-		{ "Enter", difficulty.name },
-	}
-	if difficulty.needsKey and useKey then
-		table.insert(argSets, { difficulty.id, true })
-		table.insert(argSets, { difficulty.name, true })
-		table.insert(argSets, { difficulty.index, true })
-		table.insert(argSets, { "Master", true })
-		table.insert(argSets, { difficulty.id, "key" })
-		table.insert(argSets, { difficulty.name, true, true })
+	if tryClickContestUI(difficulty) then
+		task.wait(0.5)
+		return true
 	end
+	local argSets = buildContestStartArgSets(difficulty, useKey)
+	local remotes = collectContestKnitRemotes(true)
 	for _, remote in ipairs(remotes) do
-		for _, args in ipairs(argSets) do
-			local ok = pcall(function()
-				fireRemote(remote, table.unpack(args))
-			end)
-			if ok then
-				setContestStatus(("Fired %s(%s)"):format(
-					remote.Name, table.concat(args, ", ")
-				))
-				task.wait(0.5)
-				return true
-			end
+		local ok, args = tryKnitRemote(remote, argSets)
+		if ok then
+			setContestStatus(("Knit %s(%s)"):format(
+				remote:GetFullName(), table.concat(args, ", ")
+			))
+			task.wait(0.5)
+			return true
 		end
 	end
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if gui then
-		local diffLower = difficulty.name:lower()
-		local actionWords = { "start", "challenge", "play", "begin", "enter", "fight" }
-		for _, desc in ipairs(gui:GetDescendants()) do
-			if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-				if textMatchesContestKeywords(blob) then
-					local matchDiff = blob:find(diffLower, 1, true)
-					local matchAction = false
-					for _, word in ipairs(actionWords) do
-						if blob:find(word, 1, true) then
-							matchAction = true
-							break
-						end
-					end
-					if matchDiff or matchAction then
-						if clickContestGuiButton(desc) then
-							setContestStatus("Clicked UI: " .. desc:GetFullName())
-							task.wait(0.5)
-							return true
-						end
-					end
-				end
-			end
+	for _, remote in ipairs(collectContestRemotes()) do
+		local ok, args = tryKnitRemote(remote, argSets)
+		if ok then
+			setContestStatus(("Fired %s(%s)"):format(remote.Name, table.concat(args, ", ")))
+			task.wait(0.5)
+			return true
 		end
 	end
 	if tryContestProximityStart() then
@@ -1988,6 +2169,9 @@ local function engageContestEnemy(model)
 	end
 	teleportToPet(model)
 	task.wait(0.35)
+	if tryCombatEngage(model) then
+		return true
+	end
 	for _, prompt in ipairs(model:GetDescendants()) do
 		if prompt:IsA("ProximityPrompt") then
 			local action = (prompt.ActionText or ""):lower()
