@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.5"
+local VERSION = "1.11.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2517,6 +2517,19 @@ copyFuseDiscoveryLog = function()
 end
 
 do -- fuse helpers scope (Luau 200-local register limit)
+-- Shared across knit / auto-fuse blocks (sibling do scopes cannot see each other's locals).
+local readPetField
+local isKnitPetRecord
+local knitPetCache
+local knitPetSyncSource
+local knitPetFullSyncAttempted
+local ensurePetListeners
+local syncKnitPetCacheFromKnit
+local getKnitModule
+local findKnitPetTable
+local mergePetsIntoCache
+local KNIT_PET_CONTROLLER_NAMES
+
 local function findPetServiceFolder()
 	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
 		if desc.Name == "PetService" and desc:FindFirstChild("RE") then
@@ -2659,7 +2672,7 @@ end
 end -- remotes + PetService scan
 
 do -- knit pet cache sync (local register limit)
-local KNIT_PET_CONTROLLER_NAMES = {
+KNIT_PET_CONTROLLER_NAMES = {
 	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
 	"PetServiceController", "PetClientController", "DataController", "PlayerDataController",
 	"ReplicaController", "ClientDataController",
@@ -2679,7 +2692,7 @@ local function isKnitNonPetValue(value)
 	return t == "RBXScriptSignal" or t == "Instance" or t == "function"
 end
 
-local function readPetField(pet, ...)
+readPetField = function(pet, ...)
 	for _, key in ipairs({ ... }) do
 		local ok, val = pcall(function()
 			return pet[key]
@@ -2704,7 +2717,7 @@ local function looksLikeUidKey(key)
 	return false
 end
 
-local function isKnitPetRecord(value, uidOverride)
+isKnitPetRecord = function(value, uidOverride)
 	if type(value) ~= "table" or isKnitNonPetValue(value) then
 		return false
 	end
@@ -2724,7 +2737,7 @@ local function isKnitPetRecord(value, uidOverride)
 	return true
 end
 
-local knitPetCache = {}
+knitPetCache = {}
 local petListenersConnected = false
 
 local function petRecordRichness(data)
@@ -2798,7 +2811,7 @@ local function ingestPetPayload(...)
 	end
 end
 
-local function ensurePetListeners()
+ensurePetListeners = function()
 	if petListenersConnected then
 		return
 	end
@@ -2825,7 +2838,7 @@ local function ensurePetListeners()
 	petListenersConnected = true
 end
 
-local function findKnitPetTable(value, depth)
+findKnitPetTable = function(value, depth)
 	depth = depth or 0
 	if depth > 5 or type(value) ~= "table" then
 		return nil
@@ -2860,7 +2873,7 @@ local function findKnitPetTable(value, depth)
 	return nil
 end
 
-local function getKnitModule()
+getKnitModule = function()
 	local packages = ReplicatedStorage:FindFirstChild("Packages")
 	local knitModule = packages and packages:FindFirstChild("Knit")
 	if knitModule then
@@ -3017,7 +3030,7 @@ local function tryTriggerPetInventoryLoad(ctrl)
 	end
 end
 
-local function mergePetsIntoCache(pets)
+mergePetsIntoCache = function(pets)
 	if type(pets) ~= "table" then
 		return 0
 	end
@@ -3051,8 +3064,8 @@ local function mergePetsIntoCache(pets)
 	return after - before
 end
 
-local knitPetSyncSource = nil
-local knitPetFullSyncAttempted = false
+knitPetSyncSource = nil
+knitPetFullSyncAttempted = false
 
 local function fetchDataControllerPetPools()
 	local Knit = getKnitModule()
@@ -3122,7 +3135,7 @@ local function fetchDataControllerPetPools()
 	return merged, source, total
 end
 
-local function syncKnitPetCacheFromKnit(opts)
+syncKnitPetCacheFromKnit = function(opts)
 	opts = opts or {}
 	ensurePetListeners()
 	local sources = {}
@@ -3298,6 +3311,11 @@ local function syncKnitPetCacheFromKnit(opts)
 	end
 	return n
 end
+
+task.defer(function()
+	ensurePetListeners()
+	syncKnitPetCacheFromKnit()
+end)
 
 end -- knit pet cache sync
 
@@ -4442,11 +4460,6 @@ openFuseDiscoveryWindow = function(initialText)
 
 	task.defer(updateFuseCanvasSize)
 end
-
-task.defer(function()
-	ensurePetListeners()
-	syncKnitPetCacheFromKnit()
-end)
 
 end -- fuse discovery scope
 
@@ -6192,6 +6205,12 @@ local getFarmStaySec
 local runPostCycleBonusFarm
 local runWorldFarmLoop
 local connectAllUIHandlers
+local startWorldFarm
+local startWorldHunt
+local startAutoFarm
+local stopAutoRefresh
+local maybeStartAutoFuseWithFarm
+local applyFarmSettingsFromUI
 
 
 do -- app handlers part 1 (local register limit)
@@ -7223,7 +7242,7 @@ updateFuseDuringFarmBtn = function()
 	end
 end
 
-local function maybeStartAutoFuseWithFarm()
+maybeStartAutoFuseWithFarm = function()
 	if not autoFuseDuringFarm then
 		return
 	end
@@ -7238,12 +7257,12 @@ end -- app handlers part 10
 do -- app handlers part 11 (local register limit)
 
 
-local function applyFarmSettingsFromUI()
+applyFarmSettingsFromUI = function()
 	pcall(applyFarmWaitFromInput)
 	pcall(applyFarmStayFromInput)
 end
 
-local function startWorldFarm()
+startWorldFarm = function()
 	if worldHuntRunning then
 		return false
 	end
@@ -7291,11 +7310,11 @@ end -- app handlers part 11
 do -- app handlers part 12 (local register limit)
 
 
-local function startWorldHunt()
+startWorldHunt = function()
 	startWorldFarm()
 end
 
-local function startAutoFarm()
+startAutoFarm = function()
 	if autoFarmRunning then
 		return
 	end
@@ -7374,7 +7393,7 @@ end -- app handlers part 12
 do -- app handlers part 13 (local register limit)
 
 
-local function stopAutoRefresh()
+stopAutoRefresh = function()
 	autoRefreshRunning = false
 	UI.autoRefreshBtn.Text = "Auto refresh: OFF"
 	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
@@ -7523,7 +7542,9 @@ connectAllUIHandlers = function()
 		refreshWorldList(false)
 	end)
 
-	UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
+	UI.worldHuntStartBtn.MouseButton1Click:Connect(function()
+		startWorldHunt()
+	end)
 	UI.worldHuntStopBtn.MouseButton1Click:Connect(function()
 		stopWorldHunt()
 	end)
@@ -7563,7 +7584,9 @@ connectAllUIHandlers = function()
 		UI.dungeonStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
 	end)
 
-	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
+	UI.farmStartBtn.MouseButton1Click:Connect(function()
+		startAutoFarm()
+	end)
 	UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
 	UI.closeBtn.MouseButton1Click:Connect(function()
