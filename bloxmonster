@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.1"
+local VERSION = "1.13.2"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -594,6 +594,7 @@ local CONTEST_DIFFICULTIES = {
 	{ id = "elite", name = "Elite", index = 3, floors = 4, petsPerFloor = 3, needsKey = false },
 	{ id = "master", name = "Master", index = 4, floors = 5, petsPerFloor = 3, needsKey = true },
 }
+local DUNGEON_FLOOR_BATTLE_SEC = 60
 local selectedContestDifficultyId = "elite"
 local contestUseMasterKey = true
 local contestPerkPick = "best"
@@ -2214,85 +2215,95 @@ local function engageContestEnemy(model)
 	return false
 end
 
-local function waitForEnemyDown(model, timeoutSec)
-	timeoutSec = timeoutSec or 60
-	if not model or not model.Parent then
-		return false
-	end
+local function waitForFloorBattle(durationSec, runId)
 	local start = wallClockSeconds()
 	local lastAttack = 0
-	while wallClockSeconds() - start < timeoutSec do
-		if not contestRunning then
-			return false
+	while wallClockSeconds() - start < durationSec do
+		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
+			return false, "stopped"
 		end
-		if dungeonRunEnded or dungeonPerkReady then
-			return true
+		if dungeonPerkReady then
+			return true, "perk"
 		end
-		if not model.Parent then
-			return true
+		if #getDungeonPetTargets() == 0 then
+			return true, "cleared"
 		end
-		local hum = getModelHumanoid(model)
-		if not hum or hum.Health <= 0 then
-			return true
+		if wallClockSeconds() - lastAttack > 2 then
+			local targets = getDungeonPetTargets()
+			if #targets > 0 then
+				tryCombatEngage(targets[1].model)
+				lastAttack = wallClockSeconds()
+			end
 		end
-		if wallClockSeconds() - lastAttack > 0.9 then
-			tryCombatEngage(model)
-			lastAttack = wallClockSeconds()
-		end
-		task.wait(0.4)
+		task.wait(0.5)
 	end
-	return false
+	return true, "waited"
 end
 
 local function selectPerkPortal(pickMode)
 	return chooseDungeonPerk(pickMode)
 end
 
-local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
-	local kills = 0
+local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
+	local teleported = false
 	local idleSince = wallClockSeconds()
-	while kills < killsNeeded and contestRunning and contestRunId == runId and not dungeonRunEnded do
+	while contestRunning and contestRunId == runId and not dungeonRunEnded do
 		if dungeonPerkReady then
-			setContestStatus(("Floor %d – perk doors open"):format(floorNum))
-			return true
+			break
 		end
-		setContestStatus(("Floor %d/%d – kill %d/%d"):format(
-			floorNum, difficulty.floors, kills + 1, killsNeeded
-		))
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
-			if wallClockSeconds() - idleSince > 90 then
-				setContestStatus(("Floor %d – no pets found (90s timeout)"):format(floorNum))
-				return false
+			if not teleported then
+				if wallClockSeconds() - idleSince > 90 then
+					setContestStatus(("Floor %d – no pets found (90s timeout)"):format(floorNum))
+					return false
+				end
+				setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
+				task.wait(1.5)
+			else
+				setContestStatus(("Floor %d – cleared (no pets)"):format(floorNum))
+				break
 			end
-			setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
-			task.wait(1.5)
 		else
 			idleSince = wallClockSeconds()
-			local target = targets[1].model
-			setContestStatus(("Floor %d – TP %s"):format(floorNum, targets[1].name or target.Name))
-			engageContestEnemy(target)
-			if waitForEnemyDown(target, 75) then
-				if dungeonPerkReady then
-					return true
-				end
-				kills = kills + 1
+			if not teleported then
+				local target = targets[1]
+				setContestStatus(("Floor %d – TP %s, wait %ds..."):format(
+					floorNum, target.name or target.model.Name, DUNGEON_FLOOR_BATTLE_SEC
+				))
+				engageContestEnemy(target.model)
+				teleported = true
 			else
-				setContestStatus("Battle timeout – retrying")
-				task.wait(1)
+				setContestStatus(("Floor %d – fighting %ds (%d pets left)..."):format(
+					floorNum, DUNGEON_FLOOR_BATTLE_SEC, #targets
+				))
+			end
+			local ok, reason = waitForFloorBattle(DUNGEON_FLOOR_BATTLE_SEC, runId)
+			if not ok then
+				return false
+			end
+			if reason == "perk" or reason == "cleared" then
+				break
+			end
+			targets = getDungeonPetTargets()
+			if #targets == 0 or dungeonPerkReady then
+				break
 			end
 		end
 	end
-	if dungeonPerkReady or kills >= killsNeeded then
-		setContestStatus(("Floor %d – waiting for perk doors"):format(floorNum))
-		waitForPerkDoors(60)
-		selectPerkPortal(contestPerkPick)
-		local roomBefore = dungeonRoomVersion
-		waitForDungeonEntry(roomBefore, 25)
-		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return not dungeonRunEnded
+	if dungeonRunEnded then
+		return false
 	end
-	return false
+	setContestStatus(("Floor %d – selecting perk..."):format(floorNum))
+	waitForPerkDoors(60)
+	if dungeonRunEnded then
+		return false
+	end
+	selectPerkPortal(contestPerkPick)
+	local roomBefore = dungeonRoomVersion
+	waitForDungeonEntry(roomBefore, 25)
+	task.wait(WORLD_TELEPORT_SETTLE_SEC)
+	return not dungeonRunEnded
 end
 
 local function runContestDungeon(runId, difficulty)
