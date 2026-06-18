@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.2"
+local VERSION = "1.11.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -91,6 +91,51 @@ local FARM_SPAWN_LOCATION = { x = -1248.016, y = 1030.503, z = -1451.140 }
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
 
+-- Wild mobs live here in Blox Monsters (Instance names are often UUIDs; use billboard English names).
+local WILD_MOB_PATH_SUFFIX = "live.mobs.client"
+
+local function findChildInsensitive(parent, name)
+	if not parent then
+		return nil
+	end
+	local direct = parent:FindFirstChild(name)
+	if direct then
+		return direct
+	end
+	local lower = name:lower()
+	for _, child in ipairs(parent:GetChildren()) do
+		if child.Name:lower() == lower then
+			return child
+		end
+	end
+	return nil
+end
+
+local function getWildMobScanRoots()
+	local roots = {}
+	local live = findChildInsensitive(Workspace, "Live")
+	if live then
+		local mobs = findChildInsensitive(live, "Mobs")
+		if mobs then
+			local client = findChildInsensitive(mobs, "Client")
+			if client then
+				table.insert(roots, client)
+			end
+		end
+	end
+	return roots
+end
+
+local function isUnderWildMobRoot(model)
+	local ok, fullName = pcall(function()
+		return model:GetFullName()
+	end)
+	if not ok or not fullName then
+		return false
+	end
+	return fullName:lower():find(WILD_MOB_PATH_SUFFIX, 1, true) ~= nil
+end
+
 -- Attribute names that suggest a model is a wild pet / monster.
 local PET_ATTR_KEYS = {
 	"PetId", "PetName", "MonsterName", "Monster", "MonsterId", "NpcId", "NPCId",
@@ -98,10 +143,89 @@ local PET_ATTR_KEYS = {
 }
 
 -- BillboardGui label names to read for display.
-local BILLBOARD_LABELS = { "Name", "PetName", "MonsterName", "Rarity", "Tier", "Level", "Mutation", "Shiny" }
+local BILLBOARD_LABELS = { "Name", "PetName", "MonsterName", "NpcName", "Rarity", "Tier", "Level", "Mutation", "Shiny" }
 local BILLBOARD_LABEL_SET = {}
 for _, labelName in ipairs(BILLBOARD_LABELS) do
 	BILLBOARD_LABEL_SET[labelName] = true
+end
+
+local function looksLikeUuid(text)
+	if type(text) ~= "string" or text == "" then
+		return true
+	end
+	local s = text:gsub("^%s+", ""):gsub("%s+$", "")
+	if s:match("^[%x%-]+$") and #s >= 16 then
+		return true
+	end
+	if #s >= 20 and s:find("-", 1, true) and not s:find(" ", 1, true) then
+		return true
+	end
+	return false
+end
+
+local function looksLikeEnglishPetName(text)
+	if type(text) ~= "string" then
+		return false
+	end
+	local s = text:gsub("^%s+", ""):gsub("%s+$", "")
+	if s == "" or s == "—" then
+		return false
+	end
+	if looksLikeUuid(s) then
+		return false
+	end
+	if s:match("^[%d%.]+$") then
+		return false
+	end
+	if not s:match("[A-Za-z]") then
+		return false
+	end
+	local lower = s:lower()
+	if lower:match("^lv%.?%d") or lower:match("^level") or lower == "shiny" or lower == "mutation" then
+		return false
+	end
+	return true
+end
+
+local function resolvePetDisplayName(model, bb)
+	bb = bb or {}
+	local candidates = {
+		bb.PetName,
+		bb.MonsterName,
+		bb.Name,
+		bb.NpcName,
+		getAttr(model, "PetName"),
+		getAttr(model, "MonsterName"),
+		getAttr(model, "DisplayName"),
+		getAttr(model, "NpcName"),
+	}
+	for _, candidate in ipairs(candidates) do
+		if looksLikeEnglishPetName(candidate) then
+			return tostring(candidate)
+		end
+	end
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("BillboardGui") then
+			for _, labelName in ipairs(BILLBOARD_LABELS) do
+				local lbl = desc:FindFirstChild(labelName, true)
+				if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and looksLikeEnglishPetName(lbl.Text) then
+					return lbl.Text:gsub("^%s+", ""):gsub("%s+$", "")
+				end
+			end
+			for _, lbl in ipairs(desc:GetDescendants()) do
+				if (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and looksLikeEnglishPetName(lbl.Text) then
+					local t = lbl.Text:gsub("^%s+", ""):gsub("%s+$", "")
+					if not BILLBOARD_LABEL_SET[lbl.Name] and #t >= 2 then
+						return t
+					end
+				end
+			end
+		end
+	end
+	if looksLikeEnglishPetName(model.Name) then
+		return model.Name
+	end
+	return nil
 end
 
 local RARITY_ORDER = {
@@ -360,11 +484,17 @@ local function tryBuildPetEntry(model, playerChars)
 	if hasCatchPrompt then
 		score = score + 2
 	end
-	if score < 2 then
+	if isUnderWildMobRoot(model) and humanoid then
+		score = math.max(score, 2)
+	end
+	if score < 2 and not isUnderWildMobRoot(model) then
 		return nil
 	end
 
-	local petName = bb.PetName or bb.MonsterName or bb.Name or model.Name
+	local petName = resolvePetDisplayName(model, bb)
+	if not petName then
+		return nil
+	end
 	local rarity = bb.Rarity
 	local tier = bb.Tier or getAttr(model, "Tier")
 	local level = bb.Level or getAttr(model, "Level")
@@ -387,7 +517,6 @@ local function tryBuildPetEntry(model, playerChars)
 end
 
 local function getWorldPets()
-	local root = getScanRoot()
 	local found = {}
 	local seen = {}
 	local playerChars = getPlayerCharacterSet()
@@ -403,10 +532,24 @@ local function getWorldPets()
 		end
 	end
 
-	if root then
-		for _, desc in ipairs(root:GetDescendants()) do
-			if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
-				consider(desc)
+	local mobRoots = getWildMobScanRoots()
+	if #mobRoots > 0 then
+		for _, mobRoot in ipairs(mobRoots) do
+			for _, desc in ipairs(mobRoot:GetDescendants()) do
+				if desc.ClassName == "Model" and desc ~= mobRoot then
+					if modelLooksLikeWildPet(desc) or desc:FindFirstChildOfClass("Humanoid") then
+						consider(desc)
+					end
+				end
+			end
+		end
+	else
+		local root = getScanRoot()
+		if root then
+			for _, desc in ipairs(root:GetDescendants()) do
+				if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
+					consider(desc)
+				end
 			end
 		end
 	end
@@ -6019,6 +6162,8 @@ local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
 local getSelectedWorldFilters
+local getSelectedWorldConfig
+local populateWorldList
 local setActiveTab
 local applyFarmWaitFromInput
 local applyFarmStayFromInput
@@ -6036,6 +6181,11 @@ local stopWorldHunt
 local stopAllFarm
 local updateFuseMutationsBtn
 local updateFuseDuringFarmBtn
+local updateFarmLocationEnableButton
+local refreshConfigStatusLabel
+local getFarmStaySec
+local runPostCycleBonusFarm
+local runWorldFarmLoop
 
 
 do -- app handlers part 1 (local register limit)
@@ -6049,7 +6199,7 @@ getWorldConfigById = function(worldId)
 	return nil
 end
 
-local function getSelectedWorldConfig()
+getSelectedWorldConfig = function()
 	return getWorldConfigById(selectedWorldId)
 end
 
@@ -6339,7 +6489,7 @@ populateList = function(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
-local function populateWorldList(pets, totalUnfiltered, totalScanned)
+populateWorldList = function(pets, totalUnfiltered, totalScanned)
 	local filters = getSelectedWorldFilters()
 	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
@@ -6576,11 +6726,11 @@ getFarmWaitSec = function()
 	return farmWaitSec
 end
 
-local function getFarmStaySec()
+getFarmStaySec = function()
 	return farmStaySec
 end
 
-local function refreshConfigStatusLabel()
+refreshConfigStatusLabel = function()
 	local locState = farmLocationEnabled and "ON" or "OFF"
 	UI.configStatusLabel.Text = ("Farm wait: %ds | Farm location: %s (%ds stay)"):format(
 		farmWaitSec,
@@ -6589,7 +6739,7 @@ local function refreshConfigStatusLabel()
 	)
 end
 
-local function updateFarmLocationEnableButton()
+updateFarmLocationEnableButton = function()
 	if farmLocationEnabled then
 		UI.farmLocationEnableBtn.Text = "Farm location before world cycle: ON"
 		UI.farmLocationEnableBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
@@ -6707,6 +6857,10 @@ runFarmLocationPhase = function(runId)
 	setWorldFarmStatus("Farm location stay complete – starting world cycle")
 	return true
 end
+
+end -- app handlers part 2
+
+do -- app handlers part 3 (local register limit)
 
 local function styleTabButton(btn, active)
 	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
@@ -6841,9 +6995,9 @@ refreshWorldFarmList = function(world, statusText, runId, scanMode)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
 
-end -- app handlers part 2
+end -- app handlers part 3
 
-do -- app handlers part 3 (local register limit)
+do -- app handlers part 4 (local register limit)
 
 local function collectBonusFarmFilters()
 	local out = {}
@@ -6873,7 +7027,7 @@ local function formatBonusTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-local function runPostCycleBonusFarm(runId)
+runPostCycleBonusFarm = function(runId)
 	local bonusFilters = collectBonusFarmFilters()
 	if #bonusFilters == 0 then
 		return
@@ -6932,7 +7086,7 @@ local function runPostCycleBonusFarm(runId)
 	end
 end
 
-local function runWorldFarmLoop(runId)
+runWorldFarmLoop = function(runId)
 	while shouldFarmContinue(runId, "world") do
 		if not runFarmLocationPhase(runId) then
 			break
@@ -7003,6 +7157,10 @@ local function runWorldFarmLoop(runId)
 	end
 end
 
+end -- app handlers part 4
+
+do -- app handlers part 5 (local register limit)
+
 updateFuseMutationsBtn = function()
 	if not UI or not UI.fuseMutationsBtn then
 		return
@@ -7038,6 +7196,10 @@ local function maybeStartAutoFuseWithFarm()
 	end
 	pcall(startAutoFuse)
 end
+
+end -- app handlers part 5
+
+do -- app handlers part 6 (local register limit)
 
 local function applyFarmSettingsFromUI()
 	pcall(applyFarmWaitFromInput)
@@ -7164,6 +7326,10 @@ local function startAutoFarm()
 		end
 	end)
 end
+
+end -- app handlers part 6
+
+do -- app handlers part 7 (local register limit)
 
 local function stopAutoRefresh()
 	autoRefreshRunning = false
@@ -7412,4 +7578,4 @@ task.defer(function()
 	task.defer(getWorldRemotes)
 end)
 
-end -- app handlers part 3
+end -- app handlers part 7
