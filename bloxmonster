@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.2"
+local VERSION = "1.11.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1577,15 +1577,14 @@ local function scanContestUIButtons()
 		return lines
 	end
 	for _, desc in ipairs(gui:GetDescendants()) do
-		if isOurGuiPath(desc:GetFullName()) then
-			continue
-		end
-		if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-			local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-			if textMatchesContestKeywords(blob) then
-				table.insert(lines, ("  %s (%s) text=%q"):format(
-					desc:GetFullName(), desc.ClassName, desc.Text or ""
-				))
+		if not isOurGuiPath(desc:GetFullName()) then
+			if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
+				if textMatchesContestKeywords(blob) then
+					table.insert(lines, ("  %s (%s) text=%q"):format(
+						desc:GetFullName(), desc.ClassName, desc.Text or ""
+					))
+				end
 			end
 		end
 	end
@@ -1604,23 +1603,16 @@ local function scanContestMenuFrames()
 	end
 	local foundFrame = false
 	for _, desc in ipairs(gui:GetDescendants()) do
-		if isOurGuiPath(desc:GetFullName()) then
-			continue
-		end
-		if not desc:IsA("GuiObject") or not desc.Visible then
-			continue
-		end
-		local name = desc.Name:lower()
-		local matched = false
-		for _, kw in ipairs(CONTEST_FRAME_KEYWORDS) do
-			if name:find(kw, 1, true) then
-				matched = true
-				break
+		if not isOurGuiPath(desc:GetFullName())
+			and desc:IsA("GuiObject") and desc.Visible then
+			local name = desc.Name:lower()
+			for _, kw in ipairs(CONTEST_FRAME_KEYWORDS) do
+				if name:find(kw, 1, true) then
+					foundFrame = true
+					table.insert(lines, ("  %s (%s)"):format(desc:GetFullName(), desc.ClassName))
+					break
+				end
 			end
-		end
-		if matched then
-			foundFrame = true
-			table.insert(lines, ("  %s (%s)"):format(desc:GetFullName(), desc.ClassName))
 		end
 	end
 	if not foundFrame then
@@ -1635,13 +1627,9 @@ local function scanContestMenuFrames()
 	table.insert(lines, "  Visible labels/buttons in open menus:")
 	local labelCount = 0
 	for _, desc in ipairs(gui:GetDescendants()) do
-		if isOurGuiPath(desc:GetFullName()) then
-			continue
-		end
-		if not desc:IsA("GuiObject") or not desc.Visible then
-			continue
-		end
-		if desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton") then
+		if not isOurGuiPath(desc:GetFullName())
+			and desc:IsA("GuiObject") and desc.Visible
+			and (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) then
 			local text = desc.Text or ""
 			if text ~= "" or desc:IsA("TextButton") or desc:IsA("ImageButton") then
 				labelCount = labelCount + 1
@@ -2146,10 +2134,21 @@ end
 end -- Capture Contest scope
 
 local contestScanWindowSetContent = nil
+local contestScanWindowTipLabel = nil
 
 openContestScanWindow = function(text)
+	text = text or ""
+	local existing = PlayerGui:FindFirstChild("BloxMonster_ContestScan")
+	if existing and not contestScanWindowSetContent then
+		existing:Destroy()
+	end
 	if contestScanWindowSetContent then
-		contestScanWindowSetContent(text or "")
+		contestScanWindowSetContent(text)
+		if contestScanWindowTipLabel then
+			contestScanWindowTipLabel.Text = ("Lines: %d – Copy or Ctrl+A in box"):format(
+				select(2, text:gsub("\n", "\n")) + 1
+			)
+		end
 		return
 	end
 
@@ -2157,6 +2156,7 @@ openContestScanWindow = function(text)
 	scanScreen.Name = "BloxMonster_ContestScan"
 	scanScreen.ResetOnSpawn = false
 	scanScreen.DisplayOrder = 100
+	scanScreen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	scanScreen.Parent = PlayerGui
 
 	local scanMain = Instance.new("Frame")
@@ -2167,6 +2167,7 @@ openContestScanWindow = function(text)
 	scanMain.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 	scanMain.BorderSizePixel = 0
 	scanMain.Active = true
+	scanMain.ZIndex = 1
 	scanMain.Parent = scanScreen
 
 	local scanCorner = Instance.new("UICorner")
@@ -2178,6 +2179,7 @@ openContestScanWindow = function(text)
 	scanTop.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
 	scanTop.BorderSizePixel = 0
 	scanTop.Active = true
+	scanTop.ZIndex = 2
 	scanTop.Parent = scanMain
 
 	local scanTopCorner = Instance.new("UICorner")
@@ -2194,6 +2196,7 @@ openContestScanWindow = function(text)
 	scanTitle.TextSize = 13
 	scanTitle.Font = Enum.Font.GothamBold
 	scanTitle.TextXAlignment = Enum.TextXAlignment.Left
+	scanTitle.ZIndex = 3
 	scanTitle.Parent = scanTop
 
 	local scanCopyBtn = Instance.new("TextButton")
@@ -2205,6 +2208,7 @@ openContestScanWindow = function(text)
 	scanCopyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
 	scanCopyBtn.TextSize = 10
 	scanCopyBtn.Font = Enum.Font.GothamBold
+	scanCopyBtn.ZIndex = 3
 	scanCopyBtn.Parent = scanTop
 
 	local scanCopyCorner = Instance.new("UICorner")
@@ -2219,6 +2223,7 @@ openContestScanWindow = function(text)
 	scanCloseBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
 	scanCloseBtn.TextSize = 20
 	scanCloseBtn.Font = Enum.Font.GothamBold
+	scanCloseBtn.ZIndex = 3
 	scanCloseBtn.Parent = scanTop
 
 	makeDraggable(scanMain, { scanTop, scanTitle })
@@ -2232,63 +2237,86 @@ openContestScanWindow = function(text)
 	scanScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
 	scanScroll.ScrollingDirection = Enum.ScrollingDirection.Y
 	scanScroll.CanvasSize = UDim2.new(0, 0, 0, 400)
+	scanScroll.ClipsDescendants = true
+	scanScroll.ZIndex = 2
 	scanScroll.Parent = scanMain
 
 	local scanScrollCorner = Instance.new("UICorner")
 	scanScrollCorner.CornerRadius = UDim.new(0, 6)
 	scanScrollCorner.Parent = scanScroll
 
+	-- TextEditable must be false or Roblox often hides script-set text until focused.
 	local scanContent = Instance.new("TextBox")
-	scanContent.Size = UDim2.new(1, -8, 0, 400)
+	scanContent.Size = UDim2.new(1, -8, 0, 0)
 	scanContent.Position = UDim2.new(0, 4, 0, 4)
-	scanContent.BackgroundTransparency = 1
-	scanContent.Text = text or ""
-	scanContent.TextColor3 = Color3.fromRGB(190, 210, 230)
-	scanContent.TextSize = 10
-	scanContent.Font = Enum.Font.Code
+	scanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+	scanContent.BackgroundTransparency = 0
+	scanContent.BorderSizePixel = 0
+	scanContent.Text = text
+	scanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
+	scanContent.TextSize = 11
+	scanContent.Font = Enum.Font.Gotham
 	scanContent.TextXAlignment = Enum.TextXAlignment.Left
 	scanContent.TextYAlignment = Enum.TextYAlignment.Top
 	scanContent.TextWrapped = true
 	scanContent.ClearTextOnFocus = false
 	scanContent.MultiLine = true
-	scanContent.TextEditable = true
+	scanContent.TextEditable = false
+	scanContent.AutomaticSize = Enum.AutomaticSize.Y
+	scanContent.ZIndex = 3
 	scanContent.Parent = scanScroll
 
 	local scanTip = Instance.new("TextLabel")
 	scanTip.Size = UDim2.new(1, -16, 0, 16)
 	scanTip.Position = UDim2.new(0, 8, 1, -18)
 	scanTip.BackgroundTransparency = 1
-	scanTip.Text = "Click text → Ctrl+A → Ctrl+C, or tap Copy."
+	scanTip.Text = ("Lines: %d – click box, Ctrl+A, Ctrl+C, or Copy"):format(
+		select(2, text:gsub("\n", "\n")) + 1
+	)
 	scanTip.TextColor3 = Color3.fromRGB(130, 160, 140)
 	scanTip.TextSize = 9
 	scanTip.Font = Enum.Font.Gotham
 	scanTip.TextXAlignment = Enum.TextXAlignment.Left
+	scanTip.ZIndex = 2
 	scanTip.Parent = scanMain
+	contestScanWindowTipLabel = scanTip
 
 	local function updateScanCanvas()
-		local lineCount = select(2, scanContent.Text:gsub("\n", "\n")) + 1
-		local estHeight = math.max(400, lineCount * 14 + 24)
-		scanContent.Size = UDim2.new(1, -8, 0, estHeight)
-		scanScroll.CanvasSize = UDim2.new(0, 0, 0, estHeight + 12)
+		task.defer(function()
+			if not scanContent or not scanContent.Parent then
+				return
+			end
+			local contentY = scanContent.AbsoluteSize.Y
+			local scrollY = scanScroll.AbsoluteWindowSize.Y
+			scanScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+		end)
 	end
 
 	contestScanWindowSetContent = function(newText)
+		newText = newText or ""
 		if scanContent and scanContent.Parent then
-			scanContent.Text = newText or ""
+			scanContent.Text = newText
+			if contestScanWindowTipLabel then
+				contestScanWindowTipLabel.Text = ("Lines: %d – click box, Ctrl+A, Ctrl+C, or Copy"):format(
+					select(2, newText:gsub("\n", "\n")) + 1
+				)
+			end
 			updateScanCanvas()
 		end
 	end
 
 	scanContent:GetPropertyChangedSignal("Text"):Connect(updateScanCanvas)
+	scanContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateScanCanvas)
 	updateScanCanvas()
 
 	scanCopyBtn.MouseButton1Click:Connect(function()
 		local copied = copyText(scanContent.Text or "")
-		scanTip.Text = copied and "Copied to clipboard." or "Select text → Ctrl+A → Ctrl+C."
+		scanTip.Text = copied and "Copied to clipboard." or "Click box → Ctrl+A → Ctrl+C."
 	end)
 
 	scanCloseBtn.MouseButton1Click:Connect(function()
 		contestScanWindowSetContent = nil
+		contestScanWindowTipLabel = nil
 		scanScreen:Destroy()
 	end)
 
@@ -5573,11 +5601,13 @@ dungeonScanScrollCorner.Parent = dungeonScanScroll
 local dungeonScanContent = Instance.new("TextBox")
 dungeonScanContent.Size = UDim2.new(1, -8, 0, 0)
 dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
-dungeonScanContent.BackgroundTransparency = 1
+dungeonScanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+dungeonScanContent.BackgroundTransparency = 0
+dungeonScanContent.BorderSizePixel = 0
 dungeonScanContent.Text = "Tap Scan with Capture Contest menu open.\nUse Copy scan, or click here → Ctrl+A → Ctrl+C."
-dungeonScanContent.TextColor3 = Color3.fromRGB(190, 210, 230)
-dungeonScanContent.TextSize = 10
-dungeonScanContent.Font = Enum.Font.Code
+dungeonScanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
+dungeonScanContent.TextSize = 11
+dungeonScanContent.Font = Enum.Font.Gotham
 dungeonScanContent.TextXAlignment = Enum.TextXAlignment.Left
 dungeonScanContent.TextYAlignment = Enum.TextYAlignment.Top
 dungeonScanContent.TextWrapped = true
@@ -7419,33 +7449,41 @@ local function connectAllUIHandlers()
 		UI.dungeonScanBtn.Text = "..."
 		openContestScanWindow("Scanning...\n\nKeep Capture Contest menu open.")
 		task.spawn(function()
+			task.wait(0.05)
 			local ok, text = pcall(function()
 				if type(scanContestRemotesText) ~= "function" then
-					error("scanContestRemotesText missing – reload script from bloxmonster (not old copy)")
+					error("scanContestRemotesText missing – reload bloxmonster (7243+ lines, v1.11.3)")
 				end
 				return scanContestRemotesText()
 			end)
 			if not ok then
 				text = "Scan error:\n" .. tostring(text)
 				warn("[BloxMonster Contest]", text)
+			elseif not text or text == "" then
+				text = "Scan returned empty (unexpected)."
+			end
+			if typeof(_G) == "table" then
+				_G.BloxMonsterLastContestScan = text
 			end
 			openContestScanWindow(text)
 			if UI.dungeonScanContent then
+				UI.dungeonScanContent.TextEditable = false
 				UI.dungeonScanContent.Text = text
 				local scroll = UI.dungeonScanContent.Parent
 				if scroll and scroll:IsA("ScrollingFrame") then
-					local lineCount = select(2, text:gsub("\n", "\n")) + 1
-					local estHeight = math.max(120, lineCount * 12 + 24)
-					UI.dungeonScanContent.Size = UDim2.new(1, -8, 0, estHeight)
-					scroll.CanvasSize = UDim2.new(0, 0, 0, estHeight + 12)
+					task.defer(function()
+						local contentY = UI.dungeonScanContent.AbsoluteSize.Y
+						local scrollY = scroll.AbsoluteWindowSize.Y
+						scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 16))
+					end)
 				end
 			end
 			local copied = copyText(text)
 			UI.dungeonStatusLabel.Text = copied
-				and "Scan done – copied to clipboard."
-				or "Scan done – see popup window."
+				and ("Scan done (%d lines) – copied."):format(select(2, text:gsub("\n", "\n")) + 1)
+				or ("Scan done (%d lines) – see popup."):format(select(2, text:gsub("\n", "\n")) + 1)
 			UI.dungeonScanBtn.Text = "Scan"
-			print("[BloxMonster]\n" .. text)
+			print("[BloxMonster Contest scan]\n" .. text)
 		end)
 	end)
 
