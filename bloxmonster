@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.2"
+local VERSION = "1.12.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -210,7 +210,7 @@ local function resolvePetDisplayName(model, bb)
 		end
 	end
 	for _, desc in ipairs(model:GetDescendants()) do
-		if desc:IsA("BillboardGui") then
+		if desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
 			for _, labelName in ipairs(BILLBOARD_LABELS) do
 				local lbl = desc:FindFirstChild(labelName, true)
 				if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and looksLikeEnglishPetName(lbl.Text) then
@@ -498,6 +498,26 @@ local function tryBuildPetEntry(model, playerChars)
 
 	local petName = resolvePetDisplayName(model, bb)
 	if not petName then
+		local raw = bb.PetName or bb.MonsterName or bb.Name or bb.NpcName
+		if raw and not looksLikeUuid(tostring(raw)) then
+			petName = tostring(raw):gsub("^%s+", ""):gsub("%s+$", "")
+		end
+	end
+	if not petName and isUnderWildMobRoot(model) then
+		for _, desc in ipairs(model:GetDescendants()) do
+			if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
+				local t = desc.Text:gsub("^%s+", ""):gsub("%s+$", "")
+				if not looksLikeUuid(t) and t:match("[A-Za-z]") and #t >= 2 then
+					local lower = t:lower()
+					if lower ~= "shiny" and lower ~= "mutation" and not lower:match("^lv%.?%d") and not lower:match("^level") then
+						petName = t
+						break
+					end
+				end
+			end
+		end
+	end
+	if not petName then
 		return nil
 	end
 	local rarity = bb.Rarity
@@ -548,7 +568,8 @@ getWorldPets = function()
 				end
 			end
 		end
-	else
+	end
+	if #found == 0 then
 		local root = getScanRoot()
 		if root then
 			for _, desc in ipairs(root:GetDescendants()) do
@@ -6759,9 +6780,15 @@ refreshList = function(rescan)
 		local pets = getCachedWorldPets(scanMode)
 		local filtered = applyNameFilters(pets)
 		populateList(filtered, #pets)
+		if UI and UI.farmStatusLabel and rescan == true then
+			UI.farmStatusLabel.Text = ("Found %d pet(s)"):format(#filtered)
+		end
 	end)
 	if not ok then
 		warn("[BloxMonster] Refresh error:", err)
+		if UI and UI.farmStatusLabel then
+			UI.farmStatusLabel.Text = "Refresh error – see F9"
+		end
 	end
 end
 
