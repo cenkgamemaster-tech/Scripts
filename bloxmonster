@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.4"
+local VERSION = "1.11.5"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1533,30 +1533,65 @@ end
 
 local function collectAllRemotes()
 	local list = {}
-	for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
-		if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-			table.insert(list, inst)
+	local seen = {}
+	local visited = 0
+	local function visit(root)
+		if not root then
+			return
 		end
+		local function walk(inst, depth)
+			if depth > 25 then
+				return
+			end
+			visited = visited + 1
+			if visited % 300 == 0 then
+				task.wait()
+			end
+			if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+				local key = inst:GetFullName()
+				if not seen[key] then
+					seen[key] = true
+					table.insert(list, inst)
+				end
+			end
+			for _, child in ipairs(inst:GetChildren()) do
+				walk(child, depth + 1)
+			end
+		end
+		walk(root, 0)
 	end
+	visit(ReplicatedStorage)
+	pcall(function()
+		visit(game:GetService("ReplicatedFirst"))
+	end)
 	table.sort(list, function(a, b)
 		return a:GetFullName() < b:GetFullName()
 	end)
-	return list
+	return list, visited
 end
 
 scanAllRemotesText = function()
-	local remotes = collectAllRemotes()
+	local remotes, visited = collectAllRemotes()
 	local lines = {
-		"=== ALL REMOTES (ReplicatedStorage) ===",
-		("Total: %d"):format(#remotes),
-		"Copy this entire list and share it.",
+		"=== ALL REMOTES ===",
+		("Found: %d remote(s), scanned %d instance(s)"):format(#remotes, visited),
 		"",
+		"--- ReplicatedStorage top-level ---",
 	}
-	for i, remote in ipairs(remotes) do
-		table.insert(lines, ("%4d. %s (%s)"):format(i, remote:GetFullName(), remote.ClassName))
+	for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+		table.insert(lines, ("  %s (%s)"):format(child.Name, child.ClassName))
 	end
+	if #ReplicatedStorage:GetChildren() == 0 then
+		table.insert(lines, "  (ReplicatedStorage has no children yet – wait for game load)")
+	end
+	table.insert(lines, "")
+	table.insert(lines, "--- Remote list ---")
 	if #remotes == 0 then
-		table.insert(lines, "  (none found under ReplicatedStorage)")
+		table.insert(lines, "  (no RemoteEvent/RemoteFunction found)")
+	else
+		for i, remote in ipairs(remotes) do
+			table.insert(lines, ("%4d. %s (%s)"):format(i, remote:GetFullName(), remote.ClassName))
+		end
 	end
 	return table.concat(lines, "\n"), #remotes
 end
@@ -2166,121 +2201,49 @@ end
 end -- Capture Contest scope
 
 local contestScanRawText = ""
-local contestScanWindowSetContent = nil
-local contestScanWindowTipLabel = nil
-local contestScanScrollRef = nil
-local contestScanListLayoutRef = nil
-
-local function renderScanPopupChunks(rawText)
-	rawText = rawText or ""
-	contestScanRawText = rawText
-	if not contestScanScrollRef or not contestScanScrollRef.Parent then
-		return
-	end
-	for _, ch in ipairs(contestScanScrollRef:GetChildren()) do
-		if ch:IsA("TextLabel") then
-			ch:Destroy()
-		end
-	end
-	local lines = {}
-	for line in string.gmatch(rawText .. "\n", "(.-)\n") do
-		table.insert(lines, line)
-	end
-	if #lines == 0 then
-		lines = { "(empty scan output)" }
-	end
-	local chunk = {}
-	local function flushChunk()
-		if #chunk == 0 then
-			return
-		end
-		local lbl = Instance.new("TextLabel")
-		lbl.Size = UDim2.new(1, -8, 0, #chunk * 13 + 6)
-		lbl.BackgroundTransparency = 1
-		lbl.BorderSizePixel = 0
-		lbl.Text = table.concat(chunk, "\n")
-		lbl.TextColor3 = Color3.fromRGB(220, 235, 255)
-		lbl.TextSize = 11
-		lbl.Font = Enum.Font.Gotham
-		lbl.TextXAlignment = Enum.TextXAlignment.Left
-		lbl.TextYAlignment = Enum.TextYAlignment.Top
-		lbl.TextWrapped = true
-		lbl.ZIndex = 3
-		lbl.Parent = contestScanScrollRef
-		table.clear(chunk)
-	end
-	for _, line in ipairs(lines) do
-		table.insert(chunk, line)
-		if #chunk >= 20 then
-			flushChunk()
-		end
-	end
-	flushChunk()
-	if contestScanListLayoutRef then
-		task.defer(function()
-			if contestScanScrollRef and contestScanListLayoutRef then
-				contestScanScrollRef.CanvasSize = UDim2.new(
-					0, 0, 0, contestScanListLayoutRef.AbsoluteContentSize.Y + 16
-				)
-			end
-		end)
-	end
-	if contestScanWindowTipLabel then
-		contestScanWindowTipLabel.Text = ("Lines: %d – tap Copy (also in executor console)"):format(#lines)
-	end
-end
 
 openContestScanWindow = function(text)
 	text = text or ""
+	contestScanRawText = text
+
 	local existing = PlayerGui:FindFirstChild("BloxMonster_ContestScan")
-	if existing and not contestScanWindowSetContent then
+	if existing then
 		existing:Destroy()
-		contestScanScrollRef = nil
-		contestScanListLayoutRef = nil
 	end
-	if contestScanWindowSetContent then
-		renderScanPopupChunks(text)
-		return
-	end
+
+	local lineCount = math.max(1, select(2, text:gsub("\n", "\n")) + 1)
+	local bodyHeight = math.max(320, math.min(6000, lineCount * 14 + 12))
 
 	local scanScreen = Instance.new("ScreenGui")
 	scanScreen.Name = "BloxMonster_ContestScan"
 	scanScreen.ResetOnSpawn = false
 	scanScreen.DisplayOrder = 100
-	scanScreen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	scanScreen.Parent = PlayerGui
 
 	local scanMain = Instance.new("Frame")
-	scanMain.Name = "Main"
-	scanMain.Size = UDim2.new(0, 460, 0, 440)
-	scanMain.Position = UDim2.new(0.5, -230, 0.5, -220)
+	scanMain.Size = UDim2.new(0, 480, 0, 460)
+	scanMain.Position = UDim2.new(0.5, -240, 0.5, -230)
 	scanMain.AnchorPoint = Vector2.new(0.5, 0.5)
 	scanMain.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
 	scanMain.BorderSizePixel = 0
 	scanMain.Active = true
 	scanMain.Parent = scanScreen
 
-	local scanCorner = Instance.new("UICorner")
-	scanCorner.CornerRadius = UDim.new(0, 10)
-	scanCorner.Parent = scanMain
+ Instance.new("UICorner", scanMain).CornerRadius = UDim.new(0, 10)
 
 	local scanTop = Instance.new("Frame")
-	scanTop.Size = UDim2.new(1, 0, 0, 28)
+	scanTop.Size = UDim2.new(1, 0, 0, 30)
 	scanTop.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
 	scanTop.BorderSizePixel = 0
 	scanTop.Active = true
 	scanTop.Parent = scanMain
-
-	local scanTopCorner = Instance.new("UICorner")
-	scanTopCorner.CornerRadius = UDim.new(0, 10)
-	scanTopCorner.Parent = scanTop
+ Instance.new("UICorner", scanTop).CornerRadius = UDim.new(0, 10)
 
 	local scanTitle = Instance.new("TextLabel")
-	scanTitle.Size = UDim2.new(1, -120, 1, 0)
-	scanTitle.Position = UDim2.new(0, 8, 0, 0)
+	scanTitle.Size = UDim2.new(1, -130, 1, 0)
+	scanTitle.Position = UDim2.new(0, 10, 0, 0)
 	scanTitle.BackgroundTransparency = 1
-	scanTitle.Active = true
-	scanTitle.Text = "Remote list"
+	scanTitle.Text = ("Remotes (%d lines)"):format(lineCount)
 	scanTitle.TextColor3 = Color3.fromRGB(200, 255, 200)
 	scanTitle.TextSize = 13
 	scanTitle.Font = Enum.Font.GothamBold
@@ -2288,114 +2251,71 @@ openContestScanWindow = function(text)
 	scanTitle.Parent = scanTop
 
 	local scanCopyBtn = Instance.new("TextButton")
-	scanCopyBtn.Size = UDim2.new(0, 52, 0, 22)
-	scanCopyBtn.Position = UDim2.new(1, -84, 0, 3)
+	scanCopyBtn.Size = UDim2.new(0, 56, 0, 22)
+	scanCopyBtn.Position = UDim2.new(1, -92, 0, 4)
 	scanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
 	scanCopyBtn.BorderSizePixel = 0
 	scanCopyBtn.Text = "Copy"
-	scanCopyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
-	scanCopyBtn.TextSize = 10
+	scanCopyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanCopyBtn.TextSize = 11
 	scanCopyBtn.Font = Enum.Font.GothamBold
 	scanCopyBtn.Parent = scanTop
-
-	local scanCopyCorner = Instance.new("UICorner")
-	scanCopyCorner.CornerRadius = UDim.new(0, 4)
-	scanCopyCorner.Parent = scanCopyBtn
+ Instance.new("UICorner", scanCopyBtn).CornerRadius = UDim.new(0, 4)
 
 	local scanCloseBtn = Instance.new("TextButton")
-	scanCloseBtn.Size = UDim2.new(0, 28, 0, 28)
-	scanCloseBtn.Position = UDim2.new(1, -28, 0, 0)
+	scanCloseBtn.Size = UDim2.new(0, 30, 0, 30)
+	scanCloseBtn.Position = UDim2.new(1, -30, 0, 0)
 	scanCloseBtn.BackgroundTransparency = 1
-	scanCloseBtn.Text = "×"
-	scanCloseBtn.TextColor3 = Color3.fromRGB(200, 230, 255)
-	scanCloseBtn.TextSize = 20
+	scanCloseBtn.Text = "X"
+	scanCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanCloseBtn.TextSize = 16
 	scanCloseBtn.Font = Enum.Font.GothamBold
 	scanCloseBtn.Parent = scanTop
 
-	makeDraggable(scanMain, { scanTop, scanTitle })
-
-	local scanHeader = Instance.new("TextLabel")
-	scanHeader.Size = UDim2.new(1, -16, 0, 32)
-	scanHeader.Position = UDim2.new(0, 8, 0, 34)
-	scanHeader.BackgroundColor3 = Color3.fromRGB(30, 45, 70)
-	scanHeader.BorderSizePixel = 0
-	scanHeader.Text = "Loading..."
-	scanHeader.TextColor3 = Color3.fromRGB(255, 245, 160)
-	scanHeader.TextSize = 10
-	scanHeader.Font = Enum.Font.GothamBold
-	scanHeader.TextXAlignment = Enum.TextXAlignment.Left
-	scanHeader.TextWrapped = true
-	scanHeader.Parent = scanMain
-
-	local scanHeaderCorner = Instance.new("UICorner")
-	scanHeaderCorner.CornerRadius = UDim.new(0, 4)
-	scanHeaderCorner.Parent = scanHeader
-
 	local scanScroll = Instance.new("ScrollingFrame")
-	scanScroll.Size = UDim2.new(1, -16, 1, -88)
-	scanScroll.Position = UDim2.new(0, 8, 0, 70)
-	scanScroll.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+	scanScroll.Size = UDim2.new(1, -20, 1, -56)
+	scanScroll.Position = UDim2.new(0, 10, 0, 38)
+	scanScroll.BackgroundColor3 = Color3.fromRGB(10, 15, 25)
 	scanScroll.BorderSizePixel = 0
-	scanScroll.ScrollBarThickness = 8
-	scanScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-	scanScroll.ScrollingDirection = Enum.ScrollingDirection.Y
-	scanScroll.CanvasSize = UDim2.new(0, 0, 0, 400)
-	scanScroll.ClipsDescendants = true
+	scanScroll.ScrollBarThickness = 10
+	scanScroll.CanvasSize = UDim2.new(0, 0, 0, bodyHeight + 8)
 	scanScroll.Parent = scanMain
-	contestScanScrollRef = scanScroll
+ Instance.new("UICorner", scanScroll).CornerRadius = UDim.new(0, 6)
 
-	local scanScrollCorner = Instance.new("UICorner")
-	scanScrollCorner.CornerRadius = UDim.new(0, 6)
-	scanScrollCorner.Parent = scanScroll
-
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	listLayout.Padding = UDim.new(0, 2)
-	listLayout.Parent = scanScroll
-	contestScanListLayoutRef = listLayout
-	listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		if contestScanScrollRef then
-			contestScanScrollRef.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 16)
-		end
-	end)
+	local scanBody = Instance.new("TextLabel")
+	scanBody.Name = "Body"
+	scanBody.Size = UDim2.new(1, -8, 0, bodyHeight)
+	scanBody.Position = UDim2.new(0, 4, 0, 4)
+	scanBody.BackgroundTransparency = 1
+	scanBody.Text = text
+	scanBody.TextColor3 = Color3.fromRGB(255, 255, 255)
+	scanBody.TextSize = 12
+	scanBody.Font = Enum.Font.Gotham
+	scanBody.TextXAlignment = Enum.TextXAlignment.Left
+	scanBody.TextYAlignment = Enum.TextYAlignment.Top
+	scanBody.TextWrapped = false
+	scanBody.Parent = scanScroll
 
 	local scanTip = Instance.new("TextLabel")
-	scanTip.Size = UDim2.new(1, -16, 0, 16)
-	scanTip.Position = UDim2.new(0, 8, 1, -18)
+	scanTip.Size = UDim2.new(1, -20, 0, 18)
+	scanTip.Position = UDim2.new(0, 10, 1, -20)
 	scanTip.BackgroundTransparency = 1
-	scanTip.Text = "Tap Copy – also check executor console (F9)"
-	scanTip.TextColor3 = Color3.fromRGB(130, 160, 140)
-	scanTip.TextSize = 9
+	scanTip.Text = "Also printed to executor console (F9). Paste list in chat."
+	scanTip.TextColor3 = Color3.fromRGB(180, 200, 180)
+	scanTip.TextSize = 10
 	scanTip.Font = Enum.Font.Gotham
 	scanTip.TextXAlignment = Enum.TextXAlignment.Left
 	scanTip.Parent = scanMain
-	contestScanWindowTipLabel = scanTip
-
-	contestScanWindowSetContent = function(newText)
-		newText = newText or ""
-		local preview = newText:match("^[^\n]+") or "(empty)"
-		if #preview > 70 then
-			preview = preview:sub(1, 67) .. "..."
-		end
-		scanHeader.Text = preview
-		renderScanPopupChunks(newText)
-	end
 
 	scanCopyBtn.MouseButton1Click:Connect(function()
 		local copied = copyText(contestScanRawText)
-		scanTip.Text = copied and "Copied to clipboard." or "Check executor console (F9) for full list."
+		scanTip.Text = copied and "Copied!" or "Copy from F9 console output."
 	end)
 
 	scanCloseBtn.MouseButton1Click:Connect(function()
-		contestScanWindowSetContent = nil
-		contestScanWindowTipLabel = nil
-		contestScanScrollRef = nil
-		contestScanListLayoutRef = nil
 		contestScanRawText = ""
 		scanScreen:Destroy()
 	end)
-
-	contestScanWindowSetContent(text)
 end
 
 local function makeDraggable(frame, dragHandles)
@@ -7527,54 +7447,41 @@ local function printRemotesToConsole(text)
 	warn("[BloxMonster] === REMOTE LIST END ===")
 end
 
-local function runContestRemotesDump(fullScan)
+local function runContestRemotesDump()
 	UI.dungeonStatusLabel.Text = "Listing remotes..."
 	UI.dungeonScanBtn.Text = "..."
-	openContestScanWindow("Collecting all ReplicatedStorage remotes...")
-	task.spawn(function()
-		local ok, packed = pcall(function()
-			if type(scanAllRemotesText) ~= "function" then
-				error("scanAllRemotesText missing – reload bloxmonster v1.11.4")
-			end
-			local remoteText, remoteCount = scanAllRemotesText()
-			local text = remoteText
-			if fullScan and type(scanContestRemotesText) == "function" then
-				text = scanContestRemotesText()
-			end
-			return { text = text, count = remoteCount }
-		end)
-		local text = "Scan error:\n" .. tostring(packed)
-		local count = 0
-		if ok and type(packed) == "table" then
-			text = packed.text or ""
-			count = packed.count or 0
-		elseif ok then
-			text = tostring(packed)
-		else
-			warn("[BloxMonster Contest]", text)
+	local ok, text, count = pcall(function()
+		if type(scanAllRemotesText) ~= "function" then
+			error("scanAllRemotesText missing – reload bloxmonster v1.11.5")
 		end
-		if text == "" then
-			text = "No output (unexpected)."
-		end
-		if typeof(_G) == "table" then
-			_G.BloxMonsterLastContestScan = text
-		end
-		openContestScanWindow(text)
-		printRemotesToConsole(text)
-		if UI.dungeonScanContent then
-			UI.dungeonScanContent.Text = text
-		end
-		local copied = copyText(text)
-		UI.dungeonStatusLabel.Text = copied
-			and ("Found %d remotes – copied + F9 console."):format(count)
-			or ("Found %d remotes – see popup + F9 console."):format(count)
-		UI.dungeonScanBtn.Text = "Remotes"
-		print("[BloxMonster Contest remotes]\n" .. text)
+		return scanAllRemotesText()
 	end)
+	if not ok then
+		text = "Scan error:\n" .. tostring(text)
+		count = 0
+		warn("[BloxMonster Contest]", text)
+	elseif not text or text == "" then
+		text = "Scan returned empty."
+		count = 0
+	end
+	if typeof(_G) == "table" then
+		_G.BloxMonsterLastContestScan = text
+	end
+	openContestScanWindow(text)
+	printRemotesToConsole(text)
+	if UI.dungeonScanContent then
+		UI.dungeonScanContent.Text = text
+	end
+	local copied = copyText(text)
+	UI.dungeonStatusLabel.Text = copied
+		and ("Done: %d remotes – copied + F9 console."):format(count or 0)
+		or ("Done: %d remotes – see popup + F9."):format(count or 0)
+	UI.dungeonScanBtn.Text = "Remotes"
+	print("[BloxMonster Contest remotes]\n" .. text)
 end
 
 	UI.dungeonScanBtn.MouseButton1Click:Connect(function()
-		runContestRemotesDump(false)
+		runContestRemotesDump()
 	end)
 
 	UI.dungeonScanCopyBtn.MouseButton1Click:Connect(function()
@@ -7582,15 +7489,12 @@ end
 		if (not text or text == "") and UI.dungeonScanContent then
 			text = UI.dungeonScanContent.Text or ""
 		end
-		if text == "" or text:find("Tap Remotes") or text:find("Collecting") then
-			runContestRemotesDump(false)
+		if text == "" or text:find("Tap Remotes") then
+			runContestRemotesDump()
 			return
 		end
-		openContestScanWindow(text)
 		local copied = copyText(text)
-		UI.dungeonStatusLabel.Text = copied
-			and "Copied to clipboard."
-			or "Check F9 console – full list printed there."
+		UI.dungeonStatusLabel.Text = copied and "Copied!" or "Use F9 console output."
 	end)
 
 	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
