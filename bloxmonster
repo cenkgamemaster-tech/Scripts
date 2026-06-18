@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.6"
+local VERSION = "1.12.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -276,8 +276,21 @@ local function isEquippedPetPath(fullName)
 	return false
 end
 
+local function getModelHumanoid(model)
+	if not model then
+		return nil
+	end
+	return model:FindFirstChildOfClass("Humanoid")
+		or model:FindFirstChildWhichIsA("Humanoid", true)
+end
+
+local function modelHasAliveHumanoid(model)
+	local hum = getModelHumanoid(model)
+	return hum ~= nil and hum.Health > 0
+end
+
 local function modelLooksLikeWildPet(model)
-	if model:FindFirstChildOfClass("Humanoid") then
+	if getModelHumanoid(model) then
 		return true
 	end
 	if model:FindFirstChildWhichIsA("BillboardGui", true) then
@@ -321,7 +334,7 @@ local function tryBuildPetEntry(model, playerChars)
 		return nil
 	end
 
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local humanoid = getModelHumanoid(model)
 	local score = humanoid and 1 or 0
 	local bb = {}
 
@@ -456,7 +469,7 @@ end
 
 local function getCachedWorldPets(scanMode)
 	scanMode = scanMode or "auto"
-	if farmLocationStayActive then
+	if farmLocationStayActive and not contestRunning then
 		if #lastAllPets > 0 then
 			return refreshCachedPetsLight()
 		end
@@ -1377,7 +1390,36 @@ local function teleportToPet(model)
 	if not pos then
 		return false
 	end
-	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 2)
+	local char = LocalPlayer.Character
+	if not char then
+		return false
+	end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return false
+	end
+	local flat = Vector3.new(0, 0, 8)
+	if root.Parent then
+		local delta = Vector3.new(root.Position.X - pos.X, 0, root.Position.Z - pos.Z)
+		if delta.Magnitude > 1 then
+			flat = delta.Unit * 8
+		end
+	end
+	local target = pos + flat + Vector3.new(0, 3, 0)
+	local targetCF = CFrame.new(target)
+	for _ = 1, 10 do
+		pcall(function()
+			char:PivotTo(targetCF)
+		end)
+		root.CFrame = targetCF
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		if (root.Position - target).Magnitude < 15 then
+			return true
+		end
+		task.wait(0.06)
+	end
+	return (root.Position - target).Magnitude < 30
 end
 
 local function teleportPlayerToPosition(pos)
@@ -1710,8 +1752,7 @@ local function isDungeonPetModel(model, playerChars)
 	if not okPath or not fullName or isEquippedPetPath(fullName) then
 		return false
 	end
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then
+	if not modelHasAliveHumanoid(model) then
 		return false
 	end
 	local lower = fullName:lower()
@@ -1722,13 +1763,15 @@ local function isDungeonPetModel(model, playerChars)
 		or lower:find("perk", 1, true) or lower:find("gate", 1, true) then
 		return false
 	end
+	if model:FindFirstChildWhichIsA("BillboardGui", true) then
+		return true
+	end
 	if pathMatchesDungeon(fullName) then
 		return true
 	end
 	if lower:find("mob", 1, true) or lower:find("dungeon", 1, true)
-		or lower:find("room", 1, true) or lower:find("private", 1, true)
-		or lower:find("enemy", 1, true) or lower:find("boss", 1, true)
-		or lower:find("pet", 1, true) or lower:find("npc", 1, true) then
+		or lower:find("private", 1, true) or lower:find("enemy", 1, true)
+		or lower:find("boss", 1, true) or lower:find("npc", 1, true) then
 		return true
 	end
 	if modelLooksLikeWildPet(model) then
@@ -1739,34 +1782,44 @@ end
 
 local function scanAllDungeonPets()
 	local now = wallClockSeconds()
-	if cachedDungeonPets and now - cachedDungeonPetsTime < 1 then
+	if cachedDungeonPets and now - cachedDungeonPetsTime < 0.75 then
 		return cachedDungeonPets
 	end
 	local playerChars = getPlayerCharacterSet()
 	local enemies = {}
 	local seen = {}
-	local function addModel(model)
+	local function addModel(model, distance)
 		if not model or seen[model] or not isDungeonPetModel(model, playerChars) then
 			return
 		end
 		seen[model] = true
 		table.insert(enemies, {
 			model = model,
-			distance = getDistanceToPlayer(model) or math.huge,
+			distance = distance or getDistanceToPlayer(model) or math.huge,
 		})
+	end
+	local ok, worldPets = pcall(getWorldPets)
+	if ok and worldPets then
+		for _, pet in ipairs(worldPets) do
+			if #enemies >= 32 then
+				break
+			end
+			if pet.model and modelHasAliveHumanoid(pet.model) then
+				addModel(pet.model, pet.distance)
+			end
+		end
 	end
 	local playerPos = getPlayerPosition()
 	if playerPos then
-		local ok, parts = pcall(function()
-			return Workspace:GetPartBoundsInRadius(playerPos, 450)
+		local okParts, parts = pcall(function()
+			return Workspace:GetPartBoundsInRadius(playerPos, 500)
 		end)
-		if ok and parts then
+		if okParts and parts then
 			for _, part in ipairs(parts) do
 				if #enemies >= 32 then
 					break
 				end
-				local model = part:FindFirstAncestorOfClass("Model")
-				addModel(model)
+				addModel(part:FindFirstAncestorOfClass("Model"))
 			end
 		end
 	end
@@ -1775,7 +1828,7 @@ local function scanAllDungeonPets()
 		if roomRoot then
 			local visited = 0
 			local queue = { roomRoot }
-			while #queue > 0 and #enemies < 32 and visited < 400 do
+			while #queue > 0 and #enemies < 32 and visited < 500 do
 				local node = table.remove(queue, 1)
 				visited = visited + 1
 				if node.ClassName == "Model" then
@@ -2274,11 +2327,7 @@ end
 
 local function waitForEnemyDown(model, timeoutSec)
 	timeoutSec = timeoutSec or 60
-	if not model or not model.Parent then
-		return false
-	end
-	local hum = model:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then
+	if not model or not model.Parent or not modelHasAliveHumanoid(model) then
 		return false
 	end
 	local start = wallClockSeconds()
@@ -2293,7 +2342,7 @@ local function waitForEnemyDown(model, timeoutSec)
 		if not model.Parent then
 			return true
 		end
-		hum = model:FindFirstChildOfClass("Humanoid")
+		local hum = getModelHumanoid(model)
 		if not hum or hum.Health <= 0 then
 			return true
 		end
@@ -2333,13 +2382,14 @@ local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
 				if #allPets > 0 then
 					petSearchIndex = (petSearchIndex % #allPets) + 1
 					target = allPets[petSearchIndex].model
-					teleportToPet(target)
-					task.wait(0.5)
 				end
 			end
-		elseif (getDistanceToPlayer(target) or math.huge) > 30 then
-			teleportToPet(target)
-			task.wait(0.4)
+		end
+		if target and target.Parent then
+			if not teleportToPet(target) then
+				setContestStatus(("Floor %d – teleport failed for %s"):format(floorNum, target.Name))
+				task.wait(0.5)
+			end
 		end
 		if not target or not target.Parent then
 			if wallClockSeconds() - idleSince > 90 then
