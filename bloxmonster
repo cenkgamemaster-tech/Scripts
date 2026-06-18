@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.8"
+local VERSION = "1.14.9"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2508,6 +2508,8 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	end
 	return false
 end
+
+local function tryStartBattlePrompt(model)
 	if not model then
 		return false
 	end
