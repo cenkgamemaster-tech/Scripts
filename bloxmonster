@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.2"
+local VERSION = "1.12.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1436,11 +1436,20 @@ local DUNGEON_RF = {
 	ChoosePerk = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.ChoosePerk",
 	Leave = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.LeaveDungeon",
 }
+local DUNGEON_RE = {
+	RoomChanged = "RoomChanged",
+	PerkDoorsReady = "PerkDoorsReady",
+	DungeonResult = "DungeonResult",
+}
 local COMBAT_RF = {
 	SetTarget = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget",
 	RequestPetAttack = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack",
 }
 local contestInDungeon = false
+local dungeonRoomVersion = 0
+local dungeonPerkReady = false
+local dungeonRunEnded = false
+local dungeonEventsHooked = false
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
 
 local contestStatusCallback = nil
@@ -1502,6 +1511,151 @@ local function resolveContestRemotePath(pathString)
 	return nil
 end
 
+local function resolveDungeonEvent(name)
+	local bases = {
+		"ReplicatedStorage.Packages.Knit.Services.DungeonService.RE." .. name,
+		"ReplicatedStorage.Packages.Knit.Services.DungeonService.Client." .. name,
+		"ReplicatedStorage.Packages.Knit.Services.DungeonService." .. name,
+	}
+	for _, path in ipairs(bases) do
+		local node = resolveContestRemotePath(path)
+		if node and node:IsA("RemoteEvent") then
+			return node
+		end
+	end
+	local dungeon = getDungeonServiceFolder()
+	if dungeon then
+		for _, desc in ipairs(dungeon:GetDescendants()) do
+			if desc:IsA("RemoteEvent") and desc.Name == name then
+				return desc
+			end
+		end
+	end
+	return nil
+end
+
+local function invokeContestRemote(remote, ...)
+	local args = { ... }
+	local ok, result = pcall(function()
+		if remote:IsA("RemoteEvent") then
+			remote:FireServer(table.unpack(args))
+			return true
+		end
+		return remote:InvokeServer(table.unpack(args))
+	end)
+	return ok, result
+end
+
+local function formatRemoteResult(result)
+	local t = typeof(result)
+	if t == "nil" then
+		return "nil"
+	end
+	if t == "boolean" or t == "number" or t == "string" then
+		return tostring(result)
+	end
+	if t == "table" then
+		local parts = {}
+		for k, v in pairs(result) do
+			table.insert(parts, tostring(k) .. "=" .. tostring(v))
+			if #parts >= 4 then
+				break
+			end
+		end
+		return "{" .. table.concat(parts, ", ") .. "}"
+	end
+	return tostring(result)
+end
+
+local function isRemoteSuccess(result)
+	if result == false then
+		return false
+	end
+	if result == nil then
+		return nil
+	end
+	if type(result) == "string" then
+		local lower = result:lower()
+		if lower:find("fail", 1, true) or lower:find("error", 1, true)
+			or lower:find("cannot", 1, true) or lower:find("invalid", 1, true)
+			or lower:find("denied", 1, true) or lower:find("need", 1, true) then
+			return false
+		end
+	end
+	if type(result) == "table" and result.success == false then
+		return false
+	end
+	return true
+end
+
+local function resetDungeonSignals()
+	dungeonPerkReady = false
+	dungeonRunEnded = false
+end
+
+local function ensureDungeonEventHooks()
+	if dungeonEventsHooked then
+		return
+	end
+	dungeonEventsHooked = true
+	local function onRoomChanged()
+		dungeonRoomVersion = dungeonRoomVersion + 1
+		contestInDungeon = true
+		dungeonPerkReady = false
+		setContestStatus("RoomChanged (floor signal)")
+	end
+	local roomChanged = resolveDungeonEvent(DUNGEON_RE.RoomChanged)
+	if roomChanged then
+		roomChanged.OnClientEvent:Connect(onRoomChanged)
+	else
+		warn("[BloxMonster Contest] RoomChanged event not found")
+	end
+	local perkReady = resolveDungeonEvent(DUNGEON_RE.PerkDoorsReady)
+	if perkReady then
+		perkReady.OnClientEvent:Connect(function()
+			dungeonPerkReady = true
+			setContestStatus("PerkDoorsReady")
+		end)
+	end
+	local dungeonResult = resolveDungeonEvent(DUNGEON_RE.DungeonResult)
+	if dungeonResult then
+		dungeonResult.OnClientEvent:Connect(function()
+			dungeonRunEnded = true
+			contestInDungeon = false
+			setContestStatus("DungeonResult (run ended)")
+		end)
+	end
+end
+
+local function waitForContestSignal(checkFn, timeoutSec)
+	local deadline = wallClockSeconds() + (timeoutSec or 20)
+	while wallClockSeconds() < deadline do
+		if not contestRunning then
+			return false
+		end
+		if checkFn() then
+			return true
+		end
+		task.wait(0.25)
+	end
+	return false
+end
+
+local function waitForDungeonEntry(roomBefore, timeoutSec)
+	return waitForContestSignal(function()
+		return dungeonRoomVersion > roomBefore or dungeonRunEnded
+	end, timeoutSec or 18)
+end
+
+local function waitForPerkDoors(timeoutSec)
+	if dungeonPerkReady then
+		return true
+	end
+	return waitForContestSignal(function()
+		return dungeonPerkReady or dungeonRunEnded
+	end, timeoutSec or 45)
+end
+
 local function getKnitServicesFolder()
 	local packages = ReplicatedStorage:FindFirstChild("Packages")
 	local knit = packages and packages:FindFirstChild("Knit")
@@ -1539,49 +1693,73 @@ scanContestRemotesText = scanAllRemotesText
 local function buildContestStartArgSets(difficulty, useKey)
 	local argSets = {
 		{ difficulty.index },
+		{ difficulty.index - 1 },
 		{ difficulty.name },
 		{ difficulty.id },
 		{ tostring(difficulty.index) },
 		{ difficulty.name:upper() },
-		{ difficulty.index, useKey and difficulty.needsKey or false },
-		{ difficulty.name, useKey and difficulty.needsKey or false },
 	}
 	if difficulty.needsKey and useKey then
 		table.insert(argSets, { difficulty.index, true })
 		table.insert(argSets, { difficulty.name, true })
 		table.insert(argSets, { "Master", true })
 		table.insert(argSets, { 4, true })
+	else
+		table.insert(argSets, { difficulty.index, false })
+		table.insert(argSets, { difficulty.name, false })
 	end
 	return argSets
 end
 
 local function leaveDungeonKnit()
 	contestInDungeon = false
+	resetDungeonSignals()
 	local leave = resolveContestRemotePath(DUNGEON_RF.Leave)
 	if leave then
 		pcall(function()
-			fireRemote(leave)
+			invokeContestRemote(leave)
 		end)
 	end
 end
 
 local function startDungeonKnit(difficulty, useKey)
+	ensureDungeonEventHooks()
+	resetDungeonSignals()
 	local startRemote = resolveContestRemotePath(DUNGEON_RF.Start)
 	if not startRemote then
-		return false
+		setContestStatus("StartDungeon remote not found")
+		return false, "no remote"
 	end
 	local argSets = buildContestStartArgSets(difficulty, useKey)
+	local lastResult = nil
 	for _, args in ipairs(argSets) do
-		local ok = pcall(function()
-			fireRemote(startRemote, table.unpack(args))
-		end)
+		local roomBefore = dungeonRoomVersion
+		local ok, result = invokeContestRemote(startRemote, table.unpack(args))
+		lastResult = result
+		local argText = table.concat(args, ", ")
+		local resultText = ok and formatRemoteResult(result) or ("ERR:" .. tostring(result))
+		setContestStatus(("StartDungeon(%s) => %s"):format(argText, resultText))
 		if ok then
-			contestInDungeon = true
-			setContestStatus(("StartDungeon(%s)"):format(table.concat(args, ", ")))
-			return true
+			local accepted = isRemoteSuccess(result)
+			if accepted ~= false then
+				if waitForDungeonEntry(roomBefore, 8) then
+					if dungeonRunEnded then
+						setContestStatus("StartDungeon rejected (DungeonResult)")
+						return false, result
+					end
+					contestInDungeon = true
+					return true, result
+				end
+				if accepted == true then
+					contestInDungeon = true
+					setContestStatus("StartDungeon accepted (no RoomChanged yet)")
+					return true, result
+				end
+			end
 		end
 	end
-	return false
+	setContestStatus("StartDungeon failed – open Capture Contest menu, pick difficulty, then Start")
+	return false, lastResult
 end
 
 local function chooseDungeonPerk(pickMode)
@@ -1599,16 +1777,20 @@ local function chooseDungeonPerk(pickMode)
 		{ door },
 		{ door - 1 },
 		{ tostring(door) },
-		{ pickMode == "second" and "right" or "left" },
 	}
 	for _, args in ipairs(argSets) do
-		pcall(function()
-			fireRemote(remote, table.unpack(args))
-		end)
+		local ok, result = invokeContestRemote(remote, table.unpack(args))
+		setContestStatus(("ChoosePerk(%s) => %s"):format(
+			table.concat(args, ", "), ok and formatRemoteResult(result) or tostring(result)
+		))
+		if ok and isRemoteSuccess(result) ~= false then
+			dungeonPerkReady = false
+			task.wait(0.5)
+			return true
+		end
 	end
-	setContestStatus("ChoosePerk door " .. door)
 	task.wait(0.5)
-	return true
+	return false
 end
 
 local function tryCombatEngage(model)
@@ -1641,14 +1823,18 @@ local function tryCombatEngage(model)
 end
 
 local function tryStartContest(difficulty, useKey)
-	if startDungeonKnit(difficulty, useKey) then
+	local started, result = startDungeonKnit(difficulty, useKey)
+	if started then
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return true
+		return true, result
 	end
-	return false
+	return false, result
 end
 
 local function isContestEnemyModel(model, playerChars)
+	if not contestInDungeon then
+		return false
+	end
 	if not model or model.ClassName ~= "Model" or playerChars[model] then
 		return false
 	end
@@ -1662,36 +1848,21 @@ local function isContestEnemyModel(model, playerChars)
 	if not hum or hum.Health <= 0 then
 		return false
 	end
-	if contestInDungeon then
-		local dist = getDistanceToPlayer(model)
-		if dist and dist < 200 then
-			local lower = fullName:lower()
-			if lower:find("player", 1, true) or lower:find("character", 1, true) then
-				return false
-			end
-			if lower:find("mob", 1, true) or lower:find("dungeon", 1, true)
-				or lower:find("room", 1, true) or lower:find("pet", 1, true)
-				or lower:find("npc", 1, true) or lower:find("enemy", 1, true) then
-				return true
-			end
-			return true
-		end
+	local lower = fullName:lower()
+	if lower:find("player", 1, true) or lower:find("character", 1, true) then
+		return false
+	end
+	local dist = getDistanceToPlayer(model)
+	if not dist or dist > 200 then
+		return false
 	end
 	if pathMatchesDungeon(fullName) then
 		return true
 	end
-	local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if prompt then
-		local action = (prompt.ActionText or ""):lower()
-		local obj = (prompt.ObjectText or ""):lower()
-		for _, kw in ipairs(CONTEST_BATTLE_KEYWORDS) do
-			if action:find(kw, 1, true) or obj:find(kw, 1, true) then
-				local dist = getDistanceToPlayer(model)
-				if dist and dist < 250 then
-					return true
-				end
-			end
-		end
+	if lower:find("mob", 1, true) or lower:find("dungeon", 1, true)
+		or lower:find("room", 1, true) or lower:find("private", 1, true)
+		or lower:find("enemy", 1, true) or lower:find("boss", 1, true) then
+		return true
 	end
 	return false
 end
@@ -1769,16 +1940,26 @@ end
 
 local function waitForEnemyDown(model, timeoutSec)
 	timeoutSec = timeoutSec or 60
+	if not model or not model.Parent then
+		return false
+	end
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then
+		return false
+	end
 	local start = wallClockSeconds()
 	while wallClockSeconds() - start < timeoutSec do
 		if not contestRunning then
 			return false
 		end
-		if not model or not model.Parent then
+		if dungeonRunEnded or dungeonPerkReady then
 			return true
 		end
-		local hum = model:FindFirstChildOfClass("Humanoid")
-		if hum and hum.Health <= 0 then
+		if not model.Parent then
+			return true
+		end
+		hum = model:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then
 			return true
 		end
 		task.wait(0.4)
@@ -1792,22 +1973,30 @@ end
 
 local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
 	local kills = 0
-	while kills < killsNeeded and contestRunning and contestRunId == runId do
+	local idleSince = wallClockSeconds()
+	while kills < killsNeeded and contestRunning and contestRunId == runId and not dungeonRunEnded do
+		if dungeonPerkReady then
+			setContestStatus(("Floor %d – perk doors open"):format(floorNum))
+			return true
+		end
 		setContestStatus(("Floor %d/%d – kill %d/%d"):format(
 			floorNum, difficulty.floors, kills + 1, killsNeeded
 		))
 		local enemies = getContestEnemies()
 		if #enemies == 0 then
+			if wallClockSeconds() - idleSince > 90 then
+				setContestStatus(("Floor %d – no dungeon mobs (90s timeout)"):format(floorNum))
+				return false
+			end
 			task.wait(1.5)
-			enemies = getContestEnemies()
-		end
-		if #enemies == 0 then
-			setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
-			task.wait(2)
 		else
+			idleSince = wallClockSeconds()
 			local target = enemies[1].model
 			engageContestEnemy(target)
 			if waitForEnemyDown(target, 75) then
+				if dungeonPerkReady then
+					return true
+				end
 				kills = kills + 1
 			else
 				setContestStatus("Battle timeout – retrying")
@@ -1815,30 +2004,45 @@ local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
 			end
 		end
 	end
-	if kills >= killsNeeded then
-		setContestStatus(("Floor %d done – pick perk (2 portals)"):format(floorNum))
+	if dungeonPerkReady or kills >= killsNeeded then
+		setContestStatus(("Floor %d – waiting for perk doors"):format(floorNum))
+		waitForPerkDoors(60)
 		selectPerkPortal(contestPerkPick)
+		local roomBefore = dungeonRoomVersion
+		waitForDungeonEntry(roomBefore, 25)
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return true
+		return not dungeonRunEnded
 	end
 	return false
 end
 
 local function runContestDungeon(runId, difficulty)
-	if not tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey) then
-		setContestStatus("StartDungeon failed – check difficulty index (1–4) and Master key toggle")
-		return
+	ensureDungeonEventHooks()
+	local started, startResult = tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey)
+	if not started then
+		setContestStatus("Did not enter dungeon: " .. formatRemoteResult(startResult))
+		return false
 	end
 	for floor = 1, difficulty.floors do
-		if not contestRunning or contestRunId ~= runId then
+		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			break
 		end
 		if not runContestFloor(runId, difficulty, floor, difficulty.petsPerFloor) then
-			break
+			if dungeonRunEnded then
+				break
+			end
+			setContestStatus("Floor " .. floor .. " stalled – retrying run")
+			leaveDungeonKnit()
+			return false
 		end
 	end
-	setContestStatus(difficulty.name .. " run complete")
+	if dungeonRunEnded then
+		setContestStatus(difficulty.name .. " run finished (DungeonResult)")
+	else
+		setContestStatus(difficulty.name .. " run complete")
+	end
 	leaveDungeonKnit()
+	return true
 end
 
 startContestDungeon = function()
@@ -1864,16 +2068,21 @@ startContestDungeon = function()
 	end
 	contestThread = task.spawn(function()
 		while contestRunning and contestRunId == runId do
-			local ok, err = pcall(function()
-				runContestDungeon(runId, getContestDifficultyById(selectedContestDifficultyId))
+			local pcallOk, runResult = pcall(function()
+				return runContestDungeon(runId, getContestDifficultyById(selectedContestDifficultyId))
 			end)
-			if not ok and not tostring(err):find("cancelled", 1, true) then
-				setContestStatus("Error: " .. tostring(err))
-				warn("[BloxMonster Contest]", err)
+			if not pcallOk and not tostring(runResult):find("cancelled", 1, true) then
+				setContestStatus("Error: " .. tostring(runResult))
+				warn("[BloxMonster Contest]", runResult)
 			end
 			if contestRunning and contestRunId == runId then
-				setContestStatus("Next run in 5s...")
-				task.wait(5)
+				if pcallOk and runResult == false then
+					setContestStatus("Retry in 15s (open Capture Contest menu first)")
+					task.wait(15)
+				else
+					setContestStatus("Next run in 5s...")
+					task.wait(5)
+				end
 			end
 		end
 	end)
@@ -5129,7 +5338,7 @@ local dungeonHint = Instance.new("TextLabel")
 dungeonHint.Size = UDim2.new(1, -12, 0, 28)
 dungeonHint.Position = UDim2.new(0, 6, 0, 2)
 dungeonHint.BackgroundTransparency = 1
-dungeonHint.Text = "DungeonService only (StartDungeon / ChoosePerk / LeaveDungeon). Tap Remotes to dump paths."
+dungeonHint.Text = "Open Capture Contest in-game, pick difficulty, then Start. Status shows StartDungeon server reply."
 dungeonHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 dungeonHint.TextSize = 10
 dungeonHint.Font = Enum.Font.Gotham
@@ -7144,7 +7353,7 @@ local function runContestRemotesDump()
 	UI.dungeonScanBtn.Text = "..."
 	local ok, text, count = pcall(function()
 		if type(scanAllRemotesText) ~= "function" then
-			error("scanAllRemotesText missing – reload bloxmonster v1.12.2")
+			error("scanAllRemotesText missing – reload bloxmonster v1.12.3")
 		end
 		return scanAllRemotesText()
 	end)
