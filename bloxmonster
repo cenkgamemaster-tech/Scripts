@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.1"
+local VERSION = "1.13.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -6708,10 +6708,6 @@ refreshWorldList = function(rescan, worldConfig)
 	end
 end
 
-end -- app handlers part 1
-
-do -- app handlers part 2 (local register limit)
-
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
 	highlightWorldButtons()
@@ -6994,12 +6990,18 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	if statusText then
 		setWorldFarmStatus(statusText)
 	end
-	local pets = getCachedWorldPets(scanMode or "auto")
-	if runId and not shouldFarmContinue(runId, "world") then
-		return false
+	local ok, err = pcall(function()
+		local pets = getCachedWorldPets(scanMode or "auto")
+		if runId and not shouldFarmContinue(runId, "world") then
+			return
+		end
+		local filters = worldPetFilters[world.id] or {}
+		applyListsFromPets(pets, world, filters)
+	end)
+	if not ok then
+		warn("[BloxMonster] World farm list error:", err)
+		setWorldFarmStatus("List refresh error – retrying...")
 	end
-	local filters = worldPetFilters[world.id] or {}
-	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
 
@@ -7095,7 +7097,12 @@ local function runWorldFarmLoop(runId)
 		if not runFarmLocationPhase(runId) then
 			break
 		end
+		if not shouldFarmContinue(runId, "world") then
+			break
+		end
 
+		local worldsVisited = 0
+		setWorldFarmStatus("Farm stay done – starting world cycle...")
 		for _, world in ipairs(WORLD_ZONES) do
 			if farmLocationStayActive or not shouldFarmContinue(runId, "world") then
 				break
@@ -7103,6 +7110,7 @@ local function runWorldFarmLoop(runId)
 			local filters = worldPetFilters[world.id]
 			local highFilters = filtersBelowPriority(filters, WORLD_CYCLE_BONUS_MIN_PRIORITY)
 			if #highFilters > 0 then
+				worldsVisited = worldsVisited + 1
 				selectedWorldId = world.id
 				highlightWorldButtons()
 				rebuildWorldFilterChips()
@@ -7130,6 +7138,7 @@ local function runWorldFarmLoop(runId)
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
+						setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
 						break
 					end
 
@@ -7153,6 +7162,12 @@ local function runWorldFarmLoop(runId)
 						break
 					end
 				end
+			end
+		end
+		if worldsVisited == 0 then
+			setWorldFarmStatus("No P1-P2 pets on Worlds tab – add e.g. Rio@1 per world")
+			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world") then
+				break
 			end
 		end
 		if shouldFarmContinue(runId, "world") then
@@ -7234,11 +7249,17 @@ local function startWorldFarm()
 		end)
 		if not ok and not tostring(err):find("cancelled", 1, true) then
 			warn("[BloxMonster] World hunt error:", err)
+			if worldFarmRunId == myRunId then
+				setWorldFarmStatus("World hunt error: " .. tostring(err))
+			end
 		end
 		if worldFarmRunId == myRunId then
 			worldHuntRunning = false
+			farmLocationStayActive = false
 			UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
-			UI.worldHuntStatusLabel.Text = "World hunt idle"
+			if ok or tostring(err):find("cancelled", 1, true) then
+				UI.worldHuntStatusLabel.Text = "World hunt idle"
+			end
 		end
 	end)
 	maybeStartAutoFuseWithFarm()
@@ -7628,4 +7649,4 @@ task.defer(function()
 	task.defer(getWorldRemotes)
 end)
 
-end -- app handlers part 2
+end -- app handlers
