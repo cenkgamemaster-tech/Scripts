@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.4"
+local VERSION = "1.10.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -276,16 +276,8 @@ local function isEquippedPetPath(fullName)
 	return false
 end
 
-local function getModelHumanoid(model)
-	if not model then
-		return nil
-	end
-	return model:FindFirstChildOfClass("Humanoid")
-		or model:FindFirstChildWhichIsA("Humanoid", true)
-end
-
 local function modelLooksLikeWildPet(model)
-	if getModelHumanoid(model) then
+	if model:FindFirstChildOfClass("Humanoid") then
 		return true
 	end
 	if model:FindFirstChildWhichIsA("BillboardGui", true) then
@@ -329,7 +321,7 @@ local function tryBuildPetEntry(model, playerChars)
 		return nil
 	end
 
-	local humanoid = getModelHumanoid(model)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
 	local score = humanoid and 1 or 0
 	local bb = {}
 
@@ -518,20 +510,6 @@ local farmStaySec = DEFAULT_FARM_STAY_SEC
 local petFarmRunId = 0
 local worldFarmRunId = 0
 local farmLocationStayActive = false
-
--- Capture Contest dungeon
-local CONTEST_DIFFICULTIES = {
-	{ id = "standard", name = "Standard", index = 1, floors = 3, petsPerFloor = 3, needsKey = false },
-	{ id = "advanced", name = "Advanced", index = 2, floors = 3, petsPerFloor = 3, needsKey = false },
-	{ id = "elite", name = "Elite", index = 3, floors = 4, petsPerFloor = 3, needsKey = false },
-	{ id = "master", name = "Master", index = 4, floors = 5, petsPerFloor = 3, needsKey = true },
-}
-local selectedContestDifficultyId = "elite"
-local contestUseMasterKey = true
-local contestPerkPick = "best"
-local contestRunning = false
-local contestRunId = 0
-local contestThread = nil
 
 local function wallClockSeconds()
 	return tick()
@@ -1374,20 +1352,6 @@ local function robustTeleportToPosition(pos, exact)
 	return setCharacterAtPosition(pos, exact, 5)
 end
 
-local function teleportToPet(model)
-	if farmLocationStayActive then
-		return false
-	end
-	if not model then
-		return false
-	end
-	local pos = getModelPosition(model)
-	if not pos then
-		return false
-	end
-	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
-end
-
 local function teleportPlayerToPosition(pos)
 	return robustTeleportToPosition(pos)
 end
@@ -1444,958 +1408,6 @@ scanWorldPets = function(forceFull)
 	return getCachedWorldPets(forceFull and "full" or "auto")
 end
 
--- Capture Contest dungeon automation (scoped – Luau register limit).
-local startContestDungeon
-local stopContestDungeon
-local scanContestRemotesText
-local scanAllRemotesText
-local setContestStatusHandler
-local openContestScanWindow
-
-do
-local DUNGEON_RF = {
-	Start = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.StartDungeon",
-	ChoosePerk = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.ChoosePerk",
-	Leave = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.LeaveDungeon",
-}
-local DUNGEON_RE = {
-	RoomChanged = "RoomChanged",
-	PerkDoorsReady = "PerkDoorsReady",
-	DungeonResult = "DungeonResult",
-}
-local COMBAT_RF = {
-	SetTarget = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget",
-	RequestPetAttack = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack",
-}
-local contestInDungeon = false
-local dungeonRoomVersion = 0
-local dungeonPerkReady = false
-local dungeonRunEnded = false
-local dungeonEventsHooked = false
-local dungeonPerkPayload = nil
-local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
-local CONTEST_PERK_RARITY_RANK = {
-	uncommon = 1,
-	rare = 2,
-	epic = 3,
-	legendary = 4,
-	mythical = 5,
-	mythic = 5,
-}
-
-local contestStatusCallback = nil
-
-local function setContestStatus(msg)
-	warn("[BloxMonster Contest]", msg)
-	if contestStatusCallback then
-		pcall(contestStatusCallback, msg)
-	end
-end
-
-setContestStatusHandler = function(callback)
-	contestStatusCallback = callback
-end
-
-local function getContestDifficultyById(id)
-	for _, diff in ipairs(CONTEST_DIFFICULTIES) do
-		if diff.id == id then
-			return diff
-		end
-	end
-	return CONTEST_DIFFICULTIES[3]
-end
-
-local function fireContestPrompt(prompt)
-	if not prompt or not prompt:IsA("ProximityPrompt") then
-		return false
-	end
-	return pcall(function()
-		if typeof(fireproximityprompt) == "function" then
-			fireproximityprompt(prompt, prompt.HoldDuration or 0)
-		else
-			prompt:InputHoldBegin()
-			task.wait(prompt.HoldDuration > 0 and prompt.HoldDuration or 0.5)
-			prompt:InputHoldEnd()
-		end
-	end)
-end
-
-local function resolveContestRemotePath(pathString)
-	local node = game
-	for part in string.gmatch(pathString, "[^.]+") do
-		node = node and node:FindFirstChild(part)
-		if not node then
-			return nil
-		end
-	end
-	if node and (node:IsA("RemoteEvent") or node:IsA("RemoteFunction")) then
-		return node
-	end
-	return nil
-end
-
-local function resolveDungeonEvent(name)
-	local bases = {
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService.RE." .. name,
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService.Client." .. name,
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService." .. name,
-	}
-	for _, path in ipairs(bases) do
-		local node = resolveContestRemotePath(path)
-		if node and node:IsA("RemoteEvent") then
-			return node
-		end
-	end
-	local dungeon = getDungeonServiceFolder()
-	if dungeon then
-		for _, desc in ipairs(dungeon:GetDescendants()) do
-			if desc:IsA("RemoteEvent") and desc.Name == name then
-				return desc
-			end
-		end
-	end
-	return nil
-end
-
-local function invokeContestRemote(remote, ...)
-	local args = { ... }
-	local ok, result = pcall(function()
-		if remote:IsA("RemoteEvent") then
-			remote:FireServer(table.unpack(args))
-			return true
-		end
-		return remote:InvokeServer(table.unpack(args))
-	end)
-	return ok, result
-end
-
-local function formatRemoteResult(result)
-	local t = typeof(result)
-	if t == "nil" then
-		return "nil"
-	end
-	if t == "boolean" or t == "number" or t == "string" then
-		return tostring(result)
-	end
-	if t == "table" then
-		local parts = {}
-		for k, v in pairs(result) do
-			table.insert(parts, tostring(k) .. "=" .. tostring(v))
-			if #parts >= 4 then
-				break
-			end
-		end
-		return "{" .. table.concat(parts, ", ") .. "}"
-	end
-	return tostring(result)
-end
-
-local function isRemoteSuccess(result)
-	if result == false then
-		return false
-	end
-	if result == nil then
-		return nil
-	end
-	if type(result) == "string" then
-		local lower = result:lower()
-		if lower:find("fail", 1, true) or lower:find("error", 1, true)
-			or lower:find("cannot", 1, true) or lower:find("invalid", 1, true)
-			or lower:find("denied", 1, true) or lower:find("need", 1, true) then
-			return false
-		end
-	end
-	if type(result) == "table" and result.success == false then
-		return false
-	end
-	return true
-end
-
-local function resetDungeonSignals()
-	dungeonPerkReady = false
-	dungeonRunEnded = false
-	dungeonPerkPayload = nil
-end
-
-local function perkRarityRank(text)
-	if text == nil then
-		return 0
-	end
-	if type(text) == "table" then
-		local best = 0
-		for _, v in pairs(text) do
-			best = math.max(best, perkRarityRank(v))
-		end
-		return best
-	end
-	local lower = tostring(text):lower()
-	local best = 0
-	for name, rank in pairs(CONTEST_PERK_RARITY_RANK) do
-		if lower:find(name, 1, true) then
-			best = math.max(best, rank)
-		end
-	end
-	return best
-end
-
-local function getDungeonPetTargets()
-	local ok, pets = pcall(getWorldPets)
-	if not ok or not pets then
-		return {}
-	end
-	local out = {}
-	for _, pet in ipairs(pets) do
-		if pet.model and pet.model.Parent then
-			local hum = getModelHumanoid(pet.model)
-			if hum and hum.Health > 0 then
-				table.insert(out, pet)
-			end
-		end
-	end
-	table.sort(out, function(a, b)
-		return (a.distance or math.huge) < (b.distance or math.huge)
-	end)
-	return out
-end
-
-local function collectGuiTextBlob(guiObject)
-	local parts = {}
-	if guiObject:IsA("TextLabel") or guiObject:IsA("TextButton") then
-		if guiObject.Text and guiObject.Text ~= "" then
-			table.insert(parts, guiObject.Text)
-		end
-	end
-	for _, child in ipairs(guiObject:GetDescendants()) do
-		if child:IsA("TextLabel") or child:IsA("TextButton") then
-			if child.Text and child.Text ~= "" then
-				table.insert(parts, child.Text)
-			end
-		end
-	end
-	return table.concat(parts, " ")
-end
-
-local function scanPerkDoorCandidates()
-	local doors = {}
-	local seen = {}
-	local function addDoor(inst, pos, text)
-		if not text or text == "" then
-			return
-		end
-		local rarity = perkRarityRank(text)
-		if rarity == 0 and not text:lower():find("perk", 1, true) then
-			return
-		end
-		local key = (inst and inst:GetFullName()) or text
-		if seen[key] then
-			return
-		end
-		seen[key] = true
-		table.insert(doors, {
-			door = #doors + 1,
-			rarity = rarity,
-			text = text,
-			pos = pos,
-			inst = inst,
-		})
-	end
-	for _, desc in ipairs(Workspace:GetDescendants()) do
-		local nameLower = desc.Name:lower()
-		if desc:IsA("Model") or desc:IsA("BasePart") then
-			if nameLower:find("portal", 1, true) or nameLower:find("door", 1, true)
-				or nameLower:find("perk", 1, true) or nameLower:find("gate", 1, true) then
-				local pos = getModelPosition(desc) or (desc:IsA("BasePart") and desc.Position)
-				local dist = pos and getPlayerPosition() and (pos - getPlayerPosition()).Magnitude
-				if not dist or dist < 250 then
-					addDoor(desc, pos, collectGuiTextBlob(desc))
-				end
-			end
-		elseif desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
-			local parent = desc.Parent
-			local pos = parent and (parent:IsA("BasePart") and parent.Position or getModelPosition(parent))
-			addDoor(desc, pos, collectGuiTextBlob(desc))
-		end
-	end
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if gui then
-		for _, desc in ipairs(gui:GetDescendants()) do
-			if desc:IsA("GuiObject") and desc.Visible then
-				local nameLower = desc.Name:lower()
-				local blob = collectGuiTextBlob(desc)
-				local blobLower = blob:lower()
-				if nameLower:find("perk", 1, true) or nameLower:find("door", 1, true)
-					or nameLower:find("portal", 1, true) or perkRarityRank(blob) > 0 then
-					local doorNum = nil
-					if nameLower:find("1", 1, true) or nameLower:find("left", 1, true) then
-						doorNum = 1
-					elseif nameLower:find("2", 1, true) or nameLower:find("right", 1, true) then
-						doorNum = 2
-					end
-					if perkRarityRank(blob) > 0 or blobLower:find("perk", 1, true) then
-						table.insert(doors, {
-							door = doorNum or (#doors + 1),
-							rarity = perkRarityRank(blob),
-							text = blob,
-							pos = nil,
-							inst = desc,
-						})
-					end
-				end
-			end
-		end
-	end
-	if #doors >= 2 then
-		local withPos = {}
-		for _, door in ipairs(doors) do
-			if door.pos then
-				table.insert(withPos, door)
-			end
-		end
-		if #withPos >= 2 then
-			table.sort(withPos, function(a, b)
-				return (a.pos.X or 0) < (b.pos.X or 0)
-			end)
-			for i, door in ipairs(withPos) do
-				door.door = i
-			end
-		end
-	end
-	return doors
-end
-
-local function pickBestPerkDoorFromPayload(payload)
-	if type(payload) ~= "table" then
-		return nil, nil
-	end
-	local options = {}
-	if type(payload[1]) == "table" and type(payload[2]) == "table" then
-		options = { payload[1], payload[2] }
-	elseif type(payload.doors) == "table" then
-		options = payload.doors
-	elseif type(payload.perks) == "table" then
-		options = payload.perks
-	elseif type(payload.options) == "table" then
-		options = payload.options
-	end
-	if #options >= 2 then
-		local r1 = perkRarityRank(options[1].Rarity or options[1].rarity or options[1].Tier or options[1].Name or options[1].name or options[1])
-		local r2 = perkRarityRank(options[2].Rarity or options[2].rarity or options[2].Tier or options[2].Name or options[2].name or options[2])
-		if r1 >= r2 then
-			return 1, r1
-		end
-		return 2, r2
-	end
-	return nil, nil
-end
-
-local function pickBestPerkDoor()
-	local door, rank = pickBestPerkDoorFromPayload(dungeonPerkPayload)
-	if door then
-		return door, rank, "event"
-	end
-	local doors = scanPerkDoorCandidates()
-	local left, right = nil, nil
-	for _, entry in ipairs(doors) do
-		if entry.door == 1 then
-			left = entry
-		elseif entry.door == 2 then
-			right = entry
-		end
-	end
-	if not left or not right then
-		local withPos = {}
-		for _, entry in ipairs(doors) do
-			if entry.pos then
-				table.insert(withPos, entry)
-			end
-		end
-		if #withPos >= 2 then
-			table.sort(withPos, function(a, b)
-				return a.pos.X < b.pos.X
-			end)
-			left, right = withPos[1], withPos[2]
-			left.door = 1
-			right.door = 2
-		end
-	end
-	if left and right then
-		if right.rarity > left.rarity then
-			return 2, right.rarity, right.text
-		end
-		return 1, left.rarity, left.text
-	end
-	if #doors == 1 then
-		return doors[1].door or 1, doors[1].rarity, doors[1].text
-	end
-	return 1, 0, "default"
-end
-
-local function ensureDungeonEventHooks()
-	if dungeonEventsHooked then
-		return
-	end
-	dungeonEventsHooked = true
-	local function onRoomChanged()
-		dungeonRoomVersion = dungeonRoomVersion + 1
-		contestInDungeon = true
-		dungeonPerkReady = false
-		setContestStatus("RoomChanged (floor signal)")
-	end
-	local roomChanged = resolveDungeonEvent(DUNGEON_RE.RoomChanged)
-	if roomChanged then
-		roomChanged.OnClientEvent:Connect(onRoomChanged)
-	else
-		warn("[BloxMonster Contest] RoomChanged event not found")
-	end
-	local perkReady = resolveDungeonEvent(DUNGEON_RE.PerkDoorsReady)
-	if perkReady then
-		perkReady.OnClientEvent:Connect(function(...)
-			dungeonPerkReady = true
-			dungeonPerkPayload = { ... }
-			if select("#", ...) == 1 and type((...)) == "table" then
-				dungeonPerkPayload = (...)
-			end
-			setContestStatus("PerkDoorsReady")
-		end)
-	end
-	local dungeonResult = resolveDungeonEvent(DUNGEON_RE.DungeonResult)
-	if dungeonResult then
-		dungeonResult.OnClientEvent:Connect(function()
-			dungeonRunEnded = true
-			contestInDungeon = false
-			setContestStatus("DungeonResult (run ended)")
-		end)
-	end
-end
-
-local function waitForContestSignal(checkFn, timeoutSec)
-	local deadline = wallClockSeconds() + (timeoutSec or 20)
-	while wallClockSeconds() < deadline do
-		if not contestRunning then
-			return false
-		end
-		if checkFn() then
-			return true
-		end
-		task.wait(0.25)
-	end
-	return false
-end
-
-local function waitForDungeonEntry(roomBefore, timeoutSec)
-	return waitForContestSignal(function()
-		return dungeonRoomVersion > roomBefore or dungeonRunEnded
-	end, timeoutSec or 18)
-end
-
-local function waitForPerkDoors(timeoutSec)
-	if dungeonPerkReady then
-		return true
-	end
-	return waitForContestSignal(function()
-		return dungeonPerkReady or dungeonRunEnded
-	end, timeoutSec or 45)
-end
-
-local function getKnitServicesFolder()
-	local packages = ReplicatedStorage:FindFirstChild("Packages")
-	local knit = packages and packages:FindFirstChild("Knit")
-	return knit and knit:FindFirstChild("Services")
-end
-
-local function getDungeonServiceFolder()
-	local services = getKnitServicesFolder()
-	return services and services:FindFirstChild("DungeonService")
-end
-
-scanAllRemotesText = function()
-	local lines = {
-		"=== DungeonService remotes ===",
-		"StartDungeon | ChoosePerk | LeaveDungeon",
-		"",
-	}
-	local dungeon = getDungeonServiceFolder()
-	if not dungeon then
-		table.insert(lines, "  (DungeonService not found under Knit.Services)")
-		return table.concat(lines, "\n"), 0
-	end
-	local count = 0
-	for _, remote in ipairs(dungeon:GetDescendants()) do
-		if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
-			count = count + 1
-			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
-		end
-	end
-	return table.concat(lines, "\n"), count
-end
-
-scanContestRemotesText = scanAllRemotesText
-
-local function buildContestStartArgSets(difficulty, useKey)
-	local argSets = {
-		{ difficulty.index },
-		{ difficulty.index - 1 },
-		{ difficulty.name },
-		{ difficulty.id },
-		{ tostring(difficulty.index) },
-		{ difficulty.name:upper() },
-	}
-	if difficulty.needsKey and useKey then
-		table.insert(argSets, { difficulty.index, true })
-		table.insert(argSets, { difficulty.name, true })
-		table.insert(argSets, { "Master", true })
-		table.insert(argSets, { 4, true })
-	else
-		table.insert(argSets, { difficulty.index, false })
-		table.insert(argSets, { difficulty.name, false })
-	end
-	return argSets
-end
-
-local function leaveDungeonKnit()
-	contestInDungeon = false
-	resetDungeonSignals()
-	local leave = resolveContestRemotePath(DUNGEON_RF.Leave)
-	if leave then
-		pcall(function()
-			invokeContestRemote(leave)
-		end)
-	end
-end
-
-local function startDungeonKnit(difficulty, useKey)
-	ensureDungeonEventHooks()
-	resetDungeonSignals()
-	local startRemote = resolveContestRemotePath(DUNGEON_RF.Start)
-	if not startRemote then
-		setContestStatus("StartDungeon remote not found")
-		return false, "no remote"
-	end
-	local argSets = buildContestStartArgSets(difficulty, useKey)
-	local lastResult = nil
-	for _, args in ipairs(argSets) do
-		local roomBefore = dungeonRoomVersion
-		local ok, result = invokeContestRemote(startRemote, table.unpack(args))
-		lastResult = result
-		local argText = table.concat(args, ", ")
-		local resultText = ok and formatRemoteResult(result) or ("ERR:" .. tostring(result))
-		setContestStatus(("StartDungeon(%s) => %s"):format(argText, resultText))
-		if ok then
-			local accepted = isRemoteSuccess(result)
-			if accepted ~= false then
-				if waitForDungeonEntry(roomBefore, 8) then
-					if dungeonRunEnded then
-						setContestStatus("StartDungeon rejected (DungeonResult)")
-						return false, result
-					end
-					contestInDungeon = true
-					return true, result
-				end
-				if accepted == true then
-					contestInDungeon = true
-					setContestStatus("StartDungeon accepted (no RoomChanged yet)")
-					return true, result
-				end
-			end
-		end
-	end
-	setContestStatus("StartDungeon failed – open Capture Contest menu, pick difficulty, then Start")
-	return false, lastResult
-end
-
-local function chooseDungeonPerk(pickMode)
-	local remote = resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
-	if not remote then
-		return false
-	end
-	local door = 1
-	local pickInfo = ""
-	if pickMode == "best" or pickMode == nil then
-		local perkRank
-		door, perkRank, pickInfo = pickBestPerkDoor()
-		if perkRank and perkRank > 0 then
-			pickInfo = ("rank %d"):format(perkRank) .. (pickInfo and pickInfo ~= "" and (": " .. pickInfo) or "")
-		end
-		pickInfo = pickInfo or ""
-	elseif pickMode == "second" then
-		door = 2
-	elseif pickMode == "random" then
-		door = math.random(1, 2)
-	end
-	local argSets = {
-		{ door },
-		{ door - 1 },
-		{ tostring(door) },
-	}
-	for _, args in ipairs(argSets) do
-		local ok, result = invokeContestRemote(remote, table.unpack(args))
-		setContestStatus(("ChoosePerk door %d (%s) => %s"):format(
-			door,
-			pickInfo ~= "" and pickInfo or pickMode or "best",
-			ok and formatRemoteResult(result) or tostring(result)
-		))
-		if ok and isRemoteSuccess(result) ~= false then
-			dungeonPerkReady = false
-			dungeonPerkPayload = nil
-			task.wait(0.5)
-			return true
-		end
-	end
-	task.wait(0.5)
-	return false
-end
-
-local function tryCombatEngage(model)
-	local setTarget = resolveContestRemotePath(COMBAT_RF.SetTarget)
-	if not setTarget or not model then
-		return false
-	end
-	local uid = model:GetAttribute("UID") or model:GetAttribute("Id") or model:GetAttribute("PetId")
-	local argSets = {
-		{ model },
-		{ model.Name },
-		{ uid },
-		{ tostring(uid) },
-	}
-	for _, args in ipairs(argSets) do
-		if args[1] and pcall(function()
-			fireRemote(setTarget, table.unpack(args))
-		end) then
-			task.wait(0.25)
-			local attack = resolveContestRemotePath(COMBAT_RF.RequestPetAttack)
-			if attack then
-				pcall(function()
-					fireRemote(attack)
-				end)
-			end
-			return true
-		end
-	end
-	return false
-end
-
-local function tryStartContest(difficulty, useKey)
-	local started, result = startDungeonKnit(difficulty, useKey)
-	if started then
-		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return true, result
-	end
-	return false, result
-end
-
-local function engageContestEnemy(model)
-	if not model then
-		return false
-	end
-	teleportToPet(model)
-	task.wait(0.35)
-	if tryCombatEngage(model) then
-		return true
-	end
-	for _, prompt in ipairs(model:GetDescendants()) do
-		if prompt:IsA("ProximityPrompt") then
-			local action = (prompt.ActionText or ""):lower()
-			local obj = (prompt.ObjectText or ""):lower()
-			for _, kw in ipairs(CONTEST_BATTLE_KEYWORDS) do
-				if action:find(kw, 1, true) or obj:find(kw, 1, true) then
-					if fireContestPrompt(prompt) then
-						return true
-					end
-				end
-			end
-		end
-	end
-	local anyPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if anyPrompt then
-		return fireContestPrompt(anyPrompt)
-	end
-	return false
-end
-
-local function waitForEnemyDown(model, timeoutSec)
-	timeoutSec = timeoutSec or 60
-	if not model or not model.Parent then
-		return false
-	end
-	local start = wallClockSeconds()
-	local lastAttack = 0
-	while wallClockSeconds() - start < timeoutSec do
-		if not contestRunning then
-			return false
-		end
-		if dungeonRunEnded or dungeonPerkReady then
-			return true
-		end
-		if not model.Parent then
-			return true
-		end
-		local hum = getModelHumanoid(model)
-		if not hum or hum.Health <= 0 then
-			return true
-		end
-		if wallClockSeconds() - lastAttack > 0.9 then
-			tryCombatEngage(model)
-			lastAttack = wallClockSeconds()
-		end
-		task.wait(0.4)
-	end
-	return false
-end
-
-local function selectPerkPortal(pickMode)
-	return chooseDungeonPerk(pickMode)
-end
-
-local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
-	local kills = 0
-	local idleSince = wallClockSeconds()
-	while kills < killsNeeded and contestRunning and contestRunId == runId and not dungeonRunEnded do
-		if dungeonPerkReady then
-			setContestStatus(("Floor %d – perk doors open"):format(floorNum))
-			return true
-		end
-		setContestStatus(("Floor %d/%d – kill %d/%d"):format(
-			floorNum, difficulty.floors, kills + 1, killsNeeded
-		))
-		local targets = getDungeonPetTargets()
-		if #targets == 0 then
-			if wallClockSeconds() - idleSince > 90 then
-				setContestStatus(("Floor %d – no pets found (90s timeout)"):format(floorNum))
-				return false
-			end
-			setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
-			task.wait(1.5)
-		else
-			idleSince = wallClockSeconds()
-			local target = targets[1].model
-			setContestStatus(("Floor %d – TP %s"):format(floorNum, targets[1].name or target.Name))
-			engageContestEnemy(target)
-			if waitForEnemyDown(target, 75) then
-				if dungeonPerkReady then
-					return true
-				end
-				kills = kills + 1
-			else
-				setContestStatus("Battle timeout – retrying")
-				task.wait(1)
-			end
-		end
-	end
-	if dungeonPerkReady or kills >= killsNeeded then
-		setContestStatus(("Floor %d – waiting for perk doors"):format(floorNum))
-		waitForPerkDoors(60)
-		selectPerkPortal(contestPerkPick)
-		local roomBefore = dungeonRoomVersion
-		waitForDungeonEntry(roomBefore, 25)
-		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return not dungeonRunEnded
-	end
-	return false
-end
-
-local function runContestDungeon(runId, difficulty)
-	ensureDungeonEventHooks()
-	local started, startResult = tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey)
-	if not started then
-		setContestStatus("Did not enter dungeon: " .. formatRemoteResult(startResult))
-		return false
-	end
-	for floor = 1, difficulty.floors do
-		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
-			break
-		end
-		if not runContestFloor(runId, difficulty, floor, difficulty.petsPerFloor) then
-			if dungeonRunEnded then
-				break
-			end
-			setContestStatus("Floor " .. floor .. " stalled – retrying run")
-			leaveDungeonKnit()
-			return false
-		end
-	end
-	if dungeonRunEnded then
-		setContestStatus(difficulty.name .. " run finished (DungeonResult)")
-	else
-		setContestStatus(difficulty.name .. " run complete")
-	end
-	leaveDungeonKnit()
-	return true
-end
-
-startContestDungeon = function()
-	if contestRunning then
-		setContestStatus("Already running")
-		return
-	end
-	if worldHuntRunning or autoFarmRunning then
-		setContestStatus("Stop pet/world farm first")
-		return
-	end
-	local difficulty = getContestDifficultyById(selectedContestDifficultyId)
-	if difficulty.needsKey and not contestUseMasterKey then
-		setContestStatus("Master requires key – enable Use Master key")
-		return
-	end
-	contestRunId = contestRunId + 1
-	local runId = contestRunId
-	contestRunning = true
-	setContestStatus("Starting " .. difficulty.name .. "...")
-	if contestThread then
-		pcall(task.cancel, contestThread)
-	end
-	contestThread = task.spawn(function()
-		while contestRunning and contestRunId == runId do
-			local pcallOk, runResult = pcall(function()
-				return runContestDungeon(runId, getContestDifficultyById(selectedContestDifficultyId))
-			end)
-			if not pcallOk and not tostring(runResult):find("cancelled", 1, true) then
-				setContestStatus("Error: " .. tostring(runResult))
-				warn("[BloxMonster Contest]", runResult)
-			end
-			if contestRunning and contestRunId == runId then
-				if pcallOk and runResult == false then
-					setContestStatus("Retry in 15s (open Capture Contest menu first)")
-					task.wait(15)
-				else
-					setContestStatus("Next run in 5s...")
-					task.wait(5)
-				end
-			end
-		end
-	end)
-end
-
-stopContestDungeon = function()
-	contestRunId = contestRunId + 1
-	contestRunning = false
-	leaveDungeonKnit()
-	if contestThread then
-		pcall(task.cancel, contestThread)
-		contestThread = nil
-	end
-	setContestStatus("Dungeon stopped")
-end
-
-end -- Capture Contest scope
-
-local contestScanRawText = ""
-
-openContestScanWindow = function(text)
-	text = text or ""
-	contestScanRawText = text
-
-	local existing = PlayerGui:FindFirstChild("BloxMonster_ContestScan")
-	if existing then
-		existing:Destroy()
-	end
-
-	local lineCount = math.max(1, select(2, text:gsub("\n", "\n")) + 1)
-	local bodyHeight = math.max(320, math.min(6000, lineCount * 14 + 12))
-
-	local scanScreen = Instance.new("ScreenGui")
-	scanScreen.Name = "BloxMonster_ContestScan"
-	scanScreen.ResetOnSpawn = false
-	scanScreen.DisplayOrder = 100
-	scanScreen.Parent = PlayerGui
-
-	local scanMain = Instance.new("Frame")
-	scanMain.Size = UDim2.new(0, 480, 0, 460)
-	scanMain.Position = UDim2.new(0.5, -240, 0.5, -230)
-	scanMain.AnchorPoint = Vector2.new(0.5, 0.5)
-	scanMain.BackgroundColor3 = Color3.fromRGB(18, 28, 48)
-	scanMain.BorderSizePixel = 0
-	scanMain.Active = true
-	scanMain.Parent = scanScreen
-
- Instance.new("UICorner", scanMain).CornerRadius = UDim.new(0, 10)
-
-	local scanTop = Instance.new("Frame")
-	scanTop.Size = UDim2.new(1, 0, 0, 30)
-	scanTop.BackgroundColor3 = Color3.fromRGB(45, 90, 60)
-	scanTop.BorderSizePixel = 0
-	scanTop.Active = true
-	scanTop.Parent = scanMain
- Instance.new("UICorner", scanTop).CornerRadius = UDim.new(0, 10)
-
-	local scanTitle = Instance.new("TextLabel")
-	scanTitle.Size = UDim2.new(1, -130, 1, 0)
-	scanTitle.Position = UDim2.new(0, 10, 0, 0)
-	scanTitle.BackgroundTransparency = 1
-	scanTitle.Text = ("Remotes (%d lines)"):format(lineCount)
-	scanTitle.TextColor3 = Color3.fromRGB(200, 255, 200)
-	scanTitle.TextSize = 13
-	scanTitle.Font = Enum.Font.GothamBold
-	scanTitle.TextXAlignment = Enum.TextXAlignment.Left
-	scanTitle.Parent = scanTop
-
-	local scanCopyBtn = Instance.new("TextButton")
-	scanCopyBtn.Size = UDim2.new(0, 56, 0, 22)
-	scanCopyBtn.Position = UDim2.new(1, -92, 0, 4)
-	scanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
-	scanCopyBtn.BorderSizePixel = 0
-	scanCopyBtn.Text = "Copy"
-	scanCopyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	scanCopyBtn.TextSize = 11
-	scanCopyBtn.Font = Enum.Font.GothamBold
-	scanCopyBtn.Parent = scanTop
- Instance.new("UICorner", scanCopyBtn).CornerRadius = UDim.new(0, 4)
-
-	local scanCloseBtn = Instance.new("TextButton")
-	scanCloseBtn.Size = UDim2.new(0, 30, 0, 30)
-	scanCloseBtn.Position = UDim2.new(1, -30, 0, 0)
-	scanCloseBtn.BackgroundTransparency = 1
-	scanCloseBtn.Text = "X"
-	scanCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	scanCloseBtn.TextSize = 16
-	scanCloseBtn.Font = Enum.Font.GothamBold
-	scanCloseBtn.Parent = scanTop
-
-	local scanScroll = Instance.new("ScrollingFrame")
-	scanScroll.Size = UDim2.new(1, -20, 1, -56)
-	scanScroll.Position = UDim2.new(0, 10, 0, 38)
-	scanScroll.BackgroundColor3 = Color3.fromRGB(10, 15, 25)
-	scanScroll.BorderSizePixel = 0
-	scanScroll.ScrollBarThickness = 10
-	scanScroll.CanvasSize = UDim2.new(0, 0, 0, bodyHeight + 8)
-	scanScroll.Parent = scanMain
- Instance.new("UICorner", scanScroll).CornerRadius = UDim.new(0, 6)
-
-	local scanBody = Instance.new("TextLabel")
-	scanBody.Name = "Body"
-	scanBody.Size = UDim2.new(1, -8, 0, bodyHeight)
-	scanBody.Position = UDim2.new(0, 4, 0, 4)
-	scanBody.BackgroundTransparency = 1
-	scanBody.Text = text
-	scanBody.TextColor3 = Color3.fromRGB(255, 255, 255)
-	scanBody.TextSize = 12
-	scanBody.Font = Enum.Font.Gotham
-	scanBody.TextXAlignment = Enum.TextXAlignment.Left
-	scanBody.TextYAlignment = Enum.TextYAlignment.Top
-	scanBody.TextWrapped = false
-	scanBody.Parent = scanScroll
-
-	local scanTip = Instance.new("TextLabel")
-	scanTip.Size = UDim2.new(1, -20, 0, 18)
-	scanTip.Position = UDim2.new(0, 10, 1, -20)
-	scanTip.BackgroundTransparency = 1
-	scanTip.Text = "Also printed to executor console (F9). Paste list in chat."
-	scanTip.TextColor3 = Color3.fromRGB(180, 200, 180)
-	scanTip.TextSize = 10
-	scanTip.Font = Enum.Font.Gotham
-	scanTip.TextXAlignment = Enum.TextXAlignment.Left
-	scanTip.Parent = scanMain
-
-	scanCopyBtn.MouseButton1Click:Connect(function()
-		local copied = copyText(contestScanRawText)
-		scanTip.Text = copied and "Copied!" or "Copy from F9 console output."
-	end)
-
-	scanCloseBtn.MouseButton1Click:Connect(function()
-		contestScanRawText = ""
-		scanScreen:Destroy()
-	end)
-end
-
 local function makeDraggable(frame, dragHandles)
 	local dragging = false
 	local dragStart, startPos
@@ -2423,6 +1435,20 @@ local function makeDraggable(frame, dragHandles)
 			dragging = false
 		end
 	end)
+end
+
+local function teleportToPet(model)
+	if farmLocationStayActive then
+		return false
+	end
+	if not model then
+		return false
+	end
+	local pos = getModelPosition(model)
+	if not pos then
+		return false
+	end
+	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
 end
 
 -- Fuse / inventory discovery (Phase 1 – scoped to avoid 200-local limit).
@@ -3272,9 +2298,6 @@ local function syncKnitPetCacheFromKnit(opts)
 	return n
 end
 
-end -- knit pet cache sync
-
-do -- auto-fuse + rankup (local register limit)
 local FUSE_TARGET_RANKS = { "E", "D", "C", "B" }
 local ASCEND_TO_RANK = { "E", "D", "C", "B", "A", "S", "SS", "SSS" }
 
@@ -3912,7 +2935,7 @@ dumpKnitPetInventoryText = function()
 	return table.concat(lines, "\n"), count
 end
 
-end -- auto-fuse + rankup
+end -- knit pet cache + auto-fuse
 
 do -- fuse scan + inventory UI dump (local register limit)
 scanFuseRelatedRemotesText = function()
@@ -4559,7 +3582,7 @@ tabBar.Parent = main
 
 local tabPetsBtn = Instance.new("TextButton")
 tabPetsBtn.Name = "TabPets"
-tabPetsBtn.Size = UDim2.new(0.2, -3, 1, 0)
+tabPetsBtn.Size = UDim2.new(0.25, -3, 1, 0)
 tabPetsBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
 tabPetsBtn.BorderSizePixel = 0
 tabPetsBtn.Text = "Pets"
@@ -4574,8 +3597,8 @@ tabPetsCorner.Parent = tabPetsBtn
 
 local tabWorldsBtn = Instance.new("TextButton")
 tabWorldsBtn.Name = "TabWorlds"
-tabWorldsBtn.Size = UDim2.new(0.2, -3, 1, 0)
-tabWorldsBtn.Position = UDim2.new(0.2, 2, 0, 0)
+tabWorldsBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabWorldsBtn.Position = UDim2.new(0.25, 3, 0, 0)
 tabWorldsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabWorldsBtn.BorderSizePixel = 0
 tabWorldsBtn.Text = "Worlds"
@@ -4588,26 +3611,10 @@ local tabWorldsCorner = Instance.new("UICorner")
 tabWorldsCorner.CornerRadius = UDim.new(0, 6)
 tabWorldsCorner.Parent = tabWorldsBtn
 
-local tabDungeonBtn = Instance.new("TextButton")
-tabDungeonBtn.Name = "TabDungeon"
-tabDungeonBtn.Size = UDim2.new(0.2, -3, 1, 0)
-tabDungeonBtn.Position = UDim2.new(0.4, 4, 0, 0)
-tabDungeonBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
-tabDungeonBtn.BorderSizePixel = 0
-tabDungeonBtn.Text = "Dungeon"
-tabDungeonBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
-tabDungeonBtn.TextSize = 10
-tabDungeonBtn.Font = Enum.Font.GothamBold
-tabDungeonBtn.Parent = tabBar
-
-local tabDungeonCorner = Instance.new("UICorner")
-tabDungeonCorner.CornerRadius = UDim.new(0, 6)
-tabDungeonCorner.Parent = tabDungeonBtn
-
 local tabLocationsBtn = Instance.new("TextButton")
 tabLocationsBtn.Name = "TabLocations"
-tabLocationsBtn.Size = UDim2.new(0.2, -3, 1, 0)
-tabLocationsBtn.Position = UDim2.new(0.6, 6, 0, 0)
+tabLocationsBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabLocationsBtn.Position = UDim2.new(0.5, 6, 0, 0)
 tabLocationsBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabLocationsBtn.BorderSizePixel = 0
 tabLocationsBtn.Text = "Locations"
@@ -4622,8 +3629,8 @@ tabLocationsCorner.Parent = tabLocationsBtn
 
 local tabConfigBtn = Instance.new("TextButton")
 tabConfigBtn.Name = "TabConfig"
-tabConfigBtn.Size = UDim2.new(0.2, -3, 1, 0)
-tabConfigBtn.Position = UDim2.new(0.8, 8, 0, 0)
+tabConfigBtn.Size = UDim2.new(0.25, -3, 1, 0)
+tabConfigBtn.Position = UDim2.new(0.75, 9, 0, 0)
 tabConfigBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
 tabConfigBtn.BorderSizePixel = 0
 tabConfigBtn.Text = "Config"
@@ -4654,7 +3661,6 @@ UI.closeBtn = closeBtn
 UI.filtersBtn = filtersBtn
 UI.tabPetsBtn = tabPetsBtn
 UI.tabWorldsBtn = tabWorldsBtn
-UI.tabDungeonBtn = tabDungeonBtn
 UI.tabLocationsBtn = tabLocationsBtn
 UI.tabConfigBtn = tabConfigBtn
 UI.tabContentHost = tabContentHost
@@ -5487,220 +4493,6 @@ UI.locationsPanel = locationsPanel
 end
 
 do
-local tabContentHost = UI.tabContentHost
-
-local dungeonPanel = Instance.new("Frame")
-dungeonPanel.Name = "DungeonPanel"
-dungeonPanel.Size = UDim2.new(1, 0, 1, 0)
-dungeonPanel.BackgroundTransparency = 1
-dungeonPanel.Visible = false
-dungeonPanel.ZIndex = 1
-dungeonPanel.Parent = tabContentHost
-
-local dungeonHint = Instance.new("TextLabel")
-dungeonHint.Size = UDim2.new(1, -12, 0, 28)
-dungeonHint.Position = UDim2.new(0, 6, 0, 2)
-dungeonHint.BackgroundTransparency = 1
-dungeonHint.Text = "Open Capture Contest in-game, pick difficulty, then Start. Status shows StartDungeon server reply."
-dungeonHint.TextColor3 = Color3.fromRGB(150, 190, 160)
-dungeonHint.TextSize = 10
-dungeonHint.Font = Enum.Font.Gotham
-dungeonHint.TextXAlignment = Enum.TextXAlignment.Left
-dungeonHint.TextWrapped = true
-dungeonHint.Parent = dungeonPanel
-
-local dungeonDiffLabel = Instance.new("TextLabel")
-dungeonDiffLabel.Size = UDim2.new(1, -12, 0, 14)
-dungeonDiffLabel.Position = UDim2.new(0, 6, 0, 32)
-dungeonDiffLabel.BackgroundTransparency = 1
-dungeonDiffLabel.Text = "Difficulty (Standard / Advanced / Elite / Master)"
-dungeonDiffLabel.TextColor3 = Color3.fromRGB(180, 220, 190)
-dungeonDiffLabel.TextSize = 11
-dungeonDiffLabel.Font = Enum.Font.GothamBold
-dungeonDiffLabel.TextXAlignment = Enum.TextXAlignment.Left
-dungeonDiffLabel.Parent = dungeonPanel
-
-local dungeonDiffBtns = {}
-for i, diff in ipairs(CONTEST_DIFFICULTIES) do
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0.25, -6, 0, 26)
-	btn.Position = UDim2.new((i - 1) * 0.25, 6 + (i - 1) * 2, 0, 50)
-	btn.BackgroundColor3 = diff.id == selectedContestDifficultyId
-		and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
-	btn.BorderSizePixel = 0
-	btn.Text = diff.name
-	btn.TextColor3 = Color3.fromRGB(220, 255, 220)
-	btn.TextSize = 10
-	btn.Font = Enum.Font.GothamBold
-	btn.Parent = dungeonPanel
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 4)
-	corner.Parent = btn
-	dungeonDiffBtns[diff.id] = btn
-end
-
-local dungeonMasterKeyBtn = Instance.new("TextButton")
-dungeonMasterKeyBtn.Size = UDim2.new(0.5, -9, 0, 22)
-dungeonMasterKeyBtn.Position = UDim2.new(0, 6, 0, 82)
-dungeonMasterKeyBtn.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
-dungeonMasterKeyBtn.BorderSizePixel = 0
-dungeonMasterKeyBtn.Text = "Use Master key: ON"
-dungeonMasterKeyBtn.TextColor3 = Color3.fromRGB(200, 255, 210)
-dungeonMasterKeyBtn.TextSize = 9
-dungeonMasterKeyBtn.Font = Enum.Font.GothamBold
-dungeonMasterKeyBtn.Parent = dungeonPanel
-
-local dungeonMasterKeyCorner = Instance.new("UICorner")
-dungeonMasterKeyCorner.CornerRadius = UDim.new(0, 4)
-dungeonMasterKeyCorner.Parent = dungeonMasterKeyBtn
-
-local dungeonPerkBtn = Instance.new("TextButton")
-dungeonPerkBtn.Size = UDim2.new(0.5, -9, 0, 22)
-dungeonPerkBtn.Position = UDim2.new(0.5, 3, 0, 82)
-dungeonPerkBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
-dungeonPerkBtn.BorderSizePixel = 0
-dungeonPerkBtn.Text = "Perk portal: 1st"
-dungeonPerkBtn.TextColor3 = Color3.fromRGB(180, 210, 190)
-dungeonPerkBtn.TextSize = 9
-dungeonPerkBtn.Font = Enum.Font.GothamBold
-dungeonPerkBtn.Parent = dungeonPanel
-
-local dungeonPerkCorner = Instance.new("UICorner")
-dungeonPerkCorner.CornerRadius = UDim.new(0, 4)
-dungeonPerkCorner.Parent = dungeonPerkBtn
-
-local dungeonStartBtn = Instance.new("TextButton")
-dungeonStartBtn.Size = UDim2.new(0, 72, 0, 28)
-dungeonStartBtn.Position = UDim2.new(0, 6, 0, 112)
-dungeonStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
-dungeonStartBtn.BorderSizePixel = 0
-dungeonStartBtn.Text = "Start"
-dungeonStartBtn.TextColor3 = Color3.fromRGB(220, 255, 255)
-dungeonStartBtn.TextSize = 11
-dungeonStartBtn.Font = Enum.Font.GothamBold
-dungeonStartBtn.Parent = dungeonPanel
-
-local dungeonStartCorner = Instance.new("UICorner")
-dungeonStartCorner.CornerRadius = UDim.new(0, 6)
-dungeonStartCorner.Parent = dungeonStartBtn
-
-local dungeonStopBtn = Instance.new("TextButton")
-dungeonStopBtn.Size = UDim2.new(0, 72, 0, 28)
-dungeonStopBtn.Position = UDim2.new(0, 84, 0, 112)
-dungeonStopBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
-dungeonStopBtn.BorderSizePixel = 0
-dungeonStopBtn.Text = "Stop"
-dungeonStopBtn.TextColor3 = Color3.fromRGB(255, 200, 200)
-dungeonStopBtn.TextSize = 11
-dungeonStopBtn.Font = Enum.Font.GothamBold
-dungeonStopBtn.Parent = dungeonPanel
-
-local dungeonStopCorner = Instance.new("UICorner")
-dungeonStopCorner.CornerRadius = UDim.new(0, 6)
-dungeonStopCorner.Parent = dungeonStopBtn
-
-local dungeonScanBtn = Instance.new("TextButton")
-dungeonScanBtn.Size = UDim2.new(0, 72, 0, 28)
-dungeonScanBtn.Position = UDim2.new(0, 162, 0, 112)
-dungeonScanBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
-dungeonScanBtn.BorderSizePixel = 0
-dungeonScanBtn.Text = "Remotes"
-dungeonScanBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
-dungeonScanBtn.TextSize = 10
-dungeonScanBtn.Font = Enum.Font.Gotham
-dungeonScanBtn.Parent = dungeonPanel
-
-local dungeonScanCorner = Instance.new("UICorner")
-dungeonScanCorner.CornerRadius = UDim.new(0, 6)
-dungeonScanCorner.Parent = dungeonScanBtn
-
-local dungeonScanCopyBtn = Instance.new("TextButton")
-dungeonScanCopyBtn.Size = UDim2.new(0, 72, 0, 28)
-dungeonScanCopyBtn.Position = UDim2.new(0, 240, 0, 112)
-dungeonScanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
-dungeonScanCopyBtn.BorderSizePixel = 0
-dungeonScanCopyBtn.Text = "Copy"
-dungeonScanCopyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
-dungeonScanCopyBtn.TextSize = 10
-dungeonScanCopyBtn.Font = Enum.Font.GothamBold
-dungeonScanCopyBtn.Parent = dungeonPanel
-
-local dungeonScanCopyCorner = Instance.new("UICorner")
-dungeonScanCopyCorner.CornerRadius = UDim.new(0, 6)
-dungeonScanCopyCorner.Parent = dungeonScanCopyBtn
-
-local dungeonStatusLabel = Instance.new("TextLabel")
-dungeonStatusLabel.Size = UDim2.new(1, -12, 0, 22)
-dungeonStatusLabel.Position = UDim2.new(0, 6, 0, 146)
-dungeonStatusLabel.BackgroundTransparency = 1
-dungeonStatusLabel.Text = "Dungeon idle"
-dungeonStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
-dungeonStatusLabel.TextSize = 10
-dungeonStatusLabel.Font = Enum.Font.Gotham
-dungeonStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-dungeonStatusLabel.TextWrapped = true
-dungeonStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
-dungeonStatusLabel.Parent = dungeonPanel
-
-local dungeonScanScroll = Instance.new("ScrollingFrame")
-dungeonScanScroll.Size = UDim2.new(1, -12, 1, -178)
-dungeonScanScroll.Position = UDim2.new(0, 6, 0, 172)
-dungeonScanScroll.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
-dungeonScanScroll.BorderSizePixel = 0
-dungeonScanScroll.ScrollBarThickness = 6
-dungeonScanScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
-dungeonScanScroll.ScrollingDirection = Enum.ScrollingDirection.Y
-dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-dungeonScanScroll.Parent = dungeonPanel
-
-local dungeonScanScrollCorner = Instance.new("UICorner")
-dungeonScanScrollCorner.CornerRadius = UDim.new(0, 6)
-dungeonScanScrollCorner.Parent = dungeonScanScroll
-
-local dungeonScanContent = Instance.new("TextBox")
-dungeonScanContent.Size = UDim2.new(1, -8, 0, 0)
-dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
-dungeonScanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
-dungeonScanContent.BackgroundTransparency = 0
-dungeonScanContent.BorderSizePixel = 0
-dungeonScanContent.Text = "Tap Remotes to list DungeonService remotes.\nCopy and paste the list here in chat."
-dungeonScanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
-dungeonScanContent.TextSize = 11
-dungeonScanContent.Font = Enum.Font.Gotham
-dungeonScanContent.TextXAlignment = Enum.TextXAlignment.Left
-dungeonScanContent.TextYAlignment = Enum.TextYAlignment.Top
-dungeonScanContent.TextWrapped = true
-dungeonScanContent.ClearTextOnFocus = false
-dungeonScanContent.MultiLine = true
-dungeonScanContent.TextEditable = false
-dungeonScanContent.AutomaticSize = Enum.AutomaticSize.Y
-dungeonScanContent.Parent = dungeonScanScroll
-
-local function updateDungeonScanCanvas()
-	local contentY = dungeonScanContent.AbsoluteSize.Y
-	local scrollY = dungeonScanScroll.AbsoluteWindowSize.Y
-	dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 12))
-end
-dungeonScanContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateDungeonScanCanvas)
-
-local dungeonInfoLabel = Instance.new("TextLabel")
-dungeonInfoLabel.Size = UDim2.new(1, -12, 0, 0)
-dungeonInfoLabel.Visible = false
-dungeonInfoLabel.Parent = dungeonPanel
-
-UI.dungeonPanel = dungeonPanel
-UI.dungeonDiffBtns = dungeonDiffBtns
-UI.dungeonMasterKeyBtn = dungeonMasterKeyBtn
-UI.dungeonPerkBtn = dungeonPerkBtn
-UI.dungeonStartBtn = dungeonStartBtn
-UI.dungeonStopBtn = dungeonStopBtn
-UI.dungeonScanBtn = dungeonScanBtn
-UI.dungeonScanCopyBtn = dungeonScanCopyBtn
-UI.dungeonScanContent = dungeonScanContent
-UI.dungeonStatusLabel = dungeonStatusLabel
-end
-
-do
 local main = UI.main
 local tabContentHost = UI.tabContentHost
 
@@ -6174,47 +4966,23 @@ setAutoFuseStatusHandler(function(msg)
 	end)
 end)
 
-setContestStatusHandler(function(msg)
-	pcall(function()
-		local lbl = UI and UI.dungeonStatusLabel
-		if lbl and lbl.Parent then
-			lbl.Text = msg
-		end
-	end)
-end)
-
 TAB_PANELS = {
 	{ id = "pets", panel = UI.petsPanel },
 	{ id = "worlds", panel = UI.worldsPanel },
-	{ id = "dungeon", panel = UI.dungeonPanel },
 	{ id = "locations", panel = UI.locationsPanel },
 	{ id = "config", panel = UI.configPanel },
 }
 
 
--- Shared across app handler blocks (Luau 200-local register limit).
-local refreshList
-local refreshWorldList
-local populateList
-local rebuildFilterChips
-local addFilterFromInput
-local setFilterBarVisible
-local rebuildWorldFilterChips
-local addWorldFilterFromInput
-local highlightWorldButtons
-local getWorldConfigById
-local applyListsFromPets
-local tickFarmLists
-local farmWaitWithListRefresh
-local filterBarVisible = true
 local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
+local filterBarVisible = true
 
+local refreshList
+local refreshWorldList
 
-do -- app handlers part 1 (local register limit)
-
-getWorldConfigById = function(worldId)
+local function getWorldConfigById(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
 		if world.id == worldId then
 			return world
@@ -6256,7 +5024,7 @@ local function updateWorldSelectedLabel()
 	UI.worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
 end
 
-highlightWorldButtons = function()
+local function highlightWorldButtons()
 	for worldId, btn in pairs(UI.worldButtons) do
 		if worldId == selectedWorldId then
 			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
@@ -6266,7 +5034,7 @@ highlightWorldButtons = function()
 	end
 end
 
-rebuildWorldFilterChips = function()
+local function rebuildWorldFilterChips()
 	for _, child in ipairs(UI.worldFilterChipScroll:GetChildren()) do
 		if child ~= UI.worldFilterChipLayout then
 			child:Destroy()
@@ -6317,7 +5085,7 @@ rebuildWorldFilterChips = function()
 	updateWorldSelectedLabel()
 end
 
-addWorldFilterFromInput = function()
+local function addWorldFilterFromInput()
 	local raw = UI.worldFilterInput.Text
 	if raw == "" then
 		UI.worldFilterHint.Text = "Type: Thornshade@1"
@@ -6351,7 +5119,7 @@ addWorldFilterFromInput = function()
 	end
 end
 
-setFilterBarVisible = function(visible)
+local function setFilterBarVisible(visible)
 	filterBarVisible = visible
 	UI.filterBar.Visible = visible
 	if visible then
@@ -6509,7 +5277,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 	end
 end
 
-populateList = function(pets, totalUnfiltered)
+local function populateList(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
@@ -6518,7 +5286,7 @@ local function populateWorldList(pets, totalUnfiltered, totalScanned)
 	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
 
-rebuildFilterChips = function()
+local function rebuildFilterChips()
 	for _, child in ipairs(UI.filterChipScroll:GetChildren()) do
 		if child ~= UI.filterChipLayout then
 			child:Destroy()
@@ -6566,7 +5334,7 @@ rebuildFilterChips = function()
 	end
 end
 
-addFilterFromInput = function()
+local function addFilterFromInput()
 	local raw = UI.filterInput.Text
 	if raw == "" then
 		UI.filterHint.Text = "Type: Rio@1, Dori@3"
@@ -6617,7 +5385,7 @@ refreshList = function(rescan)
 	end
 end
 
-applyListsFromPets = function(pets, worldConfig, worldFilters)
+local function applyListsFromPets(pets, worldConfig, worldFilters)
 	local filteredPets = applyNameFilters(pets)
 	populateList(filteredPets, #pets)
 	if worldConfig then
@@ -6627,7 +5395,7 @@ applyListsFromPets = function(pets, worldConfig, worldFilters)
 	end
 end
 
-tickFarmLists = function(runId, world, filters, scanMode, mode)
+local function tickFarmLists(runId, world, filters, scanMode, mode)
 	mode = mode or (world and "world" or "pet")
 	if runId and not shouldFarmContinue(runId, mode) then
 		return false
@@ -6666,7 +5434,7 @@ tickFarmLists = function(runId, world, filters, scanMode, mode)
 	return runId == nil or shouldFarmContinue(runId, mode)
 end
 
-farmWaitWithListRefresh = function(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
+local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
 	mode = mode or (world and "world" or "pet")
 	local nextRefreshIn = 0
 	for sec = waitSec, 1, -1 do
@@ -6719,10 +5487,6 @@ refreshWorldList = function(rescan, worldConfig)
 		warn("[BloxMonster] World refresh error:", err)
 	end
 end
-
-end -- app handlers part 1
-
-do -- app handlers part 2 (local register limit)
 
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
@@ -6892,47 +5656,6 @@ local function setTabPanelVisible(panel, visible)
 	panel.ZIndex = visible and 2 or 1
 end
 
-local function highlightContestDifficultyButtons()
-	if not UI or not UI.dungeonDiffBtns then
-		return
-	end
-	for diffId, btn in pairs(UI.dungeonDiffBtns) do
-		if diffId == selectedContestDifficultyId then
-			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
-		else
-			btn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
-		end
-	end
-end
-
-local function updateContestMasterKeyBtn()
-	if not UI or not UI.dungeonMasterKeyBtn then
-		return
-	end
-	if contestUseMasterKey then
-		UI.dungeonMasterKeyBtn.Text = "Use Master key: ON"
-		UI.dungeonMasterKeyBtn.BackgroundColor3 = Color3.fromRGB(45, 75, 55)
-	else
-		UI.dungeonMasterKeyBtn.Text = "Use Master key: OFF"
-		UI.dungeonMasterKeyBtn.BackgroundColor3 = Color3.fromRGB(35, 55, 75)
-	end
-end
-
-local function updateContestPerkBtn()
-	if not UI or not UI.dungeonPerkBtn then
-		return
-	end
-	if contestPerkPick == "best" then
-		UI.dungeonPerkBtn.Text = "Perk: Best rarity"
-	elseif contestPerkPick == "second" then
-		UI.dungeonPerkBtn.Text = "Perk portal: 2nd"
-	elseif contestPerkPick == "random" then
-		UI.dungeonPerkBtn.Text = "Perk portal: Random"
-	else
-		UI.dungeonPerkBtn.Text = "Perk portal: 1st"
-	end
-end
-
 local function setActiveTab(tabName)
 	activeTab = tabName
 	if TAB_PANELS then
@@ -6944,7 +5667,6 @@ local function setActiveTab(tabName)
 
 	styleTabButton(UI.tabPetsBtn, tabName == "pets")
 	styleTabButton(UI.tabWorldsBtn, tabName == "worlds")
-	styleTabButton(UI.tabDungeonBtn, tabName == "dungeon")
 	styleTabButton(UI.tabLocationsBtn, tabName == "locations")
 	styleTabButton(UI.tabConfigBtn, tabName == "config")
 
@@ -6953,10 +5675,6 @@ local function setActiveTab(tabName)
 	elseif tabName == "worlds" then
 		rebuildWorldFilterChips()
 		refreshWorldList(false)
-	elseif tabName == "dungeon" then
-		highlightContestDifficultyButtons()
-		updateContestMasterKeyBtn()
-		updateContestPerkBtn()
 	elseif tabName == "locations" then
 		refreshLocationRows()
 	elseif tabName == "config" then
@@ -7006,18 +5724,12 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	if statusText then
 		setWorldFarmStatus(statusText)
 	end
-	local ok, err = pcall(function()
-		local pets = getCachedWorldPets(scanMode or "auto")
-		if runId and not shouldFarmContinue(runId, "world") then
-			return
-		end
-		local filters = worldPetFilters[world.id] or {}
-		applyListsFromPets(pets, world, filters)
-	end)
-	if not ok then
-		warn("[BloxMonster] World farm list error:", err)
-		setWorldFarmStatus("List refresh error – retrying...")
+	local pets = getCachedWorldPets(scanMode or "auto")
+	if runId and not shouldFarmContinue(runId, "world") then
+		return false
 	end
+	local filters = worldPetFilters[world.id] or {}
+	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
 
@@ -7113,12 +5825,7 @@ local function runWorldFarmLoop(runId)
 		if not runFarmLocationPhase(runId) then
 			break
 		end
-		if not shouldFarmContinue(runId, "world") then
-			break
-		end
 
-		local worldsVisited = 0
-		setWorldFarmStatus("Farm stay done – starting world cycle...")
 		for _, world in ipairs(WORLD_ZONES) do
 			if farmLocationStayActive or not shouldFarmContinue(runId, "world") then
 				break
@@ -7126,7 +5833,6 @@ local function runWorldFarmLoop(runId)
 			local filters = worldPetFilters[world.id]
 			local highFilters = filtersBelowPriority(filters, WORLD_CYCLE_BONUS_MIN_PRIORITY)
 			if #highFilters > 0 then
-				worldsVisited = worldsVisited + 1
 				selectedWorldId = world.id
 				highlightWorldButtons()
 				rebuildWorldFilterChips()
@@ -7154,7 +5860,6 @@ local function runWorldFarmLoop(runId)
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
-						setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
 						break
 					end
 
@@ -7178,12 +5883,6 @@ local function runWorldFarmLoop(runId)
 						break
 					end
 				end
-			end
-		end
-		if worldsVisited == 0 then
-			setWorldFarmStatus("No P1-P2 pets on Worlds tab – add e.g. Rio@1 per world")
-			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world") then
-				break
 			end
 		end
 		if shouldFarmContinue(runId, "world") then
@@ -7265,17 +5964,11 @@ local function startWorldFarm()
 		end)
 		if not ok and not tostring(err):find("cancelled", 1, true) then
 			warn("[BloxMonster] World hunt error:", err)
-			if worldFarmRunId == myRunId then
-				setWorldFarmStatus("World hunt error: " .. tostring(err))
-			end
 		end
 		if worldFarmRunId == myRunId then
 			worldHuntRunning = false
-			farmLocationStayActive = false
 			UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
-			if ok or tostring(err):find("cancelled", 1, true) then
-				UI.worldHuntStatusLabel.Text = "World hunt idle"
-			end
+			UI.worldHuntStatusLabel.Text = "World hunt idle"
 		end
 	end)
 	maybeStartAutoFuseWithFarm()
@@ -7417,10 +6110,6 @@ local function connectAllUIHandlers()
 		setActiveTab("worlds")
 	end)
 
-	UI.tabDungeonBtn.MouseButton1Click:Connect(function()
-		setActiveTab("dungeon")
-	end)
-
 	UI.tabLocationsBtn.MouseButton1Click:Connect(function()
 		setActiveTab("locations")
 	end)
@@ -7509,106 +6198,12 @@ local function connectAllUIHandlers()
 		stopWorldHunt()
 	end)
 
-	for diffId, btn in pairs(UI.dungeonDiffBtns) do
-		btn.MouseButton1Click:Connect(function()
-			selectedContestDifficultyId = diffId
-			highlightContestDifficultyButtons()
-		end)
-	end
-
-	UI.dungeonMasterKeyBtn.MouseButton1Click:Connect(function()
-		contestUseMasterKey = not contestUseMasterKey
-		updateContestMasterKeyBtn()
-	end)
-
-	UI.dungeonPerkBtn.MouseButton1Click:Connect(function()
-		if contestPerkPick == "best" then
-			contestPerkPick = "first"
-		elseif contestPerkPick == "first" then
-			contestPerkPick = "second"
-		elseif contestPerkPick == "second" then
-			contestPerkPick = "random"
-		else
-			contestPerkPick = "best"
-		end
-		updateContestPerkBtn()
-	end)
-
-	UI.dungeonStartBtn.MouseButton1Click:Connect(function()
-		UI.dungeonStartBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 140)
-		startContestDungeon()
-	end)
-
-	UI.dungeonStopBtn.MouseButton1Click:Connect(function()
-		stopContestDungeon()
-		UI.dungeonStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
-	end)
-
-local function printRemotesToConsole(text)
-	warn("[BloxMonster] === REMOTE LIST START ===")
-	for line in string.gmatch(text or "", "[^\n]+") do
-		warn("[BloxMonster] " .. line)
-	end
-	warn("[BloxMonster] === REMOTE LIST END ===")
-end
-
-local function runContestRemotesDump()
-	UI.dungeonStatusLabel.Text = "Listing DungeonService remotes..."
-	UI.dungeonScanBtn.Text = "..."
-	local ok, text, count = pcall(function()
-		if type(scanAllRemotesText) ~= "function" then
-			error("scanAllRemotesText missing – reload bloxmonster v1.12.3")
-		end
-		return scanAllRemotesText()
-	end)
-	if not ok then
-		text = "Scan error:\n" .. tostring(text)
-		count = 0
-		warn("[BloxMonster Contest]", text)
-	elseif not text or text == "" then
-		text = "Scan returned empty."
-		count = 0
-	end
-	if typeof(_G) == "table" then
-		_G.BloxMonsterLastContestScan = text
-	end
-	openContestScanWindow(text)
-	printRemotesToConsole(text)
-	if UI.dungeonScanContent then
-		UI.dungeonScanContent.Text = text
-	end
-	local copied = copyText(text)
-	UI.dungeonStatusLabel.Text = copied
-		and ("Done: %d DungeonService remote(s) – copied + F9 console."):format(count or 0)
-		or ("Done: %d DungeonService remote(s) – see popup + F9."):format(count or 0)
-	UI.dungeonScanBtn.Text = "Remotes"
-	print("[BloxMonster Contest remotes]\n" .. text)
-end
-
-	UI.dungeonScanBtn.MouseButton1Click:Connect(function()
-		runContestRemotesDump()
-	end)
-
-	UI.dungeonScanCopyBtn.MouseButton1Click:Connect(function()
-		local text = contestScanRawText
-		if (not text or text == "") and UI.dungeonScanContent then
-			text = UI.dungeonScanContent.Text or ""
-		end
-		if text == "" or text:find("Tap Remotes") then
-			runContestRemotesDump()
-			return
-		end
-		local copied = copyText(text)
-		UI.dungeonStatusLabel.Text = copied and "Copied!" or "Use F9 console output."
-	end)
-
 	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
 	UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
 	UI.closeBtn.MouseButton1Click:Connect(function()
 		stopAutoRefresh()
 		stopAllFarm()
-		stopContestDungeon()
 		stopAutoFuse()
 		UI.screen:Destroy()
 	end)
@@ -7626,7 +6221,7 @@ end
 		end
 		autoRefreshThread = task.spawn(function()
 			while autoRefreshRunning do
-				if not autoFarmRunning and not worldHuntRunning and not contestRunning and not farmLocationStayActive then
+				if not autoFarmRunning and not worldHuntRunning and not farmLocationStayActive then
 					if activeTab == "worlds" then
 						refreshWorldList()
 					elseif activeTab == "pets" then
@@ -7653,9 +6248,6 @@ task.defer(function()
 		refreshLocationRows()
 		refreshList()
 		updateFarmLocationEnableButton()
-		highlightContestDifficultyButtons()
-		updateContestMasterKeyBtn()
-		updateContestPerkBtn()
 		refreshConfigStatusLabel()
 	end)
 	if not initOk then
@@ -7664,5 +6256,3 @@ task.defer(function()
 	print(("[BloxMonster] v%s loaded"):format(VERSION))
 	task.defer(getWorldRemotes)
 end)
-
-end -- app handlers part 2
