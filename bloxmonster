@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.0"
+local VERSION = "1.12.2"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1431,40 +1431,17 @@ local setContestStatusHandler
 local openContestScanWindow
 
 do
-local CONTEST_REMOTE_KEYWORDS = {
-	"contest", "capture", "dungeon", "challenge", "tower", "raid", "floor", "perk",
-	"elite", "master", "standard", "advanced", "trial", "wave", "mode", "enter",
+local DUNGEON_RF = {
+	Start = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.StartDungeon",
+	ChoosePerk = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.ChoosePerk",
+	Leave = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.LeaveDungeon",
 }
-local CONTEST_KNIT_SERVICE_KEYWORDS = {
-	"contest", "dungeon", "tower", "raid", "challenge", "wave", "perk", "mode", "floor", "minigame",
+local COMBAT_RF = {
+	SetTarget = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget",
+	RequestPetAttack = "ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack",
 }
-local CONTEST_START_RF_NAMES = {
-	"Start", "Enter", "Begin", "Challenge", "StartRun", "StartDungeon", "StartContest",
-	"SelectDifficulty", "Play", "Join", "Queue", "PickDifficulty", "RequestStart", "StartFloor",
-}
-local CONTEST_KNIT_REMOTE_CANDIDATES = {
-	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.Enter",
-	"ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.StartRun",
-	"ReplicatedStorage.Packages.Knit.Services.TowerService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.ContestService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.CaptureContestService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.ChallengeService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.WaveService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.ModeService.RF.Start",
-	"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget",
-	"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack",
-}
-local CONTEST_UI_KEYWORDS = {
-	"contest", "capture", "dungeon", "challenge", "tower", "elite", "master", "floor", "raid",
-	"standard", "advanced", "difficulty", "mode", "key",
-}
-local CONTEST_FRAME_KEYWORDS = {
-	"contest", "capture", "dungeon", "challenge", "tower", "elite", "raid", "difficulty",
-}
-local CONTEST_PATH_KEYWORDS = { "contest", "capture", "dungeon", "challenge" }
+local contestInDungeon = false
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
-local CONTEST_PORTAL_KEYWORDS = { "portal", "perk", "buff", "door", "gate", "next", "path" }
 
 local contestStatusCallback = nil
 
@@ -1503,17 +1480,12 @@ local function fireContestPrompt(prompt)
 	end)
 end
 
-local function pathMatchesContest(path)
+local function pathMatchesDungeon(path)
 	if not path then
 		return false
 	end
 	local lower = path:lower()
-	for _, kw in ipairs(CONTEST_PATH_KEYWORDS) do
-		if lower:find(kw, 1, true) then
-			return true
-		end
-	end
-	return false
+	return lower:find("dungeon", 1, true) or lower:find("room", 1, true)
 end
 
 local function resolveContestRemotePath(pathString)
@@ -1530,109 +1502,39 @@ local function resolveContestRemotePath(pathString)
 	return nil
 end
 
-local function isOurGuiPath(path)
-	return path and path:find("BloxMonster", 1, true) ~= nil
-end
-
 local function getKnitServicesFolder()
 	local packages = ReplicatedStorage:FindFirstChild("Packages")
 	local knit = packages and packages:FindFirstChild("Knit")
 	return knit and knit:FindFirstChild("Services")
 end
 
-local function knitServiceMatchesContest(serviceName)
-	local n = (serviceName or ""):lower()
-	for _, kw in ipairs(CONTEST_KNIT_SERVICE_KEYWORDS) do
-		if n:find(kw, 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
-local function knitRemoteNameLooksLikeStart(name)
-	local lower = (name or ""):lower()
-	for _, sn in ipairs(CONTEST_START_RF_NAMES) do
-		if lower == sn:lower() or lower:find(sn:lower(), 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
-local function scanKnitServicesSummary()
-	local lines = { "=== KNIT SERVICES (all names) ===" }
+local function getDungeonServiceFolder()
 	local services = getKnitServicesFolder()
-	if not services then
-		table.insert(lines, "  (Knit Services folder not found)")
-		return lines
-	end
-	for _, svc in ipairs(services:GetChildren()) do
-		local tag = knitServiceMatchesContest(svc.Name) and "  * " or "    "
-		table.insert(lines, tag .. svc.Name)
-	end
-	table.insert(lines, "")
-	table.insert(lines, "=== CONTEST-LIKE KNIT REMOTES ===")
-	local found = 0
-	for _, svc in ipairs(services:GetChildren()) do
-		if knitServiceMatchesContest(svc.Name) then
-			table.insert(lines, ("  [%s]"):format(svc.Name))
-			for _, remote in ipairs(svc:GetDescendants()) do
-				if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
-					found = found + 1
-					table.insert(lines, ("    %s (%s)"):format(remote.Name, remote.ClassName))
-				end
-			end
-		end
-	end
-	if found == 0 then
-		table.insert(lines, "  (none – look for * marked services above)")
-	end
-	return lines
+	return services and services:FindFirstChild("DungeonService")
 end
 
-local function collectContestKnitRemotes(prioritizeStart)
-	local list = {}
-	local seen = {}
-	local function add(remote, priority)
-		local key = remote:GetFullName()
-		if seen[key] then
-			return
-		end
-		seen[key] = true
-		table.insert(list, { remote = remote, priority = priority or 0 })
+scanAllRemotesText = function()
+	local lines = {
+		"=== DungeonService remotes ===",
+		"StartDungeon | ChoosePerk | LeaveDungeon",
+		"",
+	}
+	local dungeon = getDungeonServiceFolder()
+	if not dungeon then
+		table.insert(lines, "  (DungeonService not found under Knit.Services)")
+		return table.concat(lines, "\n"), 0
 	end
-	for _, path in ipairs(CONTEST_KNIT_REMOTE_CANDIDATES) do
-		local remote = resolveContestRemotePath(path)
-		if remote then
-			add(remote, 100)
-		end
-	end
-	local services = getKnitServicesFolder()
-	if services then
-		for _, svc in ipairs(services:GetChildren()) do
-			if knitServiceMatchesContest(svc.Name) then
-				for _, remote in ipairs(svc:GetDescendants()) do
-					if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
-						local pri = knitRemoteNameLooksLikeStart(remote.Name) and 50 or 10
-						add(remote, pri)
-					end
-				end
-			end
+	local count = 0
+	for _, remote in ipairs(dungeon:GetDescendants()) do
+		if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+			count = count + 1
+			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
 		end
 	end
-	table.sort(list, function(a, b)
-		if a.priority ~= b.priority then
-			return a.priority > b.priority
-		end
-		return a.remote:GetFullName() < b.remote:GetFullName()
-	end)
-	local out = {}
-	for _, entry in ipairs(list) do
-		table.insert(out, entry.remote)
-	end
-	return out
+	return table.concat(lines, "\n"), count
 end
+
+scanContestRemotesText = scanAllRemotesText
 
 local function buildContestStartArgSets(difficulty, useKey)
 	local argSets = {
@@ -1648,82 +1550,69 @@ local function buildContestStartArgSets(difficulty, useKey)
 		table.insert(argSets, { difficulty.index, true })
 		table.insert(argSets, { difficulty.name, true })
 		table.insert(argSets, { "Master", true })
+		table.insert(argSets, { 4, true })
 	end
 	return argSets
 end
 
-local function tryKnitRemote(remote, argSets)
+local function leaveDungeonKnit()
+	contestInDungeon = false
+	local leave = resolveContestRemotePath(DUNGEON_RF.Leave)
+	if leave then
+		pcall(function()
+			fireRemote(leave)
+		end)
+	end
+end
+
+local function startDungeonKnit(difficulty, useKey)
+	local startRemote = resolveContestRemotePath(DUNGEON_RF.Start)
+	if not startRemote then
+		return false
+	end
+	local argSets = buildContestStartArgSets(difficulty, useKey)
 	for _, args in ipairs(argSets) do
 		local ok = pcall(function()
-			fireRemote(remote, table.unpack(args))
+			fireRemote(startRemote, table.unpack(args))
 		end)
 		if ok then
-			return true, args
+			contestInDungeon = true
+			setContestStatus(("StartDungeon(%s)"):format(table.concat(args, ", ")))
+			return true
 		end
 	end
 	return false
 end
 
-local function tryClickContestUI(difficulty)
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if not gui then
+local function chooseDungeonPerk(pickMode)
+	local remote = resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
+	if not remote then
 		return false
 	end
-	local mainUI = gui:FindFirstChild("MainUI") or gui:FindFirstChild("Main")
-	local searchRoots = { gui }
-	if mainUI then
-		table.insert(searchRoots, 1, mainUI)
+	local door = 1
+	if pickMode == "second" then
+		door = 2
+	elseif pickMode == "random" then
+		door = math.random(1, 2)
 	end
-	local diffLower = difficulty.name:lower()
-	local actionWords = { "start", "challenge", "play", "begin", "enter", "fight", "go" }
-	for _, root in ipairs(searchRoots) do
-		for _, fname in ipairs({ "ContestFrame", "CaptureContestFrame", "DungeonFrame", "TowerFrame", "ChallengeFrame" }) do
-			local frame = root:FindFirstChild(fname, true)
-			if frame and frame:IsA("GuiObject") and frame.Visible then
-				for _, desc in ipairs(frame:GetDescendants()) do
-					if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-						local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-						if blob:find(diffLower, 1, true) then
-							if clickContestGuiButton(desc) then
-								setContestStatus("UI difficulty: " .. desc:GetFullName())
-								return true
-							end
-						end
-					end
-				end
-			end
-		end
-		for _, desc in ipairs(root:GetDescendants()) do
-			if isOurGuiPath(desc:GetFullName()) then
-				-- skip
-			elseif (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-				if textMatchesContestKeywords(blob) then
-					if blob:find(diffLower, 1, true) then
-						for _, word in ipairs(actionWords) do
-							if blob:find(word, 1, true) then
-								if clickContestGuiButton(desc) then
-									setContestStatus("UI: " .. desc:GetFullName())
-									return true
-								end
-							end
-						end
-						if clickContestGuiButton(desc) then
-							setContestStatus("UI diff btn: " .. desc:GetFullName())
-							return true
-						end
-					end
-				end
-			end
-		end
+	local argSets = {
+		{ door },
+		{ door - 1 },
+		{ tostring(door) },
+		{ pickMode == "second" and "right" or "left" },
+	}
+	for _, args in ipairs(argSets) do
+		pcall(function()
+			fireRemote(remote, table.unpack(args))
+		end)
 	end
-	return false
+	setContestStatus("ChoosePerk door " .. door)
+	task.wait(0.5)
+	return true
 end
 
 local function tryCombatEngage(model)
-	local setTarget = resolveContestRemotePath(
-		"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.SetTarget"
-	)
+	local setTarget = resolveContestRemotePath(COMBAT_RF.SetTarget)
 	if not setTarget or not model then
 		return false
 	end
@@ -1739,9 +1628,7 @@ local function tryCombatEngage(model)
 			fireRemote(setTarget, table.unpack(args))
 		end) then
 			task.wait(0.25)
-			local attack = resolveContestRemotePath(
-				"ReplicatedStorage.Packages.Knit.Services.CombatService.RF.RequestPetAttack"
-			)
+			local attack = resolveContestRemotePath(COMBAT_RF.RequestPetAttack)
 			if attack then
 				pcall(function()
 					fireRemote(attack)
@@ -1753,361 +1640,9 @@ local function tryCombatEngage(model)
 	return false
 end
 
-local function textMatchesContestKeywords(text)
-	if not text or text == "" then
-		return false
-	end
-	local lower = text:lower()
-	for _, kw in ipairs(CONTEST_UI_KEYWORDS) do
-		if lower:find(kw, 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
-local function collectAllRemotes()
-	local list = {}
-	local seen = {}
-	local visited = 0
-	local function visit(root)
-		if not root then
-			return
-		end
-		local function walk(inst, depth)
-			if depth > 25 then
-				return
-			end
-			visited = visited + 1
-			if visited % 300 == 0 then
-				task.wait()
-			end
-			if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-				local key = inst:GetFullName()
-				if not seen[key] then
-					seen[key] = true
-					table.insert(list, inst)
-				end
-			end
-			for _, child in ipairs(inst:GetChildren()) do
-				walk(child, depth + 1)
-			end
-		end
-		walk(root, 0)
-	end
-	visit(ReplicatedStorage)
-	pcall(function()
-		visit(game:GetService("ReplicatedFirst"))
-	end)
-	table.sort(list, function(a, b)
-		return a:GetFullName() < b:GetFullName()
-	end)
-	return list, visited
-end
-
-scanAllRemotesText = function()
-	local lines = {}
-	for _, line in ipairs(scanKnitServicesSummary()) do
-		table.insert(lines, line)
-	end
-	table.insert(lines, "")
-	local remotes, visited = collectAllRemotes()
-	table.insert(lines, "=== ALL REMOTES ===")
-	table.insert(lines, ("Found: %d remote(s), scanned %d instance(s)"):format(#remotes, visited))
-	table.insert(lines, "")
-	table.insert(lines, "--- Remote list ---")
-	if #remotes == 0 then
-		table.insert(lines, "  (no RemoteEvent/RemoteFunction found)")
-	else
-		for i, remote in ipairs(remotes) do
-			table.insert(lines, ("%4d. %s (%s)"):format(i, remote:GetFullName(), remote.ClassName))
-		end
-	end
-	return table.concat(lines, "\n"), #remotes
-end
-
-local function collectContestRemotes()
-	local seen = {}
-	local list = {}
-	local function add(remote)
-		local key = remote:GetFullName()
-		if seen[key] then
-			return
-		end
-		seen[key] = true
-		table.insert(list, remote)
-	end
-	for _, remote in ipairs(collectContestKnitRemotes(true)) do
-		add(remote)
-	end
-	local services = getKnitServicesFolder()
-	if services then
-		for _, inst in ipairs(services:GetDescendants()) do
-			if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-				local full = inst:GetFullName():lower()
-				local n = inst.Name:lower()
-				for _, kw in ipairs(CONTEST_REMOTE_KEYWORDS) do
-					if n:find(kw, 1, true) or full:find(kw, 1, true) then
-						add(inst)
-						break
-					end
-				end
-			end
-		end
-	end
-	table.sort(list, function(a, b)
-		return a:GetFullName() < b:GetFullName()
-	end)
-	return list
-end
-
-local function scanContestUIButtons()
-	local lines = {}
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if not gui then
-		table.insert(lines, "  (PlayerGui missing)")
-		return lines
-	end
-	for _, desc in ipairs(gui:GetDescendants()) do
-		if not isOurGuiPath(desc:GetFullName()) then
-			if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-				if textMatchesContestKeywords(blob) then
-					table.insert(lines, ("  %s (%s) text=%q"):format(
-						desc:GetFullName(), desc.ClassName, desc.Text or ""
-					))
-				end
-			end
-		end
-	end
-	if #lines == 0 then
-		table.insert(lines, "  (no keyword buttons – see menu frames below)")
-	end
-	return lines
-end
-
-local function scanContestMenuFrames()
-	local lines = {}
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if not gui then
-		table.insert(lines, "  (PlayerGui missing)")
-		return lines
-	end
-	local foundFrame = false
-	for _, desc in ipairs(gui:GetDescendants()) do
-		if not isOurGuiPath(desc:GetFullName())
-			and desc:IsA("GuiObject") and desc.Visible then
-			local name = desc.Name:lower()
-			for _, kw in ipairs(CONTEST_FRAME_KEYWORDS) do
-				if name:find(kw, 1, true) then
-					foundFrame = true
-					table.insert(lines, ("  %s (%s)"):format(desc:GetFullName(), desc.ClassName))
-					break
-				end
-			end
-		end
-	end
-	if not foundFrame then
-		table.insert(lines, "  (no contest frames by name – visible ScreenGuis:)")
-		for _, sg in ipairs(gui:GetChildren()) do
-			if sg:IsA("ScreenGui") and sg.Enabled and not isOurGuiPath(sg:GetFullName()) then
-				table.insert(lines, ("  ScreenGui: %s"):format(sg.Name))
-			end
-		end
-	end
-	table.insert(lines, "")
-	table.insert(lines, "  Visible labels/buttons in open menus:")
-	local labelCount = 0
-	for _, desc in ipairs(gui:GetDescendants()) do
-		if not isOurGuiPath(desc:GetFullName())
-			and desc:IsA("GuiObject") and desc.Visible
-			and (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) then
-			local text = desc.Text or ""
-			if text ~= "" or desc:IsA("TextButton") or desc:IsA("ImageButton") then
-				labelCount = labelCount + 1
-				if labelCount <= 80 then
-					table.insert(lines, ("    %s (%s) text=%q"):format(
-						desc:GetFullName(), desc.ClassName, text
-					))
-				end
-			end
-		end
-	end
-	if labelCount > 80 then
-		table.insert(lines, ("    ... and %d more"):format(labelCount - 80))
-	end
-	if labelCount == 0 then
-		table.insert(lines, "    (none visible – is Capture Contest menu open?)")
-	end
-	return lines
-end
-
-local function gatherNearbyPrompts(radius)
-	local pos = getPlayerPosition()
-	if not pos then
-		return {}
-	end
-	local out = {}
-	local seen = {}
-	local ok, parts = pcall(function()
-		return Workspace:GetPartBoundsInRadius(pos, radius or 250)
-	end)
-	if ok and parts then
-		for _, part in ipairs(parts) do
-			local current = part
-			for _ = 1, 5 do
-				if not current or current == Workspace then
-					break
-				end
-				for _, ch in ipairs(current:GetChildren()) do
-					if ch:IsA("ProximityPrompt") and not seen[ch] then
-						seen[ch] = true
-						table.insert(out, ch)
-					end
-				end
-				current = current.Parent
-			end
-		end
-		return out
-	end
-	for _, prompt in ipairs(Workspace:GetDescendants()) do
-		if prompt:IsA("ProximityPrompt") and not seen[prompt] then
-			seen[prompt] = true
-			table.insert(out, prompt)
-			if #out >= 40 then
-				break
-			end
-		end
-	end
-	return out
-end
-
-local function scanContestProximityPrompts()
-	local lines = {}
-	local pos = getPlayerPosition()
-	for _, prompt in ipairs(gatherNearbyPrompts(250)) do
-		local blob = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "") .. " " .. prompt:GetFullName()):lower()
-		local dist = math.huge
-		if pos then
-			local parent = prompt.Parent
-			local pp = parent and parent:IsA("BasePart") and parent.Position
-				or (parent and parent:IsA("Model") and getModelPosition(parent))
-			if pp then
-				dist = (pp - pos).Magnitude
-			end
-		end
-		table.insert(lines, ("  %s action=%q obj=%q dist=%.0f"):format(
-			prompt:GetFullName(), prompt.ActionText or "", prompt.ObjectText or "", dist
-		))
-	end
-	if #lines == 0 then
-		table.insert(lines, "  (none within 250 studs)")
-	end
-	return lines
-end
-
-scanContestRemotesText = function()
-	local allText, allCount = scanAllRemotesText()
-	local contestRemotes = collectContestRemotes()
-	local lines = {
-		allText,
-		"",
-		"=== CONTEST KEYWORD REMOTES ===",
-		("Matched: %d of %d total"):format(#contestRemotes, allCount),
-		"",
-	}
-	if #contestRemotes == 0 then
-		table.insert(lines, "  (none matched contest keywords)")
-	else
-		for _, remote in ipairs(contestRemotes) do
-			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
-		end
-	end
-	table.insert(lines, "")
-	table.insert(lines, "--- UI buttons (keyword match) ---")
-	for _, line in ipairs(scanContestUIButtons()) do
-		table.insert(lines, line)
-	end
-	table.insert(lines, "")
-	table.insert(lines, "--- Menu frames & visible text ---")
-	for _, line in ipairs(scanContestMenuFrames()) do
-		table.insert(lines, line)
-	end
-	table.insert(lines, "")
-	table.insert(lines, "--- Nearby prompts (250 studs) ---")
-	for _, line in ipairs(scanContestProximityPrompts()) do
-		table.insert(lines, line)
-	end
-	return table.concat(lines, "\n")
-end
-
-local function clickContestGuiButton(btn)
-	if not btn then
-		return false
-	end
-	local ok = false
-	pcall(function()
-		if typeof(firesignal) == "function" then
-			if btn.MouseButton1Click then
-				firesignal(btn.MouseButton1Click)
-				ok = true
-			elseif btn.Activated then
-				firesignal(btn.Activated)
-				ok = true
-			end
-		end
-	end)
-	return ok
-end
-
-local function tryContestProximityStart()
-	local pos = getPlayerPosition()
-	if not pos then
-		return false
-	end
-	for _, prompt in ipairs(gatherNearbyPrompts(200)) do
-		if prompt:IsA("ProximityPrompt") then
-			local blob = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "") .. " " .. prompt:GetFullName()):lower()
-			if textMatchesContestKeywords(blob) then
-				local parent = prompt.Parent
-				local pp = parent and parent:IsA("BasePart") and parent.Position
-					or (parent and parent:IsA("Model") and getModelPosition(parent))
-				if pp and (pp - pos).Magnitude < 200 and fireContestPrompt(prompt) then
-					setContestStatus("Started via prompt: " .. prompt:GetFullName())
-					return true
-				end
-			end
-		end
-	end
-	return false
-end
-
 local function tryStartContest(difficulty, useKey)
-	if tryClickContestUI(difficulty) then
-		task.wait(0.5)
-		return true
-	end
-	local argSets = buildContestStartArgSets(difficulty, useKey)
-	local remotes = collectContestKnitRemotes(true)
-	for _, remote in ipairs(remotes) do
-		local ok, args = tryKnitRemote(remote, argSets)
-		if ok then
-			setContestStatus(("Knit %s(%s)"):format(
-				remote:GetFullName(), table.concat(args, ", ")
-			))
-			task.wait(0.5)
-			return true
-		end
-	end
-	for _, remote in ipairs(collectContestRemotes()) do
-		local ok, args = tryKnitRemote(remote, argSets)
-		if ok then
-			setContestStatus(("Fired %s(%s)"):format(remote.Name, table.concat(args, ", ")))
-			task.wait(0.5)
-			return true
-		end
-	end
-	if tryContestProximityStart() then
+	if startDungeonKnit(difficulty, useKey) then
+		task.wait(WORLD_TELEPORT_SETTLE_SEC)
 		return true
 	end
 	return false
@@ -2127,7 +1662,22 @@ local function isContestEnemyModel(model, playerChars)
 	if not hum or hum.Health <= 0 then
 		return false
 	end
-	if pathMatchesContest(fullName) then
+	if contestInDungeon then
+		local dist = getDistanceToPlayer(model)
+		if dist and dist < 200 then
+			local lower = fullName:lower()
+			if lower:find("player", 1, true) or lower:find("character", 1, true) then
+				return false
+			end
+			if lower:find("mob", 1, true) or lower:find("dungeon", 1, true)
+				or lower:find("room", 1, true) or lower:find("pet", 1, true)
+				or lower:find("npc", 1, true) or lower:find("enemy", 1, true) then
+				return true
+			end
+			return true
+		end
+	end
+	if pathMatchesDungeon(fullName) then
 		return true
 	end
 	local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
@@ -2149,12 +1699,37 @@ end
 local function getContestEnemies()
 	local playerChars = getPlayerCharacterSet()
 	local enemies = {}
-	for _, desc in ipairs(Workspace:GetDescendants()) do
-		if desc.ClassName == "Model" and isContestEnemyModel(desc, playerChars) then
-			table.insert(enemies, {
-				model = desc,
-				distance = getDistanceToPlayer(desc),
-			})
+	local seen = {}
+	local pos = getPlayerPosition()
+	if pos then
+		local ok, parts = pcall(function()
+			return Workspace:GetPartBoundsInRadius(pos, 200)
+		end)
+		if ok and parts then
+			for _, part in ipairs(parts) do
+				local model = part:FindFirstAncestorOfClass("Model")
+				if model and not seen[model] and isContestEnemyModel(model, playerChars) then
+					seen[model] = true
+					table.insert(enemies, {
+						model = model,
+						distance = getDistanceToPlayer(model),
+					})
+				end
+			end
+		end
+	end
+	if #enemies == 0 then
+		for _, desc in ipairs(Workspace:GetDescendants()) do
+			if #enemies >= 24 then
+				break
+			end
+			if desc.ClassName == "Model" and not seen[desc] and isContestEnemyModel(desc, playerChars) then
+				seen[desc] = true
+				table.insert(enemies, {
+					model = desc,
+					distance = getDistanceToPlayer(desc),
+				})
+			end
 		end
 	end
 	table.sort(enemies, function(a, b)
@@ -2211,77 +1786,8 @@ local function waitForEnemyDown(model, timeoutSec)
 	return false
 end
 
-local function findPerkChoices()
-	local choices = {}
-	for _, prompt in ipairs(Workspace:GetDescendants()) do
-		if prompt:IsA("ProximityPrompt") then
-			local path = prompt:GetFullName():lower()
-			local action = (prompt.ActionText or ""):lower()
-			for _, kw in ipairs(CONTEST_PORTAL_KEYWORDS) do
-				if path:find(kw, 1, true) or action:find(kw, 1, true) then
-					table.insert(choices, { kind = "prompt", inst = prompt, path = prompt:GetFullName() })
-					break
-				end
-			end
-		end
-	end
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if gui then
-		for _, desc in ipairs(gui:GetDescendants()) do
-			if desc:IsA("TextButton") and desc.Visible then
-				local text = (desc.Text or ""):lower()
-				local name = desc.Name:lower()
-				for _, kw in ipairs(CONTEST_PORTAL_KEYWORDS) do
-					if text:find(kw, 1, true) or name:find(kw, 1, true) then
-						table.insert(choices, { kind = "button", inst = desc, path = desc:GetFullName() })
-						break
-					end
-				end
-			end
-		end
-	end
-	return choices
-end
-
-local function pickPerkChoice(choices, pickMode)
-	if #choices == 0 then
-		return nil
-	end
-	if pickMode == "second" and #choices >= 2 then
-		return choices[2]
-	end
-	if pickMode == "random" then
-		return choices[math.random(1, #choices)]
-	end
-	return choices[1]
-end
-
 local function selectPerkPortal(pickMode)
-	local deadline = wallClockSeconds() + 35
-	while wallClockSeconds() < deadline and contestRunning do
-		local choices = findPerkChoices()
-		if #choices >= 2 or (#choices >= 1 and wallClockSeconds() > deadline - 28) then
-			local picked = pickPerkChoice(choices, pickMode)
-			if picked then
-				if picked.kind == "prompt" then
-					fireContestPrompt(picked.inst)
-					setContestStatus("Perk portal: " .. picked.path)
-					return true
-				elseif picked.kind == "button" then
-					pcall(function()
-						if typeof(firesignal) == "function" then
-							firesignal(picked.inst.MouseButton1Click)
-						end
-					end)
-					setContestStatus("Perk choice: " .. picked.path)
-					return true
-				end
-			end
-		end
-		task.wait(0.5)
-	end
-	setContestStatus("No perk portals found – walk to a portal manually")
-	return false
+	return chooseDungeonPerk(pickMode)
 end
 
 local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
@@ -2320,9 +1826,9 @@ end
 
 local function runContestDungeon(runId, difficulty)
 	if not tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey) then
-		setContestStatus("Auto-start failed – open menu, tap Scan, then Start again")
+		setContestStatus("StartDungeon failed – check difficulty index (1–4) and Master key toggle")
+		return
 	end
-	task.wait(WORLD_TELEPORT_SETTLE_SEC)
 	for floor = 1, difficulty.floors do
 		if not contestRunning or contestRunId ~= runId then
 			break
@@ -2332,6 +1838,7 @@ local function runContestDungeon(runId, difficulty)
 		end
 	end
 	setContestStatus(difficulty.name .. " run complete")
+	leaveDungeonKnit()
 end
 
 startContestDungeon = function()
@@ -2375,6 +1882,7 @@ end
 stopContestDungeon = function()
 	contestRunId = contestRunId + 1
 	contestRunning = false
+	leaveDungeonKnit()
 	if contestThread then
 		pcall(task.cancel, contestThread)
 		contestThread = nil
@@ -5621,7 +5129,7 @@ local dungeonHint = Instance.new("TextLabel")
 dungeonHint.Size = UDim2.new(1, -12, 0, 28)
 dungeonHint.Position = UDim2.new(0, 6, 0, 2)
 dungeonHint.BackgroundTransparency = 1
-dungeonHint.Text = "Tap Remotes → Copy → paste here. Also check executor console (F9)."
+dungeonHint.Text = "DungeonService only (StartDungeon / ChoosePerk / LeaveDungeon). Tap Remotes to dump paths."
 dungeonHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 dungeonHint.TextSize = 10
 dungeonHint.Font = Enum.Font.Gotham
@@ -5783,7 +5291,7 @@ dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
 dungeonScanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
 dungeonScanContent.BackgroundTransparency = 0
 dungeonScanContent.BorderSizePixel = 0
-dungeonScanContent.Text = "Tap Remotes to list every game remote.\nCopy and paste the list here in chat."
+dungeonScanContent.Text = "Tap Remotes to list DungeonService remotes.\nCopy and paste the list here in chat."
 dungeonScanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
 dungeonScanContent.TextSize = 11
 dungeonScanContent.Font = Enum.Font.Gotham
@@ -7632,11 +7140,11 @@ local function printRemotesToConsole(text)
 end
 
 local function runContestRemotesDump()
-	UI.dungeonStatusLabel.Text = "Listing remotes..."
+	UI.dungeonStatusLabel.Text = "Listing DungeonService remotes..."
 	UI.dungeonScanBtn.Text = "..."
 	local ok, text, count = pcall(function()
 		if type(scanAllRemotesText) ~= "function" then
-			error("scanAllRemotesText missing – reload bloxmonster v1.11.5")
+			error("scanAllRemotesText missing – reload bloxmonster v1.12.2")
 		end
 		return scanAllRemotesText()
 	end)
@@ -7658,8 +7166,8 @@ local function runContestRemotesDump()
 	end
 	local copied = copyText(text)
 	UI.dungeonStatusLabel.Text = copied
-		and ("Done: %d remotes – copied + F9 console."):format(count or 0)
-		or ("Done: %d remotes – see popup + F9."):format(count or 0)
+		and ("Done: %d DungeonService remote(s) – copied + F9 console."):format(count or 0)
+		or ("Done: %d DungeonService remote(s) – see popup + F9."):format(count or 0)
 	UI.dungeonScanBtn.Text = "Remotes"
 	print("[BloxMonster Contest remotes]\n" .. text)
 end
