@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.0"
+local VERSION = "1.11.2"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1468,10 +1468,7 @@ end
 -- Capture Contest dungeon automation (scoped – Luau register limit).
 local startContestDungeon
 local stopContestDungeon
-local scanContestRemotesText
-local scanAllRemotesText
 local setContestStatusHandler
-local openContestScanWindow
 
 do
 local DUNGEON_RF = {
@@ -2513,7 +2510,7 @@ end
 
 end -- remotes + PetService scan
 
-do -- knit pet cache + auto-fuse (local register limit)
+do -- knit pet cache sync (local register limit)
 local KNIT_PET_CONTROLLER_NAMES = {
 	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
 	"PetServiceController", "PetClientController", "DataController", "PlayerDataController",
@@ -3154,6 +3151,9 @@ local function syncKnitPetCacheFromKnit(opts)
 	return n
 end
 
+end -- knit pet cache sync
+
+do -- auto-fuse + rankup (local register limit)
 local FUSE_TARGET_RANKS = { "E", "D", "C", "B" }
 local ASCEND_TO_RANK = { "E", "D", "C", "B", "A", "S", "SS", "SSS" }
 
@@ -3791,7 +3791,7 @@ dumpKnitPetInventoryText = function()
 	return table.concat(lines, "\n"), count
 end
 
-end -- knit pet cache + auto-fuse
+end -- auto-fuse + rankup
 
 do -- fuse scan + inventory UI dump (local register limit)
 scanFuseRelatedRemotesText = function()
@@ -6000,15 +6000,47 @@ setContestStatusHandler(function(msg)
 end)
 
 
+-- Shared across app handler blocks (Luau 200-local register limit).
+local refreshList
+local refreshWorldList
+local populateList
+local rebuildFilterChips
+local addFilterFromInput
+local setFilterBarVisible
+local rebuildWorldFilterChips
+local addWorldFilterFromInput
+local highlightWorldButtons
+local getWorldConfigById
+local applyListsFromPets
+local tickFarmLists
+local farmWaitWithListRefresh
+local filterBarVisible = true
 local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
-local filterBarVisible = true
+local getSelectedWorldFilters
+local setActiveTab
+local applyFarmWaitFromInput
+local applyFarmStayFromInput
+local toggleFarmLocationEnabled
+local setWorldFarmStatus
+local setPetFarmStatus
+local getFarmWaitSec
+local runFarmLocationPhase
+local refreshWorldFarmList
+local highlightContestDifficultyButtons
+local updateContestMasterKeyBtn
+local updateContestPerkBtn
+local stopAutoFarm
+local stopWorldHunt
+local stopAllFarm
+local updateFuseMutationsBtn
+local updateFuseDuringFarmBtn
 
-local refreshList
-local refreshWorldList
 
-local function getWorldConfigById(worldId)
+do -- app handlers part 1 (local register limit)
+
+getWorldConfigById = function(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
 		if world.id == worldId then
 			return world
@@ -6021,7 +6053,7 @@ local function getSelectedWorldConfig()
 	return getWorldConfigById(selectedWorldId)
 end
 
-local function getSelectedWorldFilters()
+getSelectedWorldFilters = function()
 	if not worldPetFilters[selectedWorldId] then
 		worldPetFilters[selectedWorldId] = {}
 	end
@@ -6050,7 +6082,7 @@ local function updateWorldSelectedLabel()
 	UI.worldSelectedLabel.Text = ("Selected: %s | %s"):format(world and world.name or "?", petText)
 end
 
-local function highlightWorldButtons()
+highlightWorldButtons = function()
 	for worldId, btn in pairs(UI.worldButtons) do
 		if worldId == selectedWorldId then
 			btn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
@@ -6060,7 +6092,7 @@ local function highlightWorldButtons()
 	end
 end
 
-local function rebuildWorldFilterChips()
+rebuildWorldFilterChips = function()
 	for _, child in ipairs(UI.worldFilterChipScroll:GetChildren()) do
 		if child ~= UI.worldFilterChipLayout then
 			child:Destroy()
@@ -6111,7 +6143,7 @@ local function rebuildWorldFilterChips()
 	updateWorldSelectedLabel()
 end
 
-local function addWorldFilterFromInput()
+addWorldFilterFromInput = function()
 	local raw = UI.worldFilterInput.Text
 	if raw == "" then
 		UI.worldFilterHint.Text = "Type: Thornshade@1"
@@ -6145,7 +6177,7 @@ local function addWorldFilterFromInput()
 	end
 end
 
-local function setFilterBarVisible(visible)
+setFilterBarVisible = function(visible)
 	filterBarVisible = visible
 	UI.filterBar.Visible = visible
 	if visible then
@@ -6303,7 +6335,7 @@ local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfilter
 	end
 end
 
-local function populateList(pets, totalUnfiltered)
+populateList = function(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
@@ -6312,7 +6344,7 @@ local function populateWorldList(pets, totalUnfiltered, totalScanned)
 	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
 
-local function rebuildFilterChips()
+rebuildFilterChips = function()
 	for _, child in ipairs(UI.filterChipScroll:GetChildren()) do
 		if child ~= UI.filterChipLayout then
 			child:Destroy()
@@ -6360,7 +6392,7 @@ local function rebuildFilterChips()
 	end
 end
 
-local function addFilterFromInput()
+addFilterFromInput = function()
 	local raw = UI.filterInput.Text
 	if raw == "" then
 		UI.filterHint.Text = "Type: Rio@1, Dori@3"
@@ -6411,7 +6443,7 @@ refreshList = function(rescan)
 	end
 end
 
-local function applyListsFromPets(pets, worldConfig, worldFilters)
+applyListsFromPets = function(pets, worldConfig, worldFilters)
 	local filteredPets = applyNameFilters(pets)
 	populateList(filteredPets, #pets)
 	if worldConfig then
@@ -6421,7 +6453,7 @@ local function applyListsFromPets(pets, worldConfig, worldFilters)
 	end
 end
 
-local function tickFarmLists(runId, world, filters, scanMode, mode)
+tickFarmLists = function(runId, world, filters, scanMode, mode)
 	mode = mode or (world and "world" or "pet")
 	if runId and not shouldFarmContinue(runId, mode) then
 		return false
@@ -6460,7 +6492,7 @@ local function tickFarmLists(runId, world, filters, scanMode, mode)
 	return runId == nil or shouldFarmContinue(runId, mode)
 end
 
-local function farmWaitWithListRefresh(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
+farmWaitWithListRefresh = function(waitSec, runId, onTick, world, filters, onEachSecond, keepWaiting, mode)
 	mode = mode or (world and "world" or "pet")
 	local nextRefreshIn = 0
 	for sec = waitSec, 1, -1 do
@@ -6514,6 +6546,10 @@ refreshWorldList = function(rescan, worldConfig)
 	end
 end
 
+end -- app handlers part 1
+
+do -- app handlers part 2 (local register limit)
+
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
 	highlightWorldButtons()
@@ -6536,7 +6572,7 @@ end
 
 onWorldButtonClick = selectWorld
 
-local function getFarmWaitSec()
+getFarmWaitSec = function()
 	return farmWaitSec
 end
 
@@ -6565,7 +6601,7 @@ local function updateFarmLocationEnableButton()
 	end
 end
 
-local function toggleFarmLocationEnabled()
+toggleFarmLocationEnabled = function()
 	farmLocationEnabled = not farmLocationEnabled
 	updateFarmLocationEnableButton()
 	refreshConfigStatusLabel()
@@ -6579,7 +6615,7 @@ local function parseFarmWaitSec(text)
 	return math.clamp(math.floor(n + 0.5), MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
 end
 
-local function applyFarmWaitFromInput()
+applyFarmWaitFromInput = function()
 	local val = parseFarmWaitSec(UI.farmWaitInput.Text)
 	if not val then
 		UI.configStatusLabel.Text = ("Enter %d–%d seconds"):format(MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
@@ -6600,7 +6636,7 @@ local function parseFarmStaySec(text)
 	return math.clamp(math.floor(n + 0.5), MIN_FARM_STAY_SEC, MAX_FARM_STAY_SEC)
 end
 
-local function applyFarmStayFromInput()
+applyFarmStayFromInput = function()
 	local val = parseFarmStaySec(UI.farmStayInput.Text)
 	if not val then
 		UI.configStatusLabel.Text = ("Farm stay: enter %d–%d seconds"):format(
@@ -6620,15 +6656,15 @@ local function formatFarmStayTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-local function setPetFarmStatus(text)
+setPetFarmStatus = function(text)
 	UI.farmStatusLabel.Text = text
 end
 
-local function setWorldFarmStatus(text)
+setWorldFarmStatus = function(text)
 	UI.worldHuntStatusLabel.Text = text
 end
 
-local function runFarmLocationPhase(runId)
+runFarmLocationPhase = function(runId)
 	if not farmLocationEnabled then
 		return true
 	end
@@ -6682,7 +6718,7 @@ local function setTabPanelVisible(panel, visible)
 	panel.ZIndex = visible and 2 or 1
 end
 
-local function highlightContestDifficultyButtons()
+highlightContestDifficultyButtons = function()
 	if not UI or not UI.dungeonDiffBtns then
 		return
 	end
@@ -6695,7 +6731,7 @@ local function highlightContestDifficultyButtons()
 	end
 end
 
-local function updateContestMasterKeyBtn()
+updateContestMasterKeyBtn = function()
 	if not UI or not UI.dungeonMasterKeyBtn then
 		return
 	end
@@ -6708,7 +6744,7 @@ local function updateContestMasterKeyBtn()
 	end
 end
 
-local function updateContestPerkBtn()
+updateContestPerkBtn = function()
 	if not UI or not UI.dungeonPerkBtn then
 		return
 	end
@@ -6723,7 +6759,7 @@ local function updateContestPerkBtn()
 	end
 end
 
-local function setActiveTab(tabName)
+setActiveTab = function(tabName)
 	activeTab = tabName
 	if TAB_PANELS then
 		for _, entry in ipairs(TAB_PANELS) do
@@ -6761,7 +6797,7 @@ local function isAnyFarmRunning()
 	return autoFarmRunning or worldHuntRunning
 end
 
-local function stopAutoFarm()
+stopAutoFarm = function()
 	petFarmRunId = petFarmRunId + 1
 	autoFarmRunning = false
 	UI.farmStatusLabel.Text = "Farm idle"
@@ -6772,7 +6808,7 @@ local function stopAutoFarm()
 	end
 end
 
-local function stopWorldHunt()
+stopWorldHunt = function()
 	worldFarmRunId = worldFarmRunId + 1
 	worldHuntRunning = false
 	farmLocationStayActive = false
@@ -6784,12 +6820,12 @@ local function stopWorldHunt()
 	end
 end
 
-local function stopAllFarm()
+stopAllFarm = function()
 	stopAutoFarm()
 	stopWorldHunt()
 end
 
-local function refreshWorldFarmList(world, statusText, runId, scanMode)
+refreshWorldFarmList = function(world, statusText, runId, scanMode)
 	if runId and not shouldFarmContinue(runId, "world") then
 		return false
 	end
@@ -6804,6 +6840,10 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
+
+end -- app handlers part 2
+
+do -- app handlers part 3 (local register limit)
 
 local function collectBonusFarmFilters()
 	local out = {}
@@ -6963,7 +7003,7 @@ local function runWorldFarmLoop(runId)
 	end
 end
 
-local function updateFuseMutationsBtn()
+updateFuseMutationsBtn = function()
 	if not UI or not UI.fuseMutationsBtn then
 		return
 	end
@@ -6976,7 +7016,7 @@ local function updateFuseMutationsBtn()
 	end
 end
 
-local function updateFuseDuringFarmBtn()
+updateFuseDuringFarmBtn = function()
 	if not UI or not UI.fuseDuringFarmBtn then
 		return
 	end
@@ -7371,3 +7411,5 @@ task.defer(function()
 	print(("[BloxMonster] v%s loaded"):format(VERSION))
 	task.defer(getWorldRemotes)
 end)
+
+end -- app handlers part 3
