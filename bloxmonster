@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.2"
+local VERSION = "1.13.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1629,27 +1629,43 @@ local function resolveContestRemotePath(pathString)
 	return nil
 end
 
-local function resolveDungeonEvent(name)
-	local bases = {
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService.RE." .. name,
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService.Client." .. name,
-		"ReplicatedStorage.Packages.Knit.Services.DungeonService." .. name,
-	}
-	for _, path in ipairs(bases) do
-		local node = resolveContestRemotePath(path)
-		if node and node:IsA("RemoteEvent") then
+local function getKnitServicesFolder()
+	local packages = ReplicatedStorage:FindFirstChild("Packages")
+	local knit = packages and packages:FindFirstChild("Knit")
+	return knit and knit:FindFirstChild("Services")
+end
+
+local function getDungeonServiceFolder()
+	local services = getKnitServicesFolder()
+	return services and services:FindFirstChild("DungeonService")
+end
+
+local function resolveDungeonRemote(name, className)
+	local dungeon = getDungeonServiceFolder()
+	if not dungeon then
+		return nil
+	end
+	local direct = dungeon:FindFirstChild(name)
+	if direct and (not className or direct:IsA(className)) then
+		return direct
+	end
+	for _, folderName in ipairs({ "RF", "RE", "Client" }) do
+		local folder = dungeon:FindFirstChild(folderName)
+		local node = folder and folder:FindFirstChild(name)
+		if node and (not className or node:IsA(className)) then
 			return node
 		end
 	end
-	local dungeon = getDungeonServiceFolder()
-	if dungeon then
-		for _, desc in ipairs(dungeon:GetDescendants()) do
-			if desc:IsA("RemoteEvent") and desc.Name == name then
-				return desc
-			end
+	for _, desc in ipairs(dungeon:GetDescendants()) do
+		if desc.Name == name and (not className or desc:IsA(className)) then
+			return desc
 		end
 	end
 	return nil
+end
+
+local function resolveDungeonEvent(name)
+	return resolveDungeonRemote(name, "RemoteEvent")
 end
 
 local function invokeContestRemote(remote, ...)
@@ -1942,15 +1958,16 @@ local function ensureDungeonEventHooks()
 		dungeonRoomVersion = dungeonRoomVersion + 1
 		contestInDungeon = true
 		dungeonPerkReady = false
-		setContestStatus("RoomChanged (floor signal)")
+		setContestStatus("RoomChanged (next floor)")
 	end
-	local roomChanged = resolveDungeonEvent(DUNGEON_RE.RoomChanged)
+	local roomChanged = resolveDungeonRemote("RoomChanged", "RemoteEvent")
 	if roomChanged then
 		roomChanged.OnClientEvent:Connect(onRoomChanged)
+		setContestStatus("Hooked RoomChanged: " .. roomChanged:GetFullName())
 	else
-		warn("[BloxMonster Contest] RoomChanged event not found")
+		warn("[BloxMonster Contest] RoomChanged event not found under DungeonService")
 	end
-	local perkReady = resolveDungeonEvent(DUNGEON_RE.PerkDoorsReady)
+	local perkReady = resolveDungeonRemote("PerkDoorsReady", "RemoteEvent")
 	if perkReady then
 		perkReady.OnClientEvent:Connect(function(...)
 			dungeonPerkReady = true
@@ -1960,6 +1977,9 @@ local function ensureDungeonEventHooks()
 			end
 			setContestStatus("PerkDoorsReady")
 		end)
+		setContestStatus("Hooked PerkDoorsReady: " .. perkReady:GetFullName())
+	else
+		warn("[BloxMonster Contest] PerkDoorsReady event not found under DungeonService")
 	end
 	local dungeonResult = resolveDungeonEvent(DUNGEON_RE.DungeonResult)
 	if dungeonResult then
@@ -2000,21 +2020,10 @@ local function waitForPerkDoors(timeoutSec)
 	end, timeoutSec or 45)
 end
 
-local function getKnitServicesFolder()
-	local packages = ReplicatedStorage:FindFirstChild("Packages")
-	local knit = packages and packages:FindFirstChild("Knit")
-	return knit and knit:FindFirstChild("Services")
-end
-
-local function getDungeonServiceFolder()
-	local services = getKnitServicesFolder()
-	return services and services:FindFirstChild("DungeonService")
-end
-
 scanAllRemotesText = function()
 	local lines = {
 		"=== DungeonService remotes ===",
-		"StartDungeon | ChoosePerk | LeaveDungeon",
+		"PerkDoorsReady | RoomChanged | ChoosePerk | StartDungeon | LeaveDungeon",
 		"",
 	}
 	local dungeon = getDungeonServiceFolder()
@@ -2107,8 +2116,10 @@ local function startDungeonKnit(difficulty, useKey)
 end
 
 local function chooseDungeonPerk(pickMode)
-	local remote = resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
+	local remote = resolveDungeonRemote("ChoosePerk", "RemoteFunction")
+		or resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
 	if not remote then
+		setContestStatus("ChoosePerk remote not found under DungeonService")
 		return false
 	end
 	local door = 1
@@ -2244,6 +2255,45 @@ local function selectPerkPortal(pickMode)
 	return chooseDungeonPerk(pickMode)
 end
 
+local function advanceToNextFloor(runId, floorNum)
+	if dungeonRunEnded then
+		return false
+	end
+	if not contestRunning or contestRunId ~= runId then
+		return false
+	end
+	setContestStatus(("Floor %d – waiting PerkDoorsReady..."):format(floorNum))
+	if not waitForPerkDoors(90) then
+		return dungeonRunEnded and false or nil
+	end
+	setContestStatus(("Floor %d – ChoosePerk (best rarity)..."):format(floorNum))
+	local perkOk = false
+	for attempt = 1, 8 do
+		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
+			return false
+		end
+		if selectPerkPortal(contestPerkPick) then
+			perkOk = true
+			break
+		end
+		setContestStatus(("Floor %d – ChoosePerk retry %d/8"):format(floorNum, attempt))
+		task.wait(1.5)
+	end
+	if not perkOk then
+		return nil
+	end
+	local roomBefore = dungeonRoomVersion
+	setContestStatus(("Floor %d – waiting RoomChanged..."):format(floorNum))
+	if not waitForDungeonEntry(roomBefore, 35) then
+		if dungeonRunEnded then
+			return true
+		end
+		return nil
+	end
+	task.wait(WORLD_TELEPORT_SETTLE_SEC)
+	return true
+end
+
 local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 	local teleported = false
 	local idleSince = wallClockSeconds()
@@ -2254,9 +2304,9 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
 			if not teleported then
-				if wallClockSeconds() - idleSince > 90 then
-					setContestStatus(("Floor %d – no pets found (90s timeout)"):format(floorNum))
-					return false
+				if wallClockSeconds() - idleSince > 120 then
+					setContestStatus(("Floor %d – no pets found (120s timeout)"):format(floorNum))
+					return nil
 				end
 				setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
 				task.wait(1.5)
@@ -2294,16 +2344,18 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 	if dungeonRunEnded then
 		return false
 	end
-	setContestStatus(("Floor %d – selecting perk..."):format(floorNum))
-	waitForPerkDoors(60)
-	if dungeonRunEnded then
-		return false
+	while contestRunning and contestRunId == runId and not dungeonRunEnded do
+		local advanced = advanceToNextFloor(runId, floorNum)
+		if advanced == true then
+			return true
+		end
+		if advanced == false then
+			return false
+		end
+		setContestStatus(("Floor %d – perk/room transition retry..."):format(floorNum))
+		task.wait(2)
 	end
-	selectPerkPortal(contestPerkPick)
-	local roomBefore = dungeonRoomVersion
-	waitForDungeonEntry(roomBefore, 25)
-	task.wait(WORLD_TELEPORT_SETTLE_SEC)
-	return not dungeonRunEnded
+	return false
 end
 
 local function runContestDungeon(runId, difficulty)
@@ -2313,17 +2365,19 @@ local function runContestDungeon(runId, difficulty)
 		setContestStatus("Did not enter dungeon: " .. formatRemoteResult(startResult))
 		return false
 	end
-	for floor = 1, difficulty.floors do
+	local floor = 1
+	while floor <= difficulty.floors do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			break
 		end
-		if not runContestFloor(runId, difficulty, floor, difficulty.petsPerFloor) then
-			if dungeonRunEnded then
-				break
-			end
-			setContestStatus("Floor " .. floor .. " stalled – retrying run")
-			leaveDungeonKnit()
-			return false
+		local floorOk = runContestFloor(runId, difficulty, floor, difficulty.petsPerFloor)
+		if floorOk == true then
+			floor = floor + 1
+		elseif dungeonRunEnded then
+			break
+		else
+			setContestStatus("Floor " .. floor .. " – retrying (same run)...")
+			task.wait(3)
 		end
 	end
 	if dungeonRunEnded then
