@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.7"
+local VERSION = "1.13.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -284,11 +284,6 @@ local function getModelHumanoid(model)
 		or model:FindFirstChildWhichIsA("Humanoid", true)
 end
 
-local function modelHasAliveHumanoid(model)
-	local hum = getModelHumanoid(model)
-	return hum ~= nil and hum.Health > 0
-end
-
 local function modelLooksLikeWildPet(model)
 	if getModelHumanoid(model) then
 		return true
@@ -469,7 +464,7 @@ end
 
 local function getCachedWorldPets(scanMode)
 	scanMode = scanMode or "auto"
-	if farmLocationStayActive and not contestRunning then
+	if farmLocationStayActive then
 		if #lastAllPets > 0 then
 			return refreshCachedPetsLight()
 		end
@@ -1380,7 +1375,7 @@ local function robustTeleportToPosition(pos, exact)
 end
 
 local function teleportToPet(model)
-	if farmLocationStayActive and not contestRunning then
+	if farmLocationStayActive then
 		return false
 	end
 	if not model then
@@ -1390,36 +1385,7 @@ local function teleportToPet(model)
 	if not pos then
 		return false
 	end
-	local char = LocalPlayer.Character
-	if not char then
-		return false
-	end
-	local root = char:FindFirstChild("HumanoidRootPart")
-	if not root then
-		return false
-	end
-	local flat = Vector3.new(0, 0, 8)
-	if root.Parent then
-		local delta = Vector3.new(root.Position.X - pos.X, 0, root.Position.Z - pos.Z)
-		if delta.Magnitude > 1 then
-			flat = delta.Unit * 8
-		end
-	end
-	local target = pos + flat + Vector3.new(0, 3, 0)
-	local targetCF = CFrame.new(target)
-	for _ = 1, 10 do
-		pcall(function()
-			char:PivotTo(targetCF)
-		end)
-		root.CFrame = targetCF
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.AssemblyAngularVelocity = Vector3.zero
-		if (root.Position - target).Magnitude < 15 then
-			return true
-		end
-		task.wait(0.06)
-	end
-	return (root.Position - target).Magnitude < 30
+	return setCharacterAtPosition(pos + Vector3.new(0, 0, 6), true, 0)
 end
 
 local function teleportPlayerToPosition(pos)
@@ -1507,10 +1473,6 @@ local dungeonPerkReady = false
 local dungeonRunEnded = false
 local dungeonEventsHooked = false
 local dungeonPerkPayload = nil
-local cachedContestRoomRoot = nil
-local cachedContestRoomVersion = -1
-local cachedDungeonPets = nil
-local cachedDungeonPetsTime = 0
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
 local CONTEST_PERK_RARITY_RANK = {
 	uncommon = 1,
@@ -1556,14 +1518,6 @@ local function fireContestPrompt(prompt)
 			prompt:InputHoldEnd()
 		end
 	end)
-end
-
-local function pathMatchesDungeon(path)
-	if not path then
-		return false
-	end
-	local lower = path:lower()
-	return lower:find("dungeon", 1, true) or lower:find("room", 1, true)
 end
 
 local function resolveContestRemotePath(pathString)
@@ -1661,8 +1615,6 @@ local function resetDungeonSignals()
 	dungeonPerkReady = false
 	dungeonRunEnded = false
 	dungeonPerkPayload = nil
-	cachedDungeonPets = nil
-	cachedDungeonPetsTime = 0
 end
 
 local function perkRarityRank(text)
@@ -1686,177 +1638,24 @@ local function perkRarityRank(text)
 	return best
 end
 
-local function getContestRoomRoot()
-	if cachedContestRoomRoot and cachedContestRoomVersion == dungeonRoomVersion then
-		return cachedContestRoomRoot
+local function getDungeonPetTargets()
+	local ok, pets = pcall(getWorldPets)
+	if not ok or not pets then
+		return {}
 	end
-	local char = LocalPlayer.Character
-	local root = char and char:FindFirstChild("HumanoidRootPart")
-	if root then
-		local current = root.Parent
-		while current and current ~= Workspace do
-			local lower = current.Name:lower()
-			if lower:find("room", 1, true) and not lower:find("door", 1, true) then
-				cachedContestRoomRoot = current
-				cachedContestRoomVersion = dungeonRoomVersion
-				return current
-			end
-			current = current.Parent
-		end
-	end
-	local pos = getPlayerPosition()
-	if pos then
-		local ok, parts = pcall(function()
-			return Workspace:GetPartBoundsInRadius(pos, 300)
-		end)
-		if ok and parts then
-			local bestRoot, bestDepth = nil, -1
-			for _, part in ipairs(parts) do
-				local current = part.Parent
-				local depth = 0
-				while current and current ~= Workspace do
-					local lower = current.Name:lower()
-					if lower:find("room", 1, true) and not lower:find("door", 1, true) then
-						if depth > bestDepth then
-							bestDepth = depth
-							bestRoot = current
-						end
-					end
-					current = current.Parent
-					depth = depth + 1
-				end
-			end
-			if bestRoot then
-				cachedContestRoomRoot = bestRoot
-				cachedContestRoomVersion = dungeonRoomVersion
-				return bestRoot
+	local out = {}
+	for _, pet in ipairs(pets) do
+		if pet.model and pet.model.Parent then
+			local hum = getModelHumanoid(pet.model)
+			if hum and hum.Health > 0 then
+				table.insert(out, pet)
 			end
 		end
 	end
-	return nil
-end
-
-local function isDungeonPetModel(model, playerChars)
-	if not contestRunning then
-		return false
-	end
-	if not model or model.ClassName ~= "Model" or playerChars[model] then
-		return false
-	end
-	if isPlayerCharacter(model) or isEquippedPet(model) then
-		return false
-	end
-	local okPath, fullName = pcall(function()
-		return model:GetFullName()
+	table.sort(out, function(a, b)
+		return (a.distance or math.huge) < (b.distance or math.huge)
 	end)
-	if not okPath or not fullName or isEquippedPetPath(fullName) then
-		return false
-	end
-	if not modelHasAliveHumanoid(model) then
-		return false
-	end
-	local lower = fullName:lower()
-	if lower:find("player", 1, true) or lower:find("character", 1, true) then
-		return false
-	end
-	if lower:find("portal", 1, true) or lower:find("door", 1, true)
-		or lower:find("perk", 1, true) or lower:find("gate", 1, true) then
-		return false
-	end
-	if model:FindFirstChildWhichIsA("BillboardGui", true) then
-		return true
-	end
-	if pathMatchesDungeon(fullName) then
-		return true
-	end
-	if lower:find("mob", 1, true) or lower:find("dungeon", 1, true)
-		or lower:find("private", 1, true) or lower:find("enemy", 1, true)
-		or lower:find("boss", 1, true) or lower:find("npc", 1, true) then
-		return true
-	end
-	if modelLooksLikeWildPet(model) then
-		return true
-	end
-	return false
-end
-
-local function scanAllDungeonPets()
-	local now = wallClockSeconds()
-	if cachedDungeonPets and now - cachedDungeonPetsTime < 0.75 then
-		return cachedDungeonPets
-	end
-	local playerChars = getPlayerCharacterSet()
-	local enemies = {}
-	local seen = {}
-	local function addModel(model, distance)
-		if not model or seen[model] or not isDungeonPetModel(model, playerChars) then
-			return
-		end
-		seen[model] = true
-		table.insert(enemies, {
-			model = model,
-			distance = distance or getDistanceToPlayer(model) or math.huge,
-		})
-	end
-	local ok, worldPets = pcall(getWorldPets)
-	if ok and worldPets then
-		for _, pet in ipairs(worldPets) do
-			if #enemies >= 32 then
-				break
-			end
-			if pet.model and modelHasAliveHumanoid(pet.model) then
-				addModel(pet.model, pet.distance)
-			end
-		end
-	end
-	local playerPos = getPlayerPosition()
-	if playerPos then
-		local okParts, parts = pcall(function()
-			return Workspace:GetPartBoundsInRadius(playerPos, 500)
-		end)
-		if okParts and parts then
-			for _, part in ipairs(parts) do
-				if #enemies >= 32 then
-					break
-				end
-				addModel(part:FindFirstAncestorOfClass("Model"))
-			end
-		end
-	end
-	if #enemies == 0 then
-		local roomRoot = getContestRoomRoot()
-		if roomRoot then
-			local visited = 0
-			local queue = { roomRoot }
-			while #queue > 0 and #enemies < 32 and visited < 500 do
-				local node = table.remove(queue, 1)
-				visited = visited + 1
-				if node.ClassName == "Model" then
-					addModel(node)
-				end
-				for _, child in ipairs(node:GetChildren()) do
-					table.insert(queue, child)
-				end
-			end
-		end
-	end
-	table.sort(enemies, function(a, b)
-		return a.distance < b.distance
-	end)
-	cachedDungeonPets = enemies
-	cachedDungeonPetsTime = now
-	return enemies
-end
-
-local function searchAndTeleportToNearestPet()
-	local pets = scanAllDungeonPets()
-	for _, entry in ipairs(pets) do
-		if entry.model and entry.model.Parent and teleportToPet(entry.model) then
-			setContestStatus("Teleported to pet: " .. entry.model.Name)
-			return entry.model
-		end
-	end
-	return nil
+	return out
 end
 
 local function collectGuiTextBlob(guiObject)
@@ -2040,10 +1839,6 @@ local function ensureDungeonEventHooks()
 		dungeonRoomVersion = dungeonRoomVersion + 1
 		contestInDungeon = true
 		dungeonPerkReady = false
-		cachedContestRoomRoot = nil
-		cachedContestRoomVersion = -1
-		cachedDungeonPets = nil
-		cachedDungeonPetsTime = 0
 		setContestStatus("RoomChanged (floor signal)")
 	end
 	local roomChanged = resolveDungeonEvent(DUNGEON_RE.RoomChanged)
@@ -2288,14 +2083,6 @@ local function tryStartContest(difficulty, useKey)
 	return false, result
 end
 
-local function isContestEnemyModel(model, playerChars)
-	return isDungeonPetModel(model, playerChars)
-end
-
-local function getContestEnemies()
-	return scanAllDungeonPets()
-end
-
 local function engageContestEnemy(model)
 	if not model then
 		return false
@@ -2327,7 +2114,7 @@ end
 
 local function waitForEnemyDown(model, timeoutSec)
 	timeoutSec = timeoutSec or 60
-	if not model or not model.Parent or not modelHasAliveHumanoid(model) then
+	if not model or not model.Parent then
 		return false
 	end
 	local start = wallClockSeconds()
@@ -2362,7 +2149,6 @@ end
 local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
 	local kills = 0
 	local idleSince = wallClockSeconds()
-	local petSearchIndex = 1
 	while kills < killsNeeded and contestRunning and contestRunId == runId and not dungeonRunEnded do
 		if dungeonPerkReady then
 			setContestStatus(("Floor %d – perk doors open"):format(floorNum))
@@ -2371,42 +2157,24 @@ local function runContestFloor(runId, difficulty, floorNum, killsNeeded)
 		setContestStatus(("Floor %d/%d – kill %d/%d"):format(
 			floorNum, difficulty.floors, kills + 1, killsNeeded
 		))
-		local enemies = getContestEnemies()
-		local target = enemies[1] and enemies[1].model
-		if not target then
-			setContestStatus(("Floor %d – searching for pets..."):format(floorNum))
-			target = searchAndTeleportToNearestPet()
-			task.wait(0.5)
-			if not target then
-				local allPets = scanAllDungeonPets()
-				if #allPets > 0 then
-					petSearchIndex = (petSearchIndex % #allPets) + 1
-					target = allPets[petSearchIndex].model
-				end
-			end
-		end
-		if target and target.Parent then
-			if not teleportToPet(target) then
-				setContestStatus(("Floor %d – teleport failed for %s"):format(floorNum, target.Name))
-				task.wait(0.5)
-			end
-		end
-		if not target or not target.Parent then
+		local targets = getDungeonPetTargets()
+		if #targets == 0 then
 			if wallClockSeconds() - idleSince > 90 then
-				setContestStatus(("Floor %d – no dungeon mobs (90s timeout)"):format(floorNum))
+				setContestStatus(("Floor %d – no pets found (90s timeout)"):format(floorNum))
 				return false
 			end
+			setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
 			task.wait(1.5)
 		else
 			idleSince = wallClockSeconds()
+			local target = targets[1].model
+			setContestStatus(("Floor %d – TP %s"):format(floorNum, targets[1].name or target.Name))
 			engageContestEnemy(target)
 			if waitForEnemyDown(target, 75) then
 				if dungeonPerkReady then
 					return true
 				end
 				kills = kills + 1
-				cachedDungeonPets = nil
-				cachedDungeonPetsTime = 0
 			else
 				setContestStatus("Battle timeout – retrying")
 				task.wait(1)
