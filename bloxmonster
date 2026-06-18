@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.6"
+local VERSION = "1.14.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1615,6 +1615,18 @@ local CONTEST_PERK_RARITY_RANK = {
 	mythical = 5,
 	mythic = 5,
 }
+-- Longest names first so "uncommon" is not mistaken for "common" etc.
+local CONTEST_PERK_RARITY_ORDERED = {
+	"mythical", "legendary", "uncommon", "mythic", "epic", "rare",
+}
+local CONTEST_PERK_OPTION_FIELDS = {
+	"Rarity", "rarity", "Tier", "tier", "Grade", "grade", "Quality", "quality",
+	"Name", "name", "Label", "label", "Title", "title", "Text", "text",
+	"PerkName", "perkName", "DisplayName", "displayName",
+}
+local CONTEST_PERK_DOOR_FIELDS = {
+	"Door", "door", "Index", "index", "Slot", "slot", "Choice", "choice",
+}
 
 local contestStatusCallback = nil
 
@@ -1791,28 +1803,70 @@ local function extractPerkOptions(payload)
 	local options = {}
 	if type(payload[1]) == "table" and type(payload[2]) == "table" then
 		options = { payload[1], payload[2] }
+	elseif type(payload[1]) == "string" and type(payload[2]) == "string" then
+		options = { { text = payload[1] }, { text = payload[2] } }
 	elseif type(payload.doors) == "table" then
 		options = payload.doors
 	elseif type(payload.perks) == "table" then
 		options = payload.perks
 	elseif type(payload.options) == "table" then
 		options = payload.options
+	elseif type(payload.Choices) == "table" then
+		options = payload.Choices
+	elseif type(payload.choices) == "table" then
+		options = payload.choices
 	end
 	if #options < 2 then
 		for _, v in ipairs(payload) do
-			if type(v) == "table" then
-				table.insert(options, v)
+			if type(v) == "table" or type(v) == "string" then
+				table.insert(options, type(v) == "string" and { text = v } or v)
 			end
 		end
 	end
 	if #options < 2 then
-		for _, v in pairs(payload) do
+		for key, v in pairs(payload) do
 			if type(v) == "table" and (v.Rarity or v.rarity or v.Name or v.name or v.Tier or v.tier) then
 				table.insert(options, v)
+			elseif type(key) == "string" and type(v) == "table" then
+				local keyLower = key:lower()
+				if keyLower:find("left", 1, true) or keyLower:find("door1", 1, true) or keyLower == "1" then
+					v.door = 1
+					table.insert(options, v)
+				elseif keyLower:find("right", 1, true) or keyLower:find("door2", 1, true) or keyLower == "2" then
+					v.door = 2
+					table.insert(options, v)
+				end
 			end
 		end
 	end
 	return options
+end
+
+local function perkRarityRankFromString(text)
+	if text == nil then
+		return 0
+	end
+	if typeof(text) == "EnumItem" then
+		return perkRarityRankFromString(text.Name)
+	end
+	if type(text) == "number" then
+		if text >= 1 and text <= 5 then
+			return math.floor(text)
+		end
+		return 0
+	end
+	local lower = tostring(text):lower()
+	local asNum = tonumber(lower)
+	if asNum and asNum >= 1 and asNum <= 5 then
+		return math.floor(asNum)
+	end
+	local best = 0
+	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
+		if lower:find(name, 1, true) then
+			best = math.max(best, CONTEST_PERK_RARITY_RANK[name])
+		end
+	end
+	return best
 end
 
 local function perkRarityRank(text)
@@ -1821,19 +1875,57 @@ local function perkRarityRank(text)
 	end
 	if type(text) == "table" then
 		local best = 0
+		for _, field in ipairs(CONTEST_PERK_OPTION_FIELDS) do
+			if text[field] ~= nil then
+				best = math.max(best, perkRarityRankFromString(text[field]))
+			end
+		end
 		for _, v in pairs(text) do
-			best = math.max(best, perkRarityRank(v))
+			if type(v) ~= "table" then
+				best = math.max(best, perkRarityRankFromString(v))
+			end
 		end
 		return best
 	end
-	local lower = tostring(text):lower()
-	local best = 0
-	for name, rank in pairs(CONTEST_PERK_RARITY_RANK) do
-		if lower:find(name, 1, true) then
-			best = math.max(best, rank)
+	return perkRarityRankFromString(text)
+end
+
+local function getPerkOptionDoorIndex(opt, fallbackIndex)
+	if type(opt) ~= "table" then
+		return fallbackIndex
+	end
+	if type(opt.door) == "number" then
+		if opt.door >= 1 and opt.door <= 2 then
+			return opt.door
+		end
+		if opt.door >= 0 and opt.door <= 1 then
+			return opt.door + 1
 		end
 	end
-	return best
+	for _, field in ipairs(CONTEST_PERK_DOOR_FIELDS) do
+		local val = opt[field]
+		if type(val) == "number" then
+			if val >= 1 and val <= 2 then
+				return val
+			end
+			if val >= 0 and val <= 1 then
+				return val + 1
+			end
+		end
+	end
+	return fallbackIndex
+end
+
+local function perkRankName(rank)
+	local names = {
+		[0] = "?",
+		[1] = "Uncommon",
+		[2] = "Rare",
+		[3] = "Epic",
+		[4] = "Legendary",
+		[5] = "Mythical",
+	}
+	return names[rank] or ("rank" .. tostring(rank))
 end
 
 local function getModelHumanoid(model)
@@ -1884,7 +1976,7 @@ end
 local function scanPerkDoorCandidates()
 	local doors = {}
 	local seen = {}
-	local function addDoor(inst, pos, text)
+	local function addDoor(inst, pos, text, doorNum)
 		if not text or text == "" then
 			return
 		end
@@ -1898,12 +1990,35 @@ local function scanPerkDoorCandidates()
 		end
 		seen[key] = true
 		table.insert(doors, {
-			door = #doors + 1,
+			door = doorNum or (#doors + 1),
 			rarity = rarity,
 			text = text,
 			pos = pos,
 			inst = inst,
 		})
+	end
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if gui then
+		for _, desc in ipairs(gui:GetDescendants()) do
+			if desc:IsA("GuiObject") and desc.Visible then
+				local nameLower = desc.Name:lower()
+				local blob = collectGuiTextBlob(desc)
+				local blobLower = blob:lower()
+				if nameLower:find("perk", 1, true) or nameLower:find("door", 1, true)
+					or nameLower:find("portal", 1, true) or nameLower:find("choice", 1, true)
+					or perkRarityRank(blob) > 0 then
+					local doorNum = nil
+					if nameLower:find("1", 1, true) or nameLower:find("left", 1, true) then
+						doorNum = 1
+					elseif nameLower:find("2", 1, true) or nameLower:find("right", 1, true) then
+						doorNum = 2
+					end
+					if perkRarityRank(blob) > 0 or blobLower:find("perk", 1, true) then
+						addDoor(desc, nil, blob, doorNum)
+					end
+				end
+			end
+		end
 	end
 	for _, desc in ipairs(Workspace:GetDescendants()) do
 		local nameLower = desc.Name:lower()
@@ -1929,33 +2044,17 @@ local function scanPerkDoorCandidates()
 			addDoor(desc, pos, collectGuiTextBlob(desc))
 		end
 	end
-	local gui = LocalPlayer:FindFirstChild("PlayerGui")
-	if gui then
-		for _, desc in ipairs(gui:GetDescendants()) do
-			if desc:IsA("GuiObject") and desc.Visible then
-				local nameLower = desc.Name:lower()
-				local blob = collectGuiTextBlob(desc)
-				local blobLower = blob:lower()
-				if nameLower:find("perk", 1, true) or nameLower:find("door", 1, true)
-					or nameLower:find("portal", 1, true) or perkRarityRank(blob) > 0 then
-					local doorNum = nil
-					if nameLower:find("1", 1, true) or nameLower:find("left", 1, true) then
-						doorNum = 1
-					elseif nameLower:find("2", 1, true) or nameLower:find("right", 1, true) then
-						doorNum = 2
-					end
-					if perkRarityRank(blob) > 0 or blobLower:find("perk", 1, true) then
-						table.insert(doors, {
-							door = doorNum or (#doors + 1),
-							rarity = perkRarityRank(blob),
-							text = blob,
-							pos = nil,
-							inst = desc,
-						})
-					end
-				end
+	local byDoor = {}
+	for _, door in ipairs(doors) do
+		local slot = door.door
+		if slot == 1 or slot == 2 then
+			if not byDoor[slot] or door.rarity > byDoor[slot].rarity then
+				byDoor[slot] = door
 			end
 		end
+	end
+	if byDoor[1] and byDoor[2] then
+		return { byDoor[1], byDoor[2] }
 	end
 	if #doors >= 2 then
 		local withPos = {}
@@ -1968,9 +2067,9 @@ local function scanPerkDoorCandidates()
 			table.sort(withPos, function(a, b)
 				return (a.pos.X or 0) < (b.pos.X or 0)
 			end)
-			for i, door in ipairs(withPos) do
-				door.door = i
-			end
+			withPos[1].door = 1
+			withPos[2].door = 2
+			return { withPos[1], withPos[2] }
 		end
 	end
 	return doors
@@ -1978,21 +2077,33 @@ end
 
 local function pickBestPerkDoorFromPayload(payload)
 	local options = extractPerkOptions(payload)
-	if #options >= 2 then
-		local r1 = perkRarityRank(options[1].Rarity or options[1].rarity or options[1].Tier or options[1].Name or options[1].name or options[1])
-		local r2 = perkRarityRank(options[2].Rarity or options[2].rarity or options[2].Tier or options[2].Name or options[2].name or options[2])
-		if r1 >= r2 then
-			return 1, r1
-		end
-		return 2, r2
+	if #options < 2 then
+		return nil, nil, nil
 	end
-	return nil, nil
+	local bestDoor, bestRank = nil, 0
+	local compareParts = {}
+	for i, opt in ipairs(options) do
+		if i > 2 then
+			break
+		end
+		local rank = perkRarityRank(opt)
+		local doorIdx = getPerkOptionDoorIndex(opt, i)
+		table.insert(compareParts, ("door %d=%s(%d)"):format(doorIdx, perkRankName(rank), rank))
+		if rank > bestRank then
+			bestRank = rank
+			bestDoor = doorIdx
+		end
+	end
+	if not bestDoor or bestRank == 0 then
+		return nil, nil, table.concat(compareParts, " vs ")
+	end
+	return bestDoor, bestRank, table.concat(compareParts, " vs ")
 end
 
 local function pickBestPerkDoor()
-	local door, rank = pickBestPerkDoorFromPayload(dungeonPerkPayload)
-	if door then
-		return door, rank, "event"
+	local door, rank, detail = pickBestPerkDoorFromPayload(dungeonPerkPayload)
+	if door and rank and rank > 0 then
+		return door, rank, ("event: %s -> door %d"):format(detail or "", door)
 	end
 	local doors = {}
 	local scanOk, scanResult = pcall(scanPerkDoorCandidates)
@@ -2008,31 +2119,29 @@ local function pickBestPerkDoor()
 		end
 	end
 	if not left or not right then
-		local withPos = {}
-		for _, entry in ipairs(doors) do
-			if entry.pos then
-				table.insert(withPos, entry)
-			end
-		end
-		if #withPos >= 2 then
-			table.sort(withPos, function(a, b)
-				return a.pos.X < b.pos.X
-			end)
-			left, right = withPos[1], withPos[2]
+		if #doors >= 2 then
+			left, right = doors[1], doors[2]
 			left.door = 1
 			right.door = 2
 		end
 	end
 	if left and right then
+		local detailScan = ("scan: door 1=%s(%d) vs door 2=%s(%d)"):format(
+			perkRankName(left.rarity), left.rarity,
+			perkRankName(right.rarity), right.rarity
+		)
 		if right.rarity > left.rarity then
-			return 2, right.rarity, right.text
+			return 2, right.rarity, detailScan .. " -> door 2"
 		end
-		return 1, left.rarity, left.text
+		if left.rarity > right.rarity then
+			return 1, left.rarity, detailScan .. " -> door 1"
+		end
+		return 1, left.rarity, detailScan .. " -> tie, door 1"
 	end
-	if #doors == 1 then
-		return doors[1].door or 1, doors[1].rarity, doors[1].text
+	if #doors == 1 and doors[1].rarity > 0 then
+		return doors[1].door or 1, doors[1].rarity, "scan single door"
 	end
-	return 1, 0, "default"
+	return 1, 0, "unknown rarity – default door 1"
 end
 
 local function ensureDungeonEventHooks()
@@ -2309,12 +2418,14 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	if pickMode == "best" or pickMode == nil then
 		local perkRank
 		preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
-		if preferredDoor then
+		setContestStatus(("Perk pick: %s"):format(pickInfo or "unknown"))
+		if perkRank and perkRank > 0 then
+			-- Confident best door: never fall back to the worse door.
+			doorsToTry = { preferredDoor }
+		elseif preferredDoor then
 			doorsToTry = { preferredDoor, preferredDoor == 1 and 2 or 1 }
-			if perkRank and perkRank > 0 then
-				pickInfo = ("rank %d"):format(perkRank) .. (pickInfo ~= "" and (": " .. pickInfo) or "")
-			end
 		else
+			doorsToTry = { 1, 2 }
 			pickInfo = "try both doors"
 		end
 	elseif pickMode == "second" then
