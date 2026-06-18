@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.0"
+local VERSION = "1.14.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2441,13 +2441,17 @@ local function advanceToNextFloor(runId, floorNum)
 	if not contestRunning or contestRunId ~= runId then
 		return false
 	end
+	local roomBefore = dungeonRoomVersion
 	setContestStatus(("Floor %d – cleared, ChoosePerk..."):format(floorNum))
 	task.wait(1.5)
-	local roomBefore = dungeonRoomVersion
 	local perkOk = false
 	for attempt = 1, 5 do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false
+		end
+		if dungeonRoomVersion > roomBefore then
+			perkOk = true
+			break
 		end
 		if selectPerkPortal(contestPerkPick, roomBefore) then
 			perkOk = true
@@ -2456,12 +2460,16 @@ local function advanceToNextFloor(runId, floorNum)
 		setContestStatus(("Floor %d – ChoosePerk retry %d/5"):format(floorNum, attempt))
 		task.wait(1.5)
 	end
-	if not perkOk then
+	if not perkOk and dungeonRoomVersion <= roomBefore then
 		return nil
 	end
 	setContestStatus(("Floor %d – waiting RoomChanged..."):format(floorNum))
 	if not waitForDungeonEntry(roomBefore, 35) then
 		if dungeonRunEnded then
+			return true
+		end
+		if dungeonRoomVersion > roomBefore then
+			task.wait(WORLD_TELEPORT_SETTLE_SEC)
 			return true
 		end
 		return nil
@@ -2470,7 +2478,7 @@ local function advanceToNextFloor(runId, floorNum)
 	return true
 end
 
-local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
+local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
 	local floorCombatStarted = false
 	local idleSince = wallClockSeconds()
 	if floorNum > 1 then
@@ -2488,7 +2496,7 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 				task.wait(1.5)
 			else
 				setContestStatus(("Floor %d – cleared (no pets)"):format(floorNum))
-				break
+				return true
 			end
 		else
 			idleSince = wallClockSeconds()
@@ -2509,33 +2517,18 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 				return false
 			end
 			if reason == "cleared" then
-				break
+				return true
 			end
 			targets = getDungeonPetTargets()
 			if #targets == 0 then
-				break
+				return true
 			end
 		end
 	end
 	if dungeonRunEnded then
 		return false
 	end
-	if not floorCombatStarted then
-		setContestStatus(("Floor %d – no pets fought yet, skipping perk step"):format(floorNum))
-		return nil
-	end
-	while contestRunning and contestRunId == runId and not dungeonRunEnded do
-		local advanced = advanceToNextFloor(runId, floorNum)
-		if advanced == true then
-			return true
-		end
-		if advanced == false then
-			return false
-		end
-		setContestStatus(("Floor %d – perk/room transition retry..."):format(floorNum))
-		task.wait(2)
-	end
-	return false
+	return nil
 end
 
 local function runContestDungeon(runId, difficulty)
@@ -2546,18 +2539,35 @@ local function runContestDungeon(runId, difficulty)
 		return false
 	end
 	local floor = 1
+	local floorBattleDone = false
 	while floor <= difficulty.floors do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			break
 		end
-		local floorOk = runContestFloor(runId, difficulty, floor, difficulty.petsPerFloor)
-		if floorOk == true then
-			floor = floor + 1
-		elseif dungeonRunEnded then
-			break
+		if not floorBattleDone then
+			local battleOk = runContestFloorBattle(runId, difficulty, floor, difficulty.petsPerFloor)
+			if battleOk == true then
+				floorBattleDone = true
+			elseif dungeonRunEnded then
+				break
+			else
+				setContestStatus("Floor " .. floor .. " – battle retry...")
+				task.wait(3)
+			end
 		else
-			setContestStatus("Floor " .. floor .. " – retrying (same run)...")
-			task.wait(3)
+			if floor >= difficulty.floors then
+				break
+			end
+			local perkOk = advanceToNextFloor(runId, floor)
+			if perkOk == true then
+				floor = floor + 1
+				floorBattleDone = false
+			elseif dungeonRunEnded then
+				break
+			else
+				setContestStatus("Floor " .. floor .. " – perk retry...")
+				task.wait(3)
+			end
 		end
 	end
 	if dungeonRunEnded then
