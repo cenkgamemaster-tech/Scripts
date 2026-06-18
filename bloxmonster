@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.7"
+local VERSION = "1.12.0"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2517,19 +2517,6 @@ copyFuseDiscoveryLog = function()
 end
 
 do -- fuse helpers scope (Luau 200-local register limit)
--- Shared across knit / auto-fuse blocks (sibling do scopes cannot see each other's locals).
-local readPetField
-local isKnitPetRecord
-local knitPetCache
-local knitPetSyncSource
-local knitPetFullSyncAttempted
-local ensurePetListeners
-local syncKnitPetCacheFromKnit
-local getKnitModule
-local findKnitPetTable
-local mergePetsIntoCache
-local KNIT_PET_CONTROLLER_NAMES
-
 local function findPetServiceFolder()
 	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
 		if desc.Name == "PetService" and desc:FindFirstChild("RE") then
@@ -2671,8 +2658,8 @@ end
 
 end -- remotes + PetService scan
 
-do -- knit pet cache sync (local register limit)
-KNIT_PET_CONTROLLER_NAMES = {
+do -- knit pet cache + auto-fuse (local register limit)
+local KNIT_PET_CONTROLLER_NAMES = {
 	"PetInvController", "PetController", "PetInventoryController", "InventoryController",
 	"PetServiceController", "PetClientController", "DataController", "PlayerDataController",
 	"ReplicaController", "ClientDataController",
@@ -2692,7 +2679,7 @@ local function isKnitNonPetValue(value)
 	return t == "RBXScriptSignal" or t == "Instance" or t == "function"
 end
 
-readPetField = function(pet, ...)
+local function readPetField(pet, ...)
 	for _, key in ipairs({ ... }) do
 		local ok, val = pcall(function()
 			return pet[key]
@@ -2717,7 +2704,7 @@ local function looksLikeUidKey(key)
 	return false
 end
 
-isKnitPetRecord = function(value, uidOverride)
+local function isKnitPetRecord(value, uidOverride)
 	if type(value) ~= "table" or isKnitNonPetValue(value) then
 		return false
 	end
@@ -2737,7 +2724,7 @@ isKnitPetRecord = function(value, uidOverride)
 	return true
 end
 
-knitPetCache = {}
+local knitPetCache = {}
 local petListenersConnected = false
 
 local function petRecordRichness(data)
@@ -2811,7 +2798,7 @@ local function ingestPetPayload(...)
 	end
 end
 
-ensurePetListeners = function()
+local function ensurePetListeners()
 	if petListenersConnected then
 		return
 	end
@@ -2838,7 +2825,7 @@ ensurePetListeners = function()
 	petListenersConnected = true
 end
 
-findKnitPetTable = function(value, depth)
+local function findKnitPetTable(value, depth)
 	depth = depth or 0
 	if depth > 5 or type(value) ~= "table" then
 		return nil
@@ -2873,7 +2860,7 @@ findKnitPetTable = function(value, depth)
 	return nil
 end
 
-getKnitModule = function()
+local function getKnitModule()
 	local packages = ReplicatedStorage:FindFirstChild("Packages")
 	local knitModule = packages and packages:FindFirstChild("Knit")
 	if knitModule then
@@ -3030,7 +3017,7 @@ local function tryTriggerPetInventoryLoad(ctrl)
 	end
 end
 
-mergePetsIntoCache = function(pets)
+local function mergePetsIntoCache(pets)
 	if type(pets) ~= "table" then
 		return 0
 	end
@@ -3064,8 +3051,8 @@ mergePetsIntoCache = function(pets)
 	return after - before
 end
 
-knitPetSyncSource = nil
-knitPetFullSyncAttempted = false
+local knitPetSyncSource = nil
+local knitPetFullSyncAttempted = false
 
 local function fetchDataControllerPetPools()
 	local Knit = getKnitModule()
@@ -3135,7 +3122,7 @@ local function fetchDataControllerPetPools()
 	return merged, source, total
 end
 
-syncKnitPetCacheFromKnit = function(opts)
+local function syncKnitPetCacheFromKnit(opts)
 	opts = opts or {}
 	ensurePetListeners()
 	local sources = {}
@@ -3317,9 +3304,7 @@ task.defer(function()
 	syncKnitPetCacheFromKnit()
 end)
 
-end -- knit pet cache sync
 
-do -- auto-fuse + rankup (local register limit)
 local FUSE_TARGET_RANKS = { "E", "D", "C", "B" }
 local ASCEND_TO_RANK = { "E", "D", "C", "B", "A", "S", "SS", "SSS" }
 
@@ -3957,7 +3942,7 @@ dumpKnitPetInventoryText = function()
 	return table.concat(lines, "\n"), count
 end
 
-end -- auto-fuse + rankup
+end -- knit pet cache + auto-fuse
 
 do -- fuse scan + inventory UI dump (local register limit)
 scanFuseRelatedRemotesText = function()
@@ -6179,42 +6164,9 @@ local filterBarVisible = true
 local autoRefreshRunning = false
 local autoRefreshThread = nil
 local autoFarmThread = nil
-local getSelectedWorldFilters
-local getSelectedWorldConfig
-local populateWorldList
-local setActiveTab
-local applyFarmWaitFromInput
-local applyFarmStayFromInput
-local toggleFarmLocationEnabled
-local setWorldFarmStatus
-local setPetFarmStatus
-local getFarmWaitSec
-local runFarmLocationPhase
-local refreshWorldFarmList
-local highlightContestDifficultyButtons
-local updateContestMasterKeyBtn
-local updateContestPerkBtn
-local stopAutoFarm
-local stopWorldHunt
-local stopAllFarm
-local updateFuseMutationsBtn
-local updateFuseDuringFarmBtn
-local updateFarmLocationEnableButton
-local refreshConfigStatusLabel
-local getFarmStaySec
-local runPostCycleBonusFarm
-local runWorldFarmLoop
-local connectAllUIHandlers
-local startWorldFarm
-local startWorldHunt
-local startAutoFarm
-local stopAutoRefresh
-local maybeStartAutoFuseWithFarm
-local applyFarmSettingsFromUI
 
 
 do -- app handlers part 1 (local register limit)
-
 
 getWorldConfigById = function(worldId)
 	for _, world in ipairs(WORLD_ZONES) do
@@ -6225,21 +6177,16 @@ getWorldConfigById = function(worldId)
 	return nil
 end
 
-getSelectedWorldConfig = function()
+local function getSelectedWorldConfig()
 	return getWorldConfigById(selectedWorldId)
 end
 
-getSelectedWorldFilters = function()
+local function getSelectedWorldFilters()
 	if not worldPetFilters[selectedWorldId] then
 		worldPetFilters[selectedWorldId] = {}
 	end
 	return worldPetFilters[selectedWorldId]
 end
-
-end -- app handlers part 1
-
-do -- app handlers part 2 (local register limit)
-
 
 local function findWorldFilterIndexByName(name)
 	local filters = getSelectedWorldFilters()
@@ -6373,11 +6320,6 @@ setFilterBarVisible = function(visible)
 		UI.filtersBtn.BackgroundColor3 = Color3.fromRGB(40, 65, 45)
 	end
 end
-
-end -- app handlers part 2
-
-do -- app handlers part 3 (local register limit)
-
 
 local function populatePetScroll(targetScroll, targetLayout, pets, totalUnfiltered, filters, countLbl, totalScanned)
 	for _, child in ipairs(targetScroll:GetChildren()) do
@@ -6525,7 +6467,7 @@ populateList = function(pets, totalUnfiltered)
 	populatePetScroll(UI.scroll, UI.listLayout, pets, totalUnfiltered, nameFilters, UI.countLabel)
 end
 
-populateWorldList = function(pets, totalUnfiltered, totalScanned)
+local function populateWorldList(pets, totalUnfiltered, totalScanned)
 	local filters = getSelectedWorldFilters()
 	populatePetScroll(UI.worldScroll, UI.worldListLayout, pets, totalUnfiltered, filters, nil, totalScanned)
 end
@@ -6732,10 +6674,9 @@ refreshWorldList = function(rescan, worldConfig)
 	end
 end
 
-end -- app handlers part 3
+end -- app handlers part 1
 
-do -- app handlers part 4 (local register limit)
-
+do -- app handlers part 2 (local register limit)
 
 local function selectWorld(worldId, teleport)
 	selectedWorldId = worldId
@@ -6759,15 +6700,15 @@ end
 
 onWorldButtonClick = selectWorld
 
-getFarmWaitSec = function()
+local function getFarmWaitSec()
 	return farmWaitSec
 end
 
-getFarmStaySec = function()
+local function getFarmStaySec()
 	return farmStaySec
 end
 
-refreshConfigStatusLabel = function()
+local function refreshConfigStatusLabel()
 	local locState = farmLocationEnabled and "ON" or "OFF"
 	UI.configStatusLabel.Text = ("Farm wait: %ds | Farm location: %s (%ds stay)"):format(
 		farmWaitSec,
@@ -6776,7 +6717,7 @@ refreshConfigStatusLabel = function()
 	)
 end
 
-updateFarmLocationEnableButton = function()
+local function updateFarmLocationEnableButton()
 	if farmLocationEnabled then
 		UI.farmLocationEnableBtn.Text = "Farm location before world cycle: ON"
 		UI.farmLocationEnableBtn.BackgroundColor3 = Color3.fromRGB(50, 100, 70)
@@ -6788,16 +6729,11 @@ updateFarmLocationEnableButton = function()
 	end
 end
 
-toggleFarmLocationEnabled = function()
+local function toggleFarmLocationEnabled()
 	farmLocationEnabled = not farmLocationEnabled
 	updateFarmLocationEnableButton()
 	refreshConfigStatusLabel()
 end
-
-end -- app handlers part 4
-
-do -- app handlers part 5 (local register limit)
-
 
 local function parseFarmWaitSec(text)
 	local n = tonumber(text)
@@ -6807,7 +6743,7 @@ local function parseFarmWaitSec(text)
 	return math.clamp(math.floor(n + 0.5), MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
 end
 
-applyFarmWaitFromInput = function()
+local function applyFarmWaitFromInput()
 	local val = parseFarmWaitSec(UI.farmWaitInput.Text)
 	if not val then
 		UI.configStatusLabel.Text = ("Enter %d–%d seconds"):format(MIN_FARM_WAIT_SEC, MAX_FARM_WAIT_SEC)
@@ -6828,7 +6764,7 @@ local function parseFarmStaySec(text)
 	return math.clamp(math.floor(n + 0.5), MIN_FARM_STAY_SEC, MAX_FARM_STAY_SEC)
 end
 
-applyFarmStayFromInput = function()
+local function applyFarmStayFromInput()
 	local val = parseFarmStaySec(UI.farmStayInput.Text)
 	if not val then
 		UI.configStatusLabel.Text = ("Farm stay: enter %d–%d seconds"):format(
@@ -6844,24 +6780,19 @@ applyFarmStayFromInput = function()
 	return true
 end
 
-end -- app handlers part 5
-
-do -- app handlers part 6 (local register limit)
-
-
 local function formatFarmStayTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-setPetFarmStatus = function(text)
+local function setPetFarmStatus(text)
 	UI.farmStatusLabel.Text = text
 end
 
-setWorldFarmStatus = function(text)
+local function setWorldFarmStatus(text)
 	UI.worldHuntStatusLabel.Text = text
 end
 
-runFarmLocationPhase = function(runId)
+local function runFarmLocationPhase(runId)
 	if not farmLocationEnabled then
 		return true
 	end
@@ -6905,11 +6836,6 @@ runFarmLocationPhase = function(runId)
 	return true
 end
 
-end -- app handlers part 6
-
-do -- app handlers part 7 (local register limit)
-
-
 local function styleTabButton(btn, active)
 	btn.BackgroundColor3 = active and Color3.fromRGB(50, 100, 70) or Color3.fromRGB(35, 55, 75)
 	btn.TextColor3 = active and Color3.fromRGB(220, 255, 220) or Color3.fromRGB(180, 210, 190)
@@ -6920,7 +6846,7 @@ local function setTabPanelVisible(panel, visible)
 	panel.ZIndex = visible and 2 or 1
 end
 
-highlightContestDifficultyButtons = function()
+local function highlightContestDifficultyButtons()
 	if not UI or not UI.dungeonDiffBtns then
 		return
 	end
@@ -6933,7 +6859,7 @@ highlightContestDifficultyButtons = function()
 	end
 end
 
-updateContestMasterKeyBtn = function()
+local function updateContestMasterKeyBtn()
 	if not UI or not UI.dungeonMasterKeyBtn then
 		return
 	end
@@ -6946,7 +6872,7 @@ updateContestMasterKeyBtn = function()
 	end
 end
 
-updateContestPerkBtn = function()
+local function updateContestPerkBtn()
 	if not UI or not UI.dungeonPerkBtn then
 		return
 	end
@@ -6961,7 +6887,7 @@ updateContestPerkBtn = function()
 	end
 end
 
-setActiveTab = function(tabName)
+local function setActiveTab(tabName)
 	activeTab = tabName
 	if TAB_PANELS then
 		for _, entry in ipairs(TAB_PANELS) do
@@ -6995,16 +6921,11 @@ setActiveTab = function(tabName)
 	end
 end
 
-end -- app handlers part 7
-
-do -- app handlers part 8 (local register limit)
-
-
 local function isAnyFarmRunning()
 	return autoFarmRunning or worldHuntRunning
 end
 
-stopAutoFarm = function()
+local function stopAutoFarm()
 	petFarmRunId = petFarmRunId + 1
 	autoFarmRunning = false
 	UI.farmStatusLabel.Text = "Farm idle"
@@ -7015,7 +6936,7 @@ stopAutoFarm = function()
 	end
 end
 
-stopWorldHunt = function()
+local function stopWorldHunt()
 	worldFarmRunId = worldFarmRunId + 1
 	worldHuntRunning = false
 	farmLocationStayActive = false
@@ -7027,31 +6948,32 @@ stopWorldHunt = function()
 	end
 end
 
-stopAllFarm = function()
+local function stopAllFarm()
 	stopAutoFarm()
 	stopWorldHunt()
 end
 
-refreshWorldFarmList = function(world, statusText, runId, scanMode)
+local function refreshWorldFarmList(world, statusText, runId, scanMode)
 	if runId and not shouldFarmContinue(runId, "world") then
 		return false
 	end
 	if statusText then
 		setWorldFarmStatus(statusText)
 	end
-	local pets = getCachedWorldPets(scanMode or "auto")
-	if runId and not shouldFarmContinue(runId, "world") then
-		return false
+	local ok, err = pcall(function()
+		local pets = getCachedWorldPets(scanMode or "auto")
+		if runId and not shouldFarmContinue(runId, "world") then
+			return
+		end
+		local filters = worldPetFilters[world.id] or {}
+		applyListsFromPets(pets, world, filters)
+	end)
+	if not ok then
+		warn("[BloxMonster] World farm list error:", err)
+		setWorldFarmStatus("List refresh error – retrying...")
 	end
-	local filters = worldPetFilters[world.id] or {}
-	applyListsFromPets(pets, world, filters)
 	return runId == nil or shouldFarmContinue(runId, "world")
 end
-
-end -- app handlers part 8
-
-do -- app handlers part 9 (local register limit)
-
 
 local function collectBonusFarmFilters()
 	local out = {}
@@ -7081,7 +7003,7 @@ local function formatBonusTimeLeft(secondsLeft)
 	return ("%dm %ds"):format(math.floor(secondsLeft / 60), secondsLeft % 60)
 end
 
-runPostCycleBonusFarm = function(runId)
+local function runPostCycleBonusFarm(runId)
 	local bonusFilters = collectBonusFarmFilters()
 	if #bonusFilters == 0 then
 		return
@@ -7140,12 +7062,17 @@ runPostCycleBonusFarm = function(runId)
 	end
 end
 
-runWorldFarmLoop = function(runId)
+local function runWorldFarmLoop(runId)
 	while shouldFarmContinue(runId, "world") do
 		if not runFarmLocationPhase(runId) then
 			break
 		end
+		if not shouldFarmContinue(runId, "world") then
+			break
+		end
 
+		local worldsVisited = 0
+		setWorldFarmStatus("Farm stay done – starting world cycle...")
 		for _, world in ipairs(WORLD_ZONES) do
 			if farmLocationStayActive or not shouldFarmContinue(runId, "world") then
 				break
@@ -7153,6 +7080,7 @@ runWorldFarmLoop = function(runId)
 			local filters = worldPetFilters[world.id]
 			local highFilters = filtersBelowPriority(filters, WORLD_CYCLE_BONUS_MIN_PRIORITY)
 			if #highFilters > 0 then
+				worldsVisited = worldsVisited + 1
 				selectedWorldId = world.id
 				highlightWorldButtons()
 				rebuildWorldFilterChips()
@@ -7180,6 +7108,7 @@ runWorldFarmLoop = function(runId)
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
+						setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
 						break
 					end
 
@@ -7205,18 +7134,19 @@ runWorldFarmLoop = function(runId)
 				end
 			end
 		end
+		if worldsVisited == 0 then
+			setWorldFarmStatus("No P1-P2 pets on Worlds tab – add e.g. Rio@1 per world")
+			if not farmWait(FARM_NO_TARGET_WAIT_SEC, runId, "world") then
+				break
+			end
+		end
 		if shouldFarmContinue(runId, "world") then
 			runPostCycleBonusFarm(runId)
 		end
 	end
 end
 
-end -- app handlers part 9
-
-do -- app handlers part 10 (local register limit)
-
-
-updateFuseMutationsBtn = function()
+local function updateFuseMutationsBtn()
 	if not UI or not UI.fuseMutationsBtn then
 		return
 	end
@@ -7229,7 +7159,7 @@ updateFuseMutationsBtn = function()
 	end
 end
 
-updateFuseDuringFarmBtn = function()
+local function updateFuseDuringFarmBtn()
 	if not UI or not UI.fuseDuringFarmBtn then
 		return
 	end
@@ -7242,7 +7172,7 @@ updateFuseDuringFarmBtn = function()
 	end
 end
 
-maybeStartAutoFuseWithFarm = function()
+local function maybeStartAutoFuseWithFarm()
 	if not autoFuseDuringFarm then
 		return
 	end
@@ -7252,17 +7182,12 @@ maybeStartAutoFuseWithFarm = function()
 	pcall(startAutoFuse)
 end
 
-end -- app handlers part 10
-
-do -- app handlers part 11 (local register limit)
-
-
-applyFarmSettingsFromUI = function()
+local function applyFarmSettingsFromUI()
 	pcall(applyFarmWaitFromInput)
 	pcall(applyFarmStayFromInput)
 end
 
-startWorldFarm = function()
+local function startWorldFarm()
 	if worldHuntRunning then
 		return false
 	end
@@ -7294,27 +7219,28 @@ startWorldFarm = function()
 		end)
 		if not ok and not tostring(err):find("cancelled", 1, true) then
 			warn("[BloxMonster] World hunt error:", err)
+			if worldFarmRunId == myRunId then
+				setWorldFarmStatus("World hunt error: " .. tostring(err))
+			end
 		end
 		if worldFarmRunId == myRunId then
 			worldHuntRunning = false
+			farmLocationStayActive = false
 			UI.worldHuntStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
-			UI.worldHuntStatusLabel.Text = "World hunt idle"
+			if ok or tostring(err):find("cancelled", 1, true) then
+				UI.worldHuntStatusLabel.Text = "World hunt idle"
+			end
 		end
 	end)
 	maybeStartAutoFuseWithFarm()
 	return true
 end
 
-end -- app handlers part 11
-
-do -- app handlers part 12 (local register limit)
-
-
-startWorldHunt = function()
+local function startWorldHunt()
 	startWorldFarm()
 end
 
-startAutoFarm = function()
+local function startAutoFarm()
 	if autoFarmRunning then
 		return
 	end
@@ -7388,23 +7314,13 @@ startAutoFarm = function()
 	end)
 end
 
-end -- app handlers part 12
-
-do -- app handlers part 13 (local register limit)
-
-
-stopAutoRefresh = function()
+local function stopAutoRefresh()
 	autoRefreshRunning = false
 	UI.autoRefreshBtn.Text = "Auto refresh: OFF"
 	UI.autoRefreshBtn.BackgroundColor3 = Color3.fromRGB(40, 70, 50)
 end
 
-end -- app handlers part 13
-
-do -- app handlers part 14 (local register limit)
-
-
-connectAllUIHandlers = function()
+local function connectAllUIHandlers()
 	UI.refreshBtn.MouseButton1Click:Connect(function()
 		if activeTab == "worlds" then
 			refreshWorldList(true)
@@ -7542,9 +7458,7 @@ connectAllUIHandlers = function()
 		refreshWorldList(false)
 	end)
 
-	UI.worldHuntStartBtn.MouseButton1Click:Connect(function()
-		startWorldHunt()
-	end)
+	UI.worldHuntStartBtn.MouseButton1Click:Connect(startWorldHunt)
 	UI.worldHuntStopBtn.MouseButton1Click:Connect(function()
 		stopWorldHunt()
 	end)
@@ -7584,9 +7498,65 @@ connectAllUIHandlers = function()
 		UI.dungeonStartBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 100)
 	end)
 
-	UI.farmStartBtn.MouseButton1Click:Connect(function()
-		startAutoFarm()
+local function printRemotesToConsole(text)
+	warn("[BloxMonster] === REMOTE LIST START ===")
+	for line in string.gmatch(text or "", "[^\n]+") do
+		warn("[BloxMonster] " .. line)
+	end
+	warn("[BloxMonster] === REMOTE LIST END ===")
+end
+
+local function runContestRemotesDump()
+	UI.dungeonStatusLabel.Text = "Listing DungeonService remotes..."
+	UI.dungeonScanBtn.Text = "..."
+	local ok, text, count = pcall(function()
+		if type(scanAllRemotesText) ~= "function" then
+			error("scanAllRemotesText missing – reload bloxmonster v1.12.3")
+		end
+		return scanAllRemotesText()
 	end)
+	if not ok then
+		text = "Scan error:\n" .. tostring(text)
+		count = 0
+		warn("[BloxMonster Contest]", text)
+	elseif not text or text == "" then
+		text = "Scan returned empty."
+		count = 0
+	end
+	if typeof(_G) == "table" then
+		_G.BloxMonsterLastContestScan = text
+	end
+	openContestScanWindow(text)
+	printRemotesToConsole(text)
+	if UI.dungeonScanContent then
+		UI.dungeonScanContent.Text = text
+	end
+	local copied = copyText(text)
+	UI.dungeonStatusLabel.Text = copied
+		and ("Done: %d DungeonService remote(s) – copied + F9 console."):format(count or 0)
+		or ("Done: %d DungeonService remote(s) – see popup + F9."):format(count or 0)
+	UI.dungeonScanBtn.Text = "Remotes"
+	print("[BloxMonster Contest remotes]\n" .. text)
+end
+
+	UI.dungeonScanBtn.MouseButton1Click:Connect(function()
+		runContestRemotesDump()
+	end)
+
+	UI.dungeonScanCopyBtn.MouseButton1Click:Connect(function()
+		local text = contestScanRawText
+		if (not text or text == "") and UI.dungeonScanContent then
+			text = UI.dungeonScanContent.Text or ""
+		end
+		if text == "" or text:find("Tap Remotes") then
+			runContestRemotesDump()
+			return
+		end
+		local copied = copyText(text)
+		UI.dungeonStatusLabel.Text = copied and "Copied!" or "Use F9 console output."
+	end)
+
+	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
 	UI.farmStopBtn.MouseButton1Click:Connect(stopAutoFarm)
 
 	UI.closeBtn.MouseButton1Click:Connect(function()
@@ -7623,8 +7593,6 @@ connectAllUIHandlers = function()
 	end)
 end
 
-end -- app handlers part 14
-
 local connectOk, connectErr = pcall(connectAllUIHandlers)
 if not connectOk then
 	warn("[BloxMonster] UI handler connect error:", connectErr)
@@ -7650,3 +7618,5 @@ task.defer(function()
 	print(("[BloxMonster] v%s loaded"):format(VERSION))
 	task.defer(getWorldRemotes)
 end)
+
+end -- app handlers part 2
