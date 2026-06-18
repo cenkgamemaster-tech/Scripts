@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.11.0"
+local VERSION = "1.11.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1431,6 +1431,18 @@ local setContestStatusHandler
 do
 local CONTEST_REMOTE_KEYWORDS = {
 	"contest", "capture", "dungeon", "challenge", "tower", "raid", "floor", "perk",
+	"elite", "master", "standard", "advanced", "trial", "wave", "mode", "enter",
+}
+local CONTEST_REMOTE_CANDIDATES = {
+	"ReplicatedStorage.Remotes.CaptureContest",
+	"ReplicatedStorage.Remotes.Contest",
+	"ReplicatedStorage.Remotes.Dungeon",
+	"ReplicatedStorage.Remotes.Tower",
+	"ReplicatedStorage.Remotes.Challenge",
+	"ReplicatedStorage.Remotes.StartContest",
+}
+local CONTEST_UI_KEYWORDS = {
+	"contest", "capture", "dungeon", "challenge", "tower", "elite", "master", "floor", "raid",
 }
 local CONTEST_PATH_KEYWORDS = { "contest", "capture", "dungeon", "challenge" }
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
@@ -1486,6 +1498,33 @@ local function pathMatchesContest(path)
 	return false
 end
 
+local function resolveContestRemotePath(pathString)
+	local node = game
+	for part in string.gmatch(pathString, "[^.]+") do
+		node = node and node:FindFirstChild(part)
+		if not node then
+			return nil
+		end
+	end
+	if node and (node:IsA("RemoteEvent") or node:IsA("RemoteFunction")) then
+		return node
+	end
+	return nil
+end
+
+local function textMatchesContestKeywords(text)
+	if not text or text == "" then
+		return false
+	end
+	local lower = text:lower()
+	for _, kw in ipairs(CONTEST_UI_KEYWORDS) do
+		if lower:find(kw, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 local function collectContestRemotes()
 	local seen = {}
 	local list = {}
@@ -1497,11 +1536,18 @@ local function collectContestRemotes()
 		seen[key] = true
 		table.insert(list, remote)
 	end
+	for _, path in ipairs(CONTEST_REMOTE_CANDIDATES) do
+		local remote = resolveContestRemotePath(path)
+		if remote then
+			add(remote)
+		end
+	end
 	for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
 		if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+			local full = inst:GetFullName():lower()
 			local n = inst.Name:lower()
 			for _, kw in ipairs(CONTEST_REMOTE_KEYWORDS) do
-				if n:find(kw, 1, true) then
+				if n:find(kw, 1, true) or full:find(kw, 1, true) then
 					add(inst)
 					break
 				end
@@ -1514,21 +1560,125 @@ local function collectContestRemotes()
 	return list
 end
 
+local function scanContestUIButtons()
+	local lines = {}
+	local gui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not gui then
+		table.insert(lines, "  (PlayerGui missing)")
+		return lines
+	end
+	for _, desc in ipairs(gui:GetDescendants()) do
+		if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+			local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
+			if textMatchesContestKeywords(blob) then
+				table.insert(lines, ("  %s (%s) text=%q"):format(
+					desc:GetFullName(), desc.ClassName, desc.Text or ""
+				))
+			end
+		end
+	end
+	if #lines == 0 then
+		table.insert(lines, "  (none – open Capture Contest menu and scan again)")
+	end
+	return lines
+end
+
+local function scanContestProximityPrompts()
+	local lines = {}
+	local pos = getPlayerPosition()
+	for _, prompt in ipairs(Workspace:GetDescendants()) do
+		if prompt:IsA("ProximityPrompt") then
+			local blob = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "") .. " " .. prompt:GetFullName()):lower()
+			if textMatchesContestKeywords(blob) then
+				local dist = math.huge
+				if pos then
+					local parent = prompt.Parent
+					local pp = parent and parent:IsA("BasePart") and parent.Position
+						or (parent and parent:IsA("Model") and getModelPosition(parent))
+					if pp then
+						dist = (pp - pos).Magnitude
+					end
+				end
+				table.insert(lines, ("  %s action=%q obj=%q dist=%.0f"):format(
+					prompt:GetFullName(), prompt.ActionText or "", prompt.ObjectText or "", dist
+				))
+			end
+		end
+	end
+	if #lines == 0 then
+		table.insert(lines, "  (none nearby – stand at Capture Contest NPC and scan)")
+	end
+	return lines
+end
+
 scanContestRemotesText = function()
 	local remotes = collectContestRemotes()
 	local lines = {
-		"=== Capture Contest remotes ===",
-		("Found %d remote(s)."):format(#remotes),
+		"=== Capture Contest scan ===",
+		"Open the in-game Capture Contest menu first, then scan.",
 		"",
+		"--- Remotes ---",
+		("Found %d remote(s)."):format(#remotes),
 	}
 	if #remotes == 0 then
-		table.insert(lines, "  (none – open Capture Contest in-game and scan again)")
+		table.insert(lines, "  (none)")
 	else
 		for _, remote in ipairs(remotes) do
 			table.insert(lines, ("  %s (%s)"):format(remote:GetFullName(), remote.ClassName))
 		end
 	end
+	table.insert(lines, "")
+	table.insert(lines, "--- UI buttons (PlayerGui) ---")
+	for _, line in ipairs(scanContestUIButtons()) do
+		table.insert(lines, line)
+	end
+	table.insert(lines, "")
+	table.insert(lines, "--- Workspace prompts ---")
+	for _, line in ipairs(scanContestProximityPrompts()) do
+		table.insert(lines, line)
+	end
 	return table.concat(lines, "\n")
+end
+
+local function clickContestGuiButton(btn)
+	if not btn then
+		return false
+	end
+	local ok = false
+	pcall(function()
+		if typeof(firesignal) == "function" then
+			if btn.MouseButton1Click then
+				firesignal(btn.MouseButton1Click)
+				ok = true
+			elseif btn.Activated then
+				firesignal(btn.Activated)
+				ok = true
+			end
+		end
+	end)
+	return ok
+end
+
+local function tryContestProximityStart()
+	local pos = getPlayerPosition()
+	if not pos then
+		return false
+	end
+	for _, prompt in ipairs(Workspace:GetDescendants()) do
+		if prompt:IsA("ProximityPrompt") then
+			local blob = ((prompt.ActionText or "") .. " " .. (prompt.ObjectText or "") .. " " .. prompt:GetFullName()):lower()
+			if textMatchesContestKeywords(blob) then
+				local parent = prompt.Parent
+				local pp = parent and parent:IsA("BasePart") and parent.Position
+					or (parent and parent:IsA("Model") and getModelPosition(parent))
+				if pp and (pp - pos).Magnitude < 200 and fireContestPrompt(prompt) then
+					setContestStatus("Started via prompt: " .. prompt:GetFullName())
+					return true
+				end
+			end
+		end
+	end
+	return false
 end
 
 local function tryStartContest(difficulty, useKey)
@@ -1537,12 +1687,20 @@ local function tryStartContest(difficulty, useKey)
 		{ difficulty.name },
 		{ difficulty.id },
 		{ difficulty.index },
+		{ tostring(difficulty.index) },
+		{ difficulty.name:upper() },
 		{ "CaptureContest", difficulty.id },
 		{ "CaptureContest", difficulty.name },
+		{ "CaptureContest", difficulty.index },
+		{ "Contest", difficulty.id },
+		{ "Contest", difficulty.name },
 		{ "Start", difficulty.id },
 		{ "Start", difficulty.index },
+		{ "Start", difficulty.name },
 		{ "Challenge", difficulty.id },
 		{ "Challenge", difficulty.name },
+		{ "Enter", difficulty.id },
+		{ "Enter", difficulty.name },
 	}
 	if difficulty.needsKey and useKey then
 		table.insert(argSets, { difficulty.id, true })
@@ -1550,6 +1708,7 @@ local function tryStartContest(difficulty, useKey)
 		table.insert(argSets, { difficulty.index, true })
 		table.insert(argSets, { "Master", true })
 		table.insert(argSets, { difficulty.id, "key" })
+		table.insert(argSets, { difficulty.name, true, true })
 	end
 	for _, remote in ipairs(remotes) do
 		for _, args in ipairs(argSets) do
@@ -1557,7 +1716,10 @@ local function tryStartContest(difficulty, useKey)
 				fireRemote(remote, table.unpack(args))
 			end)
 			if ok then
-				setContestStatus(("Started via %s"):format(remote:GetFullName()))
+				setContestStatus(("Fired %s(%s)"):format(
+					remote.Name, table.concat(args, ", ")
+				))
+				task.wait(0.5)
 				return true
 			end
 		end
@@ -1565,22 +1727,32 @@ local function tryStartContest(difficulty, useKey)
 	local gui = LocalPlayer:FindFirstChild("PlayerGui")
 	if gui then
 		local diffLower = difficulty.name:lower()
+		local actionWords = { "start", "challenge", "play", "begin", "enter", "fight" }
 		for _, desc in ipairs(gui:GetDescendants()) do
-			if desc:IsA("TextButton") and desc.Visible then
+			if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
 				local blob = ((desc.Text or "") .. " " .. desc.Name):lower()
-				if blob:find("contest", 1, true) or blob:find("capture", 1, true) or blob:find("dungeon", 1, true) then
-					if blob:find(diffLower, 1, true) or blob:find("start", 1, true) or blob:find("challenge", 1, true) then
-						pcall(function()
-							if typeof(firesignal) == "function" then
-								firesignal(desc.MouseButton1Click)
-							end
-						end)
-						setContestStatus("Clicked UI: " .. desc:GetFullName())
-						return true
+				if textMatchesContestKeywords(blob) then
+					local matchDiff = blob:find(diffLower, 1, true)
+					local matchAction = false
+					for _, word in ipairs(actionWords) do
+						if blob:find(word, 1, true) then
+							matchAction = true
+							break
+						end
+					end
+					if matchDiff or matchAction then
+						if clickContestGuiButton(desc) then
+							setContestStatus("Clicked UI: " .. desc:GetFullName())
+							task.wait(0.5)
+							return true
+						end
 					end
 				end
 			end
 		end
+	end
+	if tryContestProximityStart() then
+		return true
 	end
 	return false
 end
@@ -1789,7 +1961,7 @@ end
 
 local function runContestDungeon(runId, difficulty)
 	if not tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey) then
-		setContestStatus("Open Capture Contest menu, or tap Scan remotes on Dungeon tab")
+		setContestStatus("Auto-start failed – open menu, tap Scan, then Start again")
 	end
 	task.wait(WORLD_TELEPORT_SETTLE_SEC)
 	for floor = 1, difficulty.floors do
@@ -4972,7 +5144,7 @@ local dungeonHint = Instance.new("TextLabel")
 dungeonHint.Size = UDim2.new(1, -12, 0, 28)
 dungeonHint.Position = UDim2.new(0, 6, 0, 2)
 dungeonHint.BackgroundTransparency = 1
-dungeonHint.Text = "Capture Contest – kill 3 pets/floor, pick a perk portal, auto-restarts."
+dungeonHint.Text = "Open Capture Contest in-game → Scan → Copy scan (or select text box). Then Start."
 dungeonHint.TextColor3 = Color3.fromRGB(150, 190, 160)
 dungeonHint.TextSize = 10
 dungeonHint.Font = Enum.Font.Gotham
@@ -5071,11 +5243,11 @@ dungeonStopCorner.CornerRadius = UDim.new(0, 6)
 dungeonStopCorner.Parent = dungeonStopBtn
 
 local dungeonScanBtn = Instance.new("TextButton")
-dungeonScanBtn.Size = UDim2.new(0, 88, 0, 28)
+dungeonScanBtn.Size = UDim2.new(0, 72, 0, 28)
 dungeonScanBtn.Position = UDim2.new(0, 162, 0, 112)
 dungeonScanBtn.BackgroundColor3 = Color3.fromRGB(50, 70, 100)
 dungeonScanBtn.BorderSizePixel = 0
-dungeonScanBtn.Text = "Scan remotes"
+dungeonScanBtn.Text = "Scan"
 dungeonScanBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
 dungeonScanBtn.TextSize = 10
 dungeonScanBtn.Font = Enum.Font.Gotham
@@ -5085,30 +5257,77 @@ local dungeonScanCorner = Instance.new("UICorner")
 dungeonScanCorner.CornerRadius = UDim.new(0, 6)
 dungeonScanCorner.Parent = dungeonScanBtn
 
-local dungeonInfoLabel = Instance.new("TextLabel")
-dungeonInfoLabel.Size = UDim2.new(1, -12, 0, 36)
-dungeonInfoLabel.Position = UDim2.new(0, 6, 0, 146)
-dungeonInfoLabel.BackgroundTransparency = 1
-dungeonInfoLabel.Text = "Elite = 4 floors × 3 pets. Master needs key. Standard/Advanced/Elite = no key."
-dungeonInfoLabel.TextColor3 = Color3.fromRGB(130, 160, 140)
-dungeonInfoLabel.TextSize = 9
-dungeonInfoLabel.Font = Enum.Font.Gotham
-dungeonInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
-dungeonInfoLabel.TextWrapped = true
-dungeonInfoLabel.Parent = dungeonPanel
+local dungeonScanCopyBtn = Instance.new("TextButton")
+dungeonScanCopyBtn.Size = UDim2.new(0, 72, 0, 28)
+dungeonScanCopyBtn.Position = UDim2.new(0, 240, 0, 112)
+dungeonScanCopyBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 60)
+dungeonScanCopyBtn.BorderSizePixel = 0
+dungeonScanCopyBtn.Text = "Copy scan"
+dungeonScanCopyBtn.TextColor3 = Color3.fromRGB(220, 255, 220)
+dungeonScanCopyBtn.TextSize = 10
+dungeonScanCopyBtn.Font = Enum.Font.GothamBold
+dungeonScanCopyBtn.Parent = dungeonPanel
+
+local dungeonScanCopyCorner = Instance.new("UICorner")
+dungeonScanCopyCorner.CornerRadius = UDim.new(0, 6)
+dungeonScanCopyCorner.Parent = dungeonScanCopyBtn
 
 local dungeonStatusLabel = Instance.new("TextLabel")
-dungeonStatusLabel.Size = UDim2.new(1, -12, 0, 40)
-dungeonStatusLabel.Position = UDim2.new(0, 6, 0, 186)
+dungeonStatusLabel.Size = UDim2.new(1, -12, 0, 22)
+dungeonStatusLabel.Position = UDim2.new(0, 6, 0, 146)
 dungeonStatusLabel.BackgroundTransparency = 1
 dungeonStatusLabel.Text = "Dungeon idle"
 dungeonStatusLabel.TextColor3 = Color3.fromRGB(150, 190, 160)
-dungeonStatusLabel.TextSize = 11
+dungeonStatusLabel.TextSize = 10
 dungeonStatusLabel.Font = Enum.Font.Gotham
 dungeonStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 dungeonStatusLabel.TextWrapped = true
 dungeonStatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
 dungeonStatusLabel.Parent = dungeonPanel
+
+local dungeonScanScroll = Instance.new("ScrollingFrame")
+dungeonScanScroll.Size = UDim2.new(1, -12, 1, -178)
+dungeonScanScroll.Position = UDim2.new(0, 6, 0, 172)
+dungeonScanScroll.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
+dungeonScanScroll.BorderSizePixel = 0
+dungeonScanScroll.ScrollBarThickness = 6
+dungeonScanScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 170, 255)
+dungeonScanScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+dungeonScanScroll.Parent = dungeonPanel
+
+local dungeonScanScrollCorner = Instance.new("UICorner")
+dungeonScanScrollCorner.CornerRadius = UDim.new(0, 6)
+dungeonScanScrollCorner.Parent = dungeonScanScroll
+
+local dungeonScanContent = Instance.new("TextBox")
+dungeonScanContent.Size = UDim2.new(1, -8, 0, 0)
+dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
+dungeonScanContent.BackgroundTransparency = 1
+dungeonScanContent.Text = "Tap Scan with Capture Contest menu open.\nUse Copy scan, or click here → Ctrl+A → Ctrl+C."
+dungeonScanContent.TextColor3 = Color3.fromRGB(190, 210, 230)
+dungeonScanContent.TextSize = 10
+dungeonScanContent.Font = Enum.Font.Code
+dungeonScanContent.TextXAlignment = Enum.TextXAlignment.Left
+dungeonScanContent.TextYAlignment = Enum.TextYAlignment.Top
+dungeonScanContent.TextWrapped = true
+dungeonScanContent.ClearTextOnFocus = false
+dungeonScanContent.MultiLine = true
+dungeonScanContent.TextEditable = false
+dungeonScanContent.AutomaticSize = Enum.AutomaticSize.Y
+dungeonScanContent.Parent = dungeonScanScroll
+
+local function updateDungeonScanCanvas()
+	local contentY = dungeonScanContent.AbsoluteSize.Y
+	local scrollY = dungeonScanScroll.AbsoluteWindowSize.Y
+	dungeonScanScroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 12))
+end
+dungeonScanContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateDungeonScanCanvas)
+
+local dungeonInfoLabel = Instance.new("TextLabel")
+dungeonInfoLabel.Size = UDim2.new(1, -12, 0, 0)
+dungeonInfoLabel.Visible = false
+dungeonInfoLabel.Parent = dungeonPanel
 
 UI.dungeonPanel = dungeonPanel
 UI.dungeonDiffBtns = dungeonDiffBtns
@@ -5117,6 +5336,8 @@ UI.dungeonPerkBtn = dungeonPerkBtn
 UI.dungeonStartBtn = dungeonStartBtn
 UI.dungeonStopBtn = dungeonStopBtn
 UI.dungeonScanBtn = dungeonScanBtn
+UI.dungeonScanCopyBtn = dungeonScanCopyBtn
+UI.dungeonScanContent = dungeonScanContent
 UI.dungeonStatusLabel = dungeonStatusLabel
 end
 
@@ -6925,8 +7146,34 @@ local function connectAllUIHandlers()
 
 	UI.dungeonScanBtn.MouseButton1Click:Connect(function()
 		local text = scanContestRemotesText()
-		print("[BloxMonster] " .. text)
-		UI.dungeonStatusLabel.Text = text:gsub("\n", " | "):sub(1, 200)
+		UI.dungeonScanContent.Text = text
+		task.defer(function()
+			if UI.dungeonScanContent and UI.dungeonScanContent.Parent then
+				local scroll = UI.dungeonScanContent.Parent
+				if scroll:IsA("ScrollingFrame") then
+					local contentY = UI.dungeonScanContent.AbsoluteSize.Y
+					local scrollY = scroll.AbsoluteWindowSize.Y
+					scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(scrollY, contentY + 12))
+				end
+			end
+		end)
+		local copied = copyText(text)
+		UI.dungeonStatusLabel.Text = copied
+			and "Scan copied to clipboard."
+			or "Scan done – select text in box below (Ctrl+A, Ctrl+C)."
+		print("[BloxMonster]\n" .. text)
+	end)
+
+	UI.dungeonScanCopyBtn.MouseButton1Click:Connect(function()
+		local text = UI.dungeonScanContent.Text or ""
+		if text == "" then
+			UI.dungeonStatusLabel.Text = "Run Scan first."
+			return
+		end
+		local copied = copyText(text)
+		UI.dungeonStatusLabel.Text = copied
+			and "Copied to clipboard."
+			or "Select text in box → Ctrl+A → Ctrl+C."
 	end)
 
 	UI.farmStartBtn.MouseButton1Click:Connect(startAutoFarm)
