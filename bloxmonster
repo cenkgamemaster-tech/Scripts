@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.5"
+local VERSION = "1.13.6"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1578,6 +1578,8 @@ local COMBAT_RF = {
 local contestInDungeon = false
 local dungeonRoomVersion = 0
 local dungeonPerkReady = false
+local dungeonPerkVersion = 0
+local dungeonPerkConsumedVersion = 0
 local dungeonRunEnded = false
 local dungeonEventsHooked = false
 local dungeonPerkPayload = nil
@@ -1749,6 +1751,45 @@ local function resetDungeonSignals()
 	dungeonPerkPayload = nil
 end
 
+local function formatPerkPayload(payload)
+	if payload == nil then
+		return "nil"
+	end
+	local ok, text = pcall(formatRemoteResult, payload)
+	return ok and text or tostring(payload)
+end
+
+local function extractPerkOptions(payload)
+	if type(payload) ~= "table" then
+		return {}
+	end
+	local options = {}
+	if type(payload[1]) == "table" and type(payload[2]) == "table" then
+		options = { payload[1], payload[2] }
+	elseif type(payload.doors) == "table" then
+		options = payload.doors
+	elseif type(payload.perks) == "table" then
+		options = payload.perks
+	elseif type(payload.options) == "table" then
+		options = payload.options
+	end
+	if #options < 2 then
+		for _, v in ipairs(payload) do
+			if type(v) == "table" then
+				table.insert(options, v)
+			end
+		end
+	end
+	if #options < 2 then
+		for _, v in pairs(payload) do
+			if type(v) == "table" and (v.Rarity or v.rarity or v.Name or v.name or v.Tier or v.tier) then
+				table.insert(options, v)
+			end
+		end
+	end
+	return options
+end
+
 local function perkRarityRank(text)
 	if text == nil then
 		return 0
@@ -1911,34 +1952,7 @@ local function scanPerkDoorCandidates()
 end
 
 local function pickBestPerkDoorFromPayload(payload)
-	if type(payload) ~= "table" then
-		return nil, nil
-	end
-	local options = {}
-	if type(payload[1]) == "table" and type(payload[2]) == "table" then
-		options = { payload[1], payload[2] }
-	elseif type(payload.doors) == "table" then
-		options = payload.doors
-	elseif type(payload.perks) == "table" then
-		options = payload.perks
-	elseif type(payload.options) == "table" then
-		options = payload.options
-	end
-	if #options >= 2 then
-		local r1 = perkRarityRank(options[1].Rarity or options[1].rarity or options[1].Tier or options[1].Name or options[1].name or options[1])
-		local r2 = perkRarityRank(options[2].Rarity or options[2].rarity or options[2].Tier or options[2].Name or options[2].name or options[2])
-		if r1 >= r2 then
-			return 1, r1
-		end
-		return 2, r2
-	end
-	if #options < 2 then
-		for _, v in ipairs(payload) do
-			if type(v) == "table" then
-				table.insert(options, v)
-			end
-		end
-	end
+	local options = extractPerkOptions(payload)
 	if #options >= 2 then
 		local r1 = perkRarityRank(options[1].Rarity or options[1].rarity or options[1].Tier or options[1].Name or options[1].name or options[1])
 		local r2 = perkRarityRank(options[2].Rarity or options[2].rarity or options[2].Tier or options[2].Name or options[2].name or options[2])
@@ -1954,9 +1968,6 @@ local function pickBestPerkDoor()
 	local door, rank = pickBestPerkDoorFromPayload(dungeonPerkPayload)
 	if door then
 		return door, rank, "event"
-	end
-	if dungeonPerkReady then
-		return 1, 0, "event-default"
 	end
 	local doors = {}
 	local scanOk, scanResult = pcall(scanPerkDoorCandidates)
@@ -2020,12 +2031,15 @@ local function ensureDungeonEventHooks()
 	local perkReady = resolveDungeonRemote("PerkDoorsReady", "RemoteEvent")
 	if perkReady then
 		perkReady.OnClientEvent:Connect(function(...)
+			dungeonPerkVersion = dungeonPerkVersion + 1
 			dungeonPerkReady = true
 			dungeonPerkPayload = { ... }
 			if select("#", ...) == 1 and type((...)) == "table" then
 				dungeonPerkPayload = (...)
 			end
-			setContestStatus("PerkDoorsReady")
+			setContestStatus(("PerkDoorsReady v%d: %s"):format(
+				dungeonPerkVersion, formatPerkPayload(dungeonPerkPayload)
+			))
 		end)
 		setContestStatus("Hooked PerkDoorsReady: " .. perkReady:GetFullName())
 	else
@@ -2061,13 +2075,14 @@ local function waitForDungeonEntry(roomBefore, timeoutSec)
 	end, timeoutSec or 18)
 end
 
-local function waitForPerkDoors(timeoutSec)
-	if dungeonPerkReady then
-		return true
-	end
+local function waitForFreshPerkDoors(afterVersion, timeoutSec)
 	return waitForContestSignal(function()
-		return dungeonPerkReady or dungeonRunEnded
-	end, timeoutSec or 45)
+		return (dungeonPerkVersion > afterVersion and dungeonPerkReady) or dungeonRunEnded
+	end, timeoutSec or 90)
+end
+
+local function waitForPerkDoors(timeoutSec)
+	return waitForFreshPerkDoors(dungeonPerkConsumedVersion, timeoutSec)
 end
 
 scanAllRemotesText = function()
@@ -2167,44 +2182,149 @@ local function startDungeonKnit(difficulty, useKey)
 	return false, lastResult
 end
 
-local function chooseDungeonPerk(pickMode)
+local function buildChoosePerkArgSets(doorIndex, payload)
+	local argSets = {}
+	local seen = {}
+	local function addSet(...)
+		local args = { ... }
+		if #args == 0 then
+			return
+		end
+		local key = formatInvokeArgs(args)
+		if seen[key] then
+			return
+		end
+		seen[key] = true
+		table.insert(argSets, args)
+	end
+	addSet(doorIndex)
+	addSet(doorIndex - 1)
+	addSet(tostring(doorIndex))
+	local options = extractPerkOptions(payload)
+	local opt = options[doorIndex]
+	if type(opt) == "table" then
+		for _, field in ipairs({ "Id", "id", "UID", "uid", "PerkId", "perkId", "Index", "index", "Door", "door" }) do
+			local val = opt[field]
+			if val ~= nil then
+				addSet(val)
+				addSet(tostring(val))
+			end
+		end
+	end
+	return argSets
+end
+
+local function findPerkDoorParts()
+	local candidates = {}
+	local playerPos = getPlayerPosition()
+	if not playerPos then
+		return candidates
+	end
+	for _, desc in ipairs(Workspace:GetDescendants()) do
+		if desc:IsA("BasePart") or desc:IsA("Model") then
+			local nameLower = desc.Name:lower()
+			if nameLower:find("perk", 1, true) or nameLower:find("portal", 1, true)
+				or nameLower:find("door", 1, true) or nameLower:find("gate", 1, true) then
+				local pos = getModelPosition(desc) or (desc:IsA("BasePart") and desc.Position)
+				if pos and (pos - playerPos).Magnitude < 300 then
+					table.insert(candidates, { inst = desc, pos = pos })
+				end
+			end
+		end
+	end
+	table.sort(candidates, function(a, b)
+		return a.pos.X < b.pos.X
+	end)
+	return candidates
+end
+
+local function tryActivatePerkDoor(doorIndex)
+	local doors = findPerkDoorParts()
+	if #doors == 0 then
+		return false
+	end
+	local pick = doors[math.min(math.max(doorIndex, 1), #doors)]
+	local inst = pick.inst
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root and pick.pos then
+		root.CFrame = CFrame.new(pick.pos + Vector3.new(0, 3, 0))
+		task.wait(0.35)
+	end
+	local searchRoot = inst:IsA("Model") and inst or inst.Parent
+	if searchRoot then
+		for _, prompt in ipairs(searchRoot:GetDescendants()) do
+			if prompt:IsA("ProximityPrompt") then
+				if fireContestPrompt(prompt) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function chooseDungeonPerk(pickMode, roomBefore)
 	local remote = resolveDungeonRemote("ChoosePerk", "RemoteFunction")
 		or resolveContestRemotePath(DUNGEON_RF.ChoosePerk)
 	if not remote then
 		setContestStatus("ChoosePerk remote not found under DungeonService")
 		return false
 	end
-	local door = 1
+	roomBefore = roomBefore or dungeonRoomVersion
+	local preferredDoor = 1
 	local pickInfo = ""
+	local doorsToTry = { 1, 2 }
 	if pickMode == "best" or pickMode == nil then
 		local perkRank
-		door, perkRank, pickInfo = pickBestPerkDoor()
-		if perkRank and perkRank > 0 then
-			pickInfo = ("rank %d"):format(perkRank) .. (pickInfo and pickInfo ~= "" and (": " .. pickInfo) or "")
+		preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
+		if preferredDoor then
+			doorsToTry = { preferredDoor, preferredDoor == 1 and 2 or 1 }
+			if perkRank and perkRank > 0 then
+				pickInfo = ("rank %d"):format(perkRank) .. (pickInfo ~= "" and (": " .. pickInfo) or "")
+			end
+		else
+			pickInfo = "try both doors"
 		end
-		pickInfo = pickInfo or ""
 	elseif pickMode == "second" then
-		door = 2
+		preferredDoor = 2
+		doorsToTry = { 2, 1 }
+		pickInfo = "door 2"
 	elseif pickMode == "random" then
-		door = math.random(1, 2)
+		preferredDoor = math.random(1, 2)
+		doorsToTry = { preferredDoor, preferredDoor == 1 and 2 or 1 }
+		pickInfo = "random"
+	else
+		pickInfo = pickMode
 	end
-	local argSets = {
-		{ door },
-		{ door - 1 },
-		{ tostring(door) },
-	}
-	for _, args in ipairs(argSets) do
-		local ok, result = invokeContestRemote(remote, table.unpack(args))
-		setContestStatus(("ChoosePerk door %d (%s) => %s"):format(
-			door,
-			pickInfo ~= "" and pickInfo or pickMode or "best",
-			ok and formatRemoteResult(result) or tostring(result)
-		))
-		if ok and isRemoteSuccess(result) ~= false then
-			dungeonPerkReady = false
-			dungeonPerkPayload = nil
-			task.wait(0.5)
-			return true
+	task.wait(1)
+	for _, tryDoor in ipairs(doorsToTry) do
+		tryActivatePerkDoor(tryDoor)
+		task.wait(0.4)
+		for _, args in ipairs(buildChoosePerkArgSets(tryDoor, dungeonPerkPayload)) do
+			local ok, result = invokeContestRemote(remote, table.unpack(args))
+			setContestStatus(("ChoosePerk(%s) [%s] => %s"):format(
+				formatInvokeArgs(args),
+				pickInfo ~= "" and pickInfo or ("door " .. tryDoor),
+				ok and formatRemoteResult(result) or tostring(result)
+			))
+			if ok and isRemoteSuccess(result) ~= false then
+				dungeonPerkConsumedVersion = dungeonPerkVersion
+				dungeonPerkReady = false
+				dungeonPerkPayload = nil
+				task.wait(0.5)
+				return true
+			end
+		end
+		if tryActivatePerkDoor(tryDoor) then
+			task.wait(2)
+			if dungeonRoomVersion > roomBefore or dungeonRunEnded then
+				dungeonPerkConsumedVersion = dungeonPerkVersion
+				dungeonPerkReady = false
+				dungeonPerkPayload = nil
+				setContestStatus(("ChoosePerk portal door %d => RoomChanged"):format(tryDoor))
+				return true
+			end
 		end
 	end
 	task.wait(0.5)
@@ -2303,8 +2423,8 @@ local function waitForFloorBattle(durationSec, runId)
 	return true, "waited"
 end
 
-local function selectPerkPortal(pickMode)
-	return chooseDungeonPerk(pickMode)
+local function selectPerkPortal(pickMode, roomBefore)
+	return chooseDungeonPerk(pickMode, roomBefore)
 end
 
 local function advanceToNextFloor(runId, floorNum)
@@ -2314,27 +2434,32 @@ local function advanceToNextFloor(runId, floorNum)
 	if not contestRunning or contestRunId ~= runId then
 		return false
 	end
+	local needPerkVersion = dungeonPerkConsumedVersion
 	setContestStatus(("Floor %d – waiting PerkDoorsReady..."):format(floorNum))
-	if not waitForPerkDoors(90) then
+	if not waitForFreshPerkDoors(needPerkVersion, 90) then
 		return dungeonRunEnded and false or nil
 	end
+	local roomBefore = dungeonRoomVersion
 	setContestStatus(("Floor %d – ChoosePerk (best rarity)..."):format(floorNum))
 	local perkOk = false
-	for attempt = 1, 8 do
+	for attempt = 1, 5 do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false
 		end
-		if selectPerkPortal(contestPerkPick) then
+		if selectPerkPortal(contestPerkPick, roomBefore) then
 			perkOk = true
 			break
 		end
-		setContestStatus(("Floor %d – ChoosePerk retry %d/8"):format(floorNum, attempt))
-		task.wait(1.5)
+		setContestStatus(("Floor %d – ChoosePerk retry %d/5"):format(floorNum, attempt))
+		dungeonPerkReady = false
+		if not waitForFreshPerkDoors(dungeonPerkConsumedVersion, 20) then
+			break
+		end
+		task.wait(1)
 	end
 	if not perkOk then
 		return nil
 	end
-	local roomBefore = dungeonRoomVersion
 	setContestStatus(("Floor %d – waiting RoomChanged..."):format(floorNum))
 	if not waitForDungeonEntry(roomBefore, 35) then
 		if dungeonRunEnded then
