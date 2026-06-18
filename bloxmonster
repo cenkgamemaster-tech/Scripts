@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.12.3"
+local VERSION = "1.12.4"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -91,147 +91,19 @@ local FARM_SPAWN_LOCATION = { x = -1248.016, y = 1030.503, z = -1451.140 }
 -- Optional: limit scan to this path (e.g. "Workspace.Map"). nil = entire Workspace.
 local WORKSPACE_PREFIX = nil
 
--- Wild mobs live here in Blox Monsters (Instance names are often UUIDs; use billboard English names).
+-- Pet scan (Pets / Worlds / Dungeon share this – same as v1.10.7 working build).
 local getWorldPets
 local getModelPosition
 local getDistanceToPlayer
 
 do -- wild pet scan (local register limit)
-local WILD_MOB_PATH_SUFFIX = "live.mobs.client"
 
-local function findChildInsensitive(parent, name)
-	if not parent then
-		return nil
-	end
-	local direct = parent:FindFirstChild(name)
-	if direct then
-		return direct
-	end
-	local lower = name:lower()
-	for _, child in ipairs(parent:GetChildren()) do
-		if child.Name:lower() == lower then
-			return child
-		end
-	end
-	return nil
-end
-
-local function getWildMobScanRoots()
-	local roots = {}
-	local live = findChildInsensitive(Workspace, "Live")
-	if live then
-		local mobs = findChildInsensitive(live, "Mobs")
-		if mobs then
-			local client = findChildInsensitive(mobs, "Client")
-			if client then
-				table.insert(roots, client)
-			end
-		end
-	end
-	return roots
-end
-
-local function isUnderWildMobRoot(model)
-	local ok, fullName = pcall(function()
-		return model:GetFullName()
-	end)
-	if not ok or not fullName then
-		return false
-	end
-	return fullName:lower():find(WILD_MOB_PATH_SUFFIX, 1, true) ~= nil
-end
-
--- Attribute names that suggest a model is a wild pet / monster.
 local PET_ATTR_KEYS = {
 	"PetId", "PetName", "MonsterName", "Monster", "MonsterId", "NpcId", "NPCId",
 	"Rarity", "Tier", "Mutation", "Shiny", "Level", "Wild", "IsWild", "Catchable",
 }
 
--- BillboardGui label names to read for display.
 local BILLBOARD_LABELS = { "Name", "PetName", "MonsterName", "NpcName", "Rarity", "Tier", "Level", "Mutation", "Shiny" }
-local BILLBOARD_LABEL_SET = {}
-for _, labelName in ipairs(BILLBOARD_LABELS) do
-	BILLBOARD_LABEL_SET[labelName] = true
-end
-
-local function looksLikeUuid(text)
-	if type(text) ~= "string" or text == "" then
-		return true
-	end
-	local s = text:gsub("^%s+", ""):gsub("%s+$", "")
-	if s:match("^[%x%-]+$") and #s >= 16 then
-		return true
-	end
-	if #s >= 20 and s:find("-", 1, true) and not s:find(" ", 1, true) then
-		return true
-	end
-	return false
-end
-
-local function looksLikeEnglishPetName(text)
-	if type(text) ~= "string" then
-		return false
-	end
-	local s = text:gsub("^%s+", ""):gsub("%s+$", "")
-	if s == "" or s == "—" then
-		return false
-	end
-	if looksLikeUuid(s) then
-		return false
-	end
-	if s:match("^[%d%.]+$") then
-		return false
-	end
-	if not s:match("[A-Za-z]") then
-		return false
-	end
-	local lower = s:lower()
-	if lower:match("^lv%.?%d") or lower:match("^level") or lower == "shiny" or lower == "mutation" then
-		return false
-	end
-	return true
-end
-
-local function resolvePetDisplayName(model, bb)
-	bb = bb or {}
-	local candidates = {
-		bb.PetName,
-		bb.MonsterName,
-		bb.Name,
-		bb.NpcName,
-		getAttr(model, "PetName"),
-		getAttr(model, "MonsterName"),
-		getAttr(model, "DisplayName"),
-		getAttr(model, "NpcName"),
-	}
-	for _, candidate in ipairs(candidates) do
-		if looksLikeEnglishPetName(candidate) then
-			return tostring(candidate)
-		end
-	end
-	for _, desc in ipairs(model:GetDescendants()) do
-		if desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
-			for _, labelName in ipairs(BILLBOARD_LABELS) do
-				local lbl = desc:FindFirstChild(labelName, true)
-				if lbl and (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and looksLikeEnglishPetName(lbl.Text) then
-					return lbl.Text:gsub("^%s+", ""):gsub("%s+$", "")
-				end
-			end
-			for _, lbl in ipairs(desc:GetDescendants()) do
-				if (lbl:IsA("TextLabel") or lbl:IsA("TextButton")) and looksLikeEnglishPetName(lbl.Text) then
-					local t = lbl.Text:gsub("^%s+", ""):gsub("%s+$", "")
-					if not BILLBOARD_LABEL_SET[lbl.Name] and #t >= 2 then
-						return t
-					end
-				end
-			end
-		end
-	end
-	if looksLikeEnglishPetName(model.Name) then
-		return model.Name
-	end
-	return nil
-end
 
 local RARITY_ORDER = {
 	Secret = 1, Mythic = 2, Legendary = 3, Epic = 4, Rare = 5,
@@ -266,65 +138,12 @@ local function isUnderPath(inst, prefix)
 	return fullName == prefix or string.sub(fullName, 1, #prefix + 1) == prefix .. "."
 end
 
-local function isPlayerCharacter(model)
-	if not model or model.ClassName ~= "Model" then
-		return false
-	end
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr.Character == model then
-			return true
-		end
-	end
-	return false
-end
-
-local function isEquippedPet(model)
-	local ok, fullName = pcall(function() return model:GetFullName() end)
-	if not ok or not fullName then
-		return false
-	end
-	if fullName:find("Players%.", 1, true) then
-		return true
-	end
-	local lower = fullName:lower()
-	if lower:find("equipped") or lower:find("follower") or lower:find("followpet")
-		or lower:find("playerpet") or lower:find("mypet") or lower:find("backpack") then
-		return true
-	end
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if lower:find(plr.Name:lower(), 1, true) and lower:find("pet", 1, true) then
-			return true
-		end
-	end
-	return false
-end
-
 local function getAttr(inst, key)
 	if not inst or not inst.GetAttribute then
 		return nil
 	end
 	local ok, val = pcall(function() return inst:GetAttribute(key) end)
 	return ok and val or nil
-end
-
-local function getFirstMatchingAttr(inst, keys)
-	for _, key in ipairs(keys) do
-		local val = getAttr(inst, key)
-		if val ~= nil and tostring(val) ~= "" then
-			return tostring(val), key
-		end
-	end
-	if inst.GetDescendants then
-		for _, desc in ipairs(inst:GetDescendants()) do
-			for _, key in ipairs(keys) do
-				local val = getAttr(desc, key)
-				if val ~= nil and tostring(val) ~= "" then
-					return tostring(val), key .. "@" .. (desc.Name or "?")
-				end
-			end
-		end
-	end
-	return nil, nil
 end
 
 local function getBillboardLabel(model, labelName)
@@ -337,17 +156,6 @@ local function getBillboardLabel(model, labelName)
 		end
 	end
 	return nil
-end
-
-local function getBillboardInfo(model)
-	local info = {}
-	for _, labelName in ipairs(BILLBOARD_LABELS) do
-		local text = getBillboardLabel(model, labelName)
-		if text then
-			info[labelName] = text
-		end
-	end
-	return info
 end
 
 getModelPosition = function(model)
@@ -489,37 +297,11 @@ local function tryBuildPetEntry(model, playerChars)
 	if hasCatchPrompt then
 		score = score + 2
 	end
-	if isUnderWildMobRoot(model) and humanoid then
-		score = math.max(score, 2)
-	end
-	if score < 2 and not isUnderWildMobRoot(model) then
+	if score < 2 then
 		return nil
 	end
 
-	local petName = resolvePetDisplayName(model, bb)
-	if not petName then
-		local raw = bb.PetName or bb.MonsterName or bb.Name or bb.NpcName
-		if raw and not looksLikeUuid(tostring(raw)) then
-			petName = tostring(raw):gsub("^%s+", ""):gsub("%s+$", "")
-		end
-	end
-	if not petName and isUnderWildMobRoot(model) then
-		for _, desc in ipairs(model:GetDescendants()) do
-			if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
-				local t = desc.Text:gsub("^%s+", ""):gsub("%s+$", "")
-				if not looksLikeUuid(t) and t:match("[A-Za-z]") and #t >= 2 then
-					local lower = t:lower()
-					if lower ~= "shiny" and lower ~= "mutation" and not lower:match("^lv%.?%d") and not lower:match("^level") then
-						petName = t
-						break
-					end
-				end
-			end
-		end
-	end
-	if not petName then
-		return nil
-	end
+	local petName = bb.PetName or bb.MonsterName or bb.Name or bb.NpcName or model.Name
 	local rarity = bb.Rarity
 	local tier = bb.Tier or getAttr(model, "Tier")
 	local level = bb.Level or getAttr(model, "Level")
@@ -542,6 +324,7 @@ local function tryBuildPetEntry(model, playerChars)
 end
 
 getWorldPets = function()
+	local root = getScanRoot()
 	local found = {}
 	local seen = {}
 	local playerChars = getPlayerCharacterSet()
@@ -557,25 +340,10 @@ getWorldPets = function()
 		end
 	end
 
-	local mobRoots = getWildMobScanRoots()
-	if #mobRoots > 0 then
-		for _, mobRoot in ipairs(mobRoots) do
-			for _, desc in ipairs(mobRoot:GetDescendants()) do
-				if desc.ClassName == "Model" and desc ~= mobRoot then
-					if modelLooksLikeWildPet(desc) or desc:FindFirstChildOfClass("Humanoid") then
-						consider(desc)
-					end
-				end
-			end
-		end
-	end
-	if #found == 0 then
-		local root = getScanRoot()
-		if root then
-			for _, desc in ipairs(root:GetDescendants()) do
-				if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
-					consider(desc)
-				end
+	if root then
+		for _, desc in ipairs(root:GetDescendants()) do
+			if desc.ClassName == "Model" and modelLooksLikeWildPet(desc) then
+				consider(desc)
 			end
 		end
 	end
@@ -597,8 +365,9 @@ end
 end -- wild pet scan
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
--- Empty by default so the Pets tab lists all nearby wild pets (add e.g. Rio@1 to filter/farm).
-local DEFAULT_PET_FILTERS = {}
+local DEFAULT_PET_FILTERS = {
+	{ name = "Rio", priority = 1 },
+}
 local nameFilters = {}
 for _, entry in ipairs(DEFAULT_PET_FILTERS) do
 	table.insert(nameFilters, { name = entry.name, priority = entry.priority })
