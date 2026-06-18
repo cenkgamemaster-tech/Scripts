@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.2"
+local VERSION = "1.14.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -631,6 +631,7 @@ local CONTEST_DIFFICULTIES = {
 	{ id = "master", name = "Master", index = 4, floors = 5, petsPerFloor = 3, needsKey = true },
 }
 local DUNGEON_FLOOR_BATTLE_SEC = 60
+local DUNGEON_RUN_COOLDOWN_SEC = 15
 local selectedContestDifficultyId = "elite"
 local contestUseMasterKey = true
 local contestPerkPick = "best"
@@ -2582,8 +2583,8 @@ startContestDungeon = function()
 			end
 			if contestRunning and contestRunId == runId then
 				if pcallOk and runResult == true then
-					setContestStatus("Next run in 5s...")
-					task.wait(5)
+					setContestStatus(("Next run in %ds..."):format(DUNGEON_RUN_COOLDOWN_SEC))
+					task.wait(DUNGEON_RUN_COOLDOWN_SEC)
 				else
 					leaveDungeonKnit()
 					setContestStatus("Retry in 15s (open Capture Contest menu first)")
