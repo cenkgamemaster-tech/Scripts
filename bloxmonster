@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.13.6"
+local VERSION = "1.13.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -94,6 +94,7 @@ local WORKSPACE_PREFIX = nil
 -- Pet scan: Pets/Worlds use getWorldPets; Dungeon uses getDungeonPets (Live.Mobs.Client only).
 local getWorldPets
 local getDungeonPets
+local getDungeonMobModelsRaw
 local getModelPosition
 local getDistanceToPlayer
 
@@ -510,6 +511,18 @@ getDungeonPets = function()
 	end)
 
 	return found
+end
+
+getDungeonMobModelsRaw = function()
+	local models = {}
+	for _, clientRoot in ipairs(getLiveMobsClientRoots()) do
+		for _, child in ipairs(clientRoot:GetChildren()) do
+			if child:IsA("Model") and child.Parent then
+				table.insert(models, child)
+			end
+		end
+	end
+	return models
 end
 
 end -- wild pet scan
@@ -1833,10 +1846,74 @@ local function getDungeonPetTargets()
 			end
 		end
 	end
+	if #out == 0 then
+		for _, model in ipairs(getDungeonMobModelsRaw()) do
+			local hum = getModelHumanoid(model)
+			if hum and hum.Health > 0 then
+				table.insert(out, {
+					model = model,
+					name = model.Name,
+					distance = getDistanceToPlayer(model),
+				})
+			end
+		end
+	end
 	table.sort(out, function(a, b)
 		return (a.distance or math.huge) < (b.distance or math.huge)
 	end)
 	return out
+end
+
+local function teleportToDungeonArenaCenter()
+	local positions = {}
+	for _, model in ipairs(getDungeonMobModelsRaw()) do
+		local pos = getModelPosition(model)
+		if pos then
+			table.insert(positions, pos)
+		end
+	end
+	if #positions > 0 then
+		local sum = Vector3.new(0, 0, 0)
+		for _, pos in ipairs(positions) do
+			sum = sum + pos
+		end
+		local center = sum / #positions
+		if setCharacterAtPosition(center + Vector3.new(0, 5, 0), true, 0) then
+			setContestStatus("TP to mob area (arena center)")
+			return true
+		end
+	end
+	local playerPos = getPlayerPosition()
+	for _, desc in ipairs(Workspace:GetDescendants()) do
+		if desc:IsA("BasePart") then
+			local nameLower = desc.Name:lower()
+			if nameLower:find("spawn", 1, true) or nameLower:find("arena", 1, true)
+				or nameLower:find("battle", 1, true) or nameLower:find("room", 1, true) then
+				if not playerPos or (desc.Position - playerPos).Magnitude < 400 then
+					if setCharacterAtPosition(desc.Position + Vector3.new(0, 5, 0), true, 0) then
+						setContestStatus("TP to arena spawn")
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function startContestFloorCombat(target)
+	if not target or not target.model then
+		return false
+	end
+	teleportToDungeonArenaCenter()
+	task.wait(0.35)
+	local tpOk = teleportToPet(target.model)
+	task.wait(0.35)
+	tryCombatEngage(target.model)
+	if tpOk then
+		return true
+	end
+	return engageContestEnemy(target.model)
 end
 
 local function collectGuiTextBlob(guiObject)
@@ -2405,7 +2482,7 @@ local function waitForFloorBattle(durationSec, runId)
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
 			return false, "stopped"
 		end
-		if dungeonPerkReady then
+		if dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion then
 			return true, "perk"
 		end
 		if #getDungeonPetTargets() == 0 then
@@ -2472,15 +2549,26 @@ local function advanceToNextFloor(runId, floorNum)
 end
 
 local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
-	local teleported = false
+	local floorTpDone = false
 	local idleSince = wallClockSeconds()
+	local lastArenaProbe = 0
+	teleportToDungeonArenaCenter()
+	task.wait(1)
 	while contestRunning and contestRunId == runId and not dungeonRunEnded do
-		if dungeonPerkReady then
+		if dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion then
 			break
 		end
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
-			if not teleported then
+			if not floorTpDone then
+				if wallClockSeconds() - lastArenaProbe > 4 then
+					teleportToDungeonArenaCenter()
+					local rawMobs = getDungeonMobModelsRaw()
+					if #rawMobs > 0 then
+						teleportToPet(rawMobs[1])
+					end
+					lastArenaProbe = wallClockSeconds()
+				end
 				if wallClockSeconds() - idleSince > 120 then
 					setContestStatus(("Floor %d – no pets found (120s timeout)"):format(floorNum))
 					return nil
@@ -2493,13 +2581,13 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 			end
 		else
 			idleSince = wallClockSeconds()
-			if not teleported then
-				local target = targets[1]
+			local target = targets[1]
+			if not floorTpDone then
 				setContestStatus(("Floor %d – TP %s, wait %ds..."):format(
 					floorNum, target.name or target.model.Name, DUNGEON_FLOOR_BATTLE_SEC
 				))
-				engageContestEnemy(target.model)
-				teleported = true
+				startContestFloorCombat(target)
+				floorTpDone = true
 			else
 				setContestStatus(("Floor %d – fighting %ds (%d pets left)..."):format(
 					floorNum, DUNGEON_FLOOR_BATTLE_SEC, #targets
@@ -2513,7 +2601,7 @@ local function runContestFloor(runId, difficulty, floorNum, _killsNeeded)
 				break
 			end
 			targets = getDungeonPetTargets()
-			if #targets == 0 or dungeonPerkReady then
+			if #targets == 0 or (dungeonPerkReady and dungeonPerkVersion > dungeonPerkConsumedVersion) then
 				break
 			end
 		end
