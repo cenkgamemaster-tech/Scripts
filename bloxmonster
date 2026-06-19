@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.0"
+local VERSION = "1.16.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1793,14 +1793,6 @@ local function isRemoteSuccess(result)
 	return true
 end
 
-local function isCharacterFallenFromDungeon()
-	local pos = getPlayerPosition()
-	if not pos then
-		return true
-	end
-	return pos.Y < -50
-end
-
 local function tryRescueTeleport(reason)
 	if not contestRunning then
 		return false
@@ -1829,11 +1821,9 @@ end
 
 local function maybeRescueAfterDungeonTeleport(reason)
 	task.wait(0.2)
-	if isCharacterFallenFromDungeon() then
-		tryRescueTeleport(reason or "fell through floor")
-	else
-		tryRescueTeleport(reason or "after TP")
-	end
+	local pos = getPlayerPosition()
+	local fallen = not pos or pos.Y < -50
+	tryRescueTeleport(fallen and (reason and (reason .. ", fell") or "fell through floor") or reason or "after TP")
 end
 
 local function resetDungeonSignals()
@@ -2966,6 +2956,7 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	return false
 end
 
+do -- dungeon run loop (nested scope – Luau 200 local limit)
 local function tryStartContest(difficulty, useKey)
 	local started, result = startDungeonKnit(difficulty, useKey)
 	if started then
@@ -3206,6 +3197,8 @@ startContestDungeon = function()
 		end
 	end)
 end
+
+end -- dungeon run loop
 
 stopContestDungeon = function()
 	contestRunId = contestRunId + 1
