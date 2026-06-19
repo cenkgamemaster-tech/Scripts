@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.9"
+local VERSION = "1.16.0"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1591,6 +1591,7 @@ local DUNGEON_RF = {
 	Start = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.StartDungeon",
 	ChoosePerk = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.ChoosePerk",
 	Leave = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.LeaveDungeon",
+	RescueTeleport = "ReplicatedStorage.Packages.Knit.Services.DungeonService.RF.RescueTeleport",
 }
 local DUNGEON_RE = {
 	RoomChanged = "RoomChanged",
@@ -1612,6 +1613,9 @@ local dungeonPerkDoorsParsed = nil
 local perkIdRarityCache = {}
 local sharedPerkDataCache = nil
 local perkEntryCache = {}
+local lastRescueTeleportAt = 0
+local RESCUE_TELEPORT_COOLDOWN_SEC = 4
+local RESCUE_WAIT_FOR_PETS_SEC = 8
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
 local CONTEST_PERK_RARITY_RANK = {
 	uncommon = 1,
@@ -1787,6 +1791,49 @@ local function isRemoteSuccess(result)
 		return false
 	end
 	return true
+end
+
+local function isCharacterFallenFromDungeon()
+	local pos = getPlayerPosition()
+	if not pos then
+		return true
+	end
+	return pos.Y < -50
+end
+
+local function tryRescueTeleport(reason)
+	if not contestRunning then
+		return false
+	end
+	local now = wallClockSeconds()
+	if now - lastRescueTeleportAt < RESCUE_TELEPORT_COOLDOWN_SEC then
+		return false
+	end
+	local remote = resolveDungeonRemote("RescueTeleport", "RemoteFunction")
+		or resolveContestRemotePath(DUNGEON_RF.RescueTeleport)
+	if not remote then
+		return false
+	end
+	lastRescueTeleportAt = now
+	local ok, result = invokeContestRemote(remote)
+	setContestStatus(("RescueTeleport%s => %s"):format(
+		reason and (" (" .. reason .. ")") or "",
+		ok and formatRemoteResult(result) or tostring(result)
+	))
+	if ok and isRemoteSuccess(result) ~= false then
+		task.wait(0.4)
+		return true
+	end
+	return false
+end
+
+local function maybeRescueAfterDungeonTeleport(reason)
+	task.wait(0.2)
+	if isCharacterFallenFromDungeon() then
+		tryRescueTeleport(reason or "fell through floor")
+	else
+		tryRescueTeleport(reason or "after TP")
+	end
 end
 
 local function resetDungeonSignals()
@@ -2745,6 +2792,7 @@ local function teleportToPerkDoor(doorIndex, payload)
 	if root then
 		root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
 		task.wait(0.35)
+		maybeRescueAfterDungeonTeleport("perk door")
 		return true
 	end
 	return false
@@ -2802,6 +2850,7 @@ local function engageContestEnemy(model)
 	end
 	teleportToPet(model)
 	task.wait(0.5)
+	maybeRescueAfterDungeonTeleport("pet")
 	tryStartBattlePrompt(model)
 	return true
 end
@@ -2966,6 +3015,7 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 	if dungeonRoomVersion > roomWhenCleared then
 		setContestStatus(("Floor %d → %d: next room ready, check pets"):format(floorNum, nextFloor))
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		tryRescueTeleport("new floor")
 		return true
 	end
 	setContestStatus(("Floor %d – pick perk (once)..."):format(floorNum))
@@ -2979,12 +3029,14 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 	if dungeonRoomVersion > roomWhenCleared then
 		setContestStatus(("Floor %d → %d: next room ready, check pets"):format(floorNum, nextFloor))
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		tryRescueTeleport("after perk")
 		return true
 	end
 	setContestStatus(("Floor %d – waiting next room..."):format(floorNum))
 	if waitForDungeonEntry(roomWhenCleared, 25) or dungeonRoomVersion > roomWhenCleared then
 		setContestStatus(("Floor %d → %d: next room ready, check pets"):format(floorNum, nextFloor))
 		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		tryRescueTeleport("after perk wait")
 		return true
 	end
 	if dungeonRunEnded then
@@ -2996,16 +3048,24 @@ end
 local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
 	local floorCombatStarted = false
 	local idleSince = wallClockSeconds()
+	local lastRescueWhileWaiting = 0
 	if floorNum > 1 then
 		task.wait(2)
 	end
+	tryRescueTeleport("floor " .. tostring(floorNum))
 	while contestRunning and contestRunId == runId and not dungeonRunEnded do
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
 			if not floorCombatStarted then
-				if wallClockSeconds() - idleSince > 120 then
+				local idleFor = wallClockSeconds() - idleSince
+				if idleFor > 120 then
 					setContestStatus(("Floor %d – no pets found (120s timeout)"):format(floorNum))
 					return nil
+				end
+				if idleFor >= RESCUE_WAIT_FOR_PETS_SEC
+					and wallClockSeconds() - lastRescueWhileWaiting >= RESCUE_WAIT_FOR_PETS_SEC then
+					tryRescueTeleport("waiting for pets")
+					lastRescueWhileWaiting = wallClockSeconds()
 				end
 				setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
 				task.wait(1.5)
@@ -3051,6 +3111,7 @@ local function runContestDungeon(runId, difficulty)
 		setContestStatus("Did not enter dungeon: " .. formatRemoteResult(startResult))
 		return false
 	end
+	tryRescueTeleport("dungeon enter")
 	local floor = 1
 	while floor <= difficulty.floors do
 		if not contestRunning or contestRunId ~= runId or dungeonRunEnded then
