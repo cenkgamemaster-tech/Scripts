@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.7"
+local VERSION = "1.15.8"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2615,6 +2615,18 @@ local function startDungeonKnit(difficulty, useKey)
 	return false, lastResult
 end
 
+local function getParsedDoorBySpatialIndex(doorIndex)
+	if not dungeonPerkDoorsParsed then
+		return nil
+	end
+	for _, d in ipairs(dungeonPerkDoorsParsed) do
+		if d.door == doorIndex then
+			return d
+		end
+	end
+	return nil
+end
+
 local function buildChoosePerkArgSets(doorIndex, payload)
 	local argSets = {}
 	local seen = {}
@@ -2631,7 +2643,22 @@ local function buildChoosePerkArgSets(doorIndex, payload)
 		table.insert(argSets, args)
 	end
 	payload = payload or dungeonPerkPayload
-	if type(payload) == "table" then
+	local parsed = getParsedDoorBySpatialIndex(doorIndex)
+	if parsed then
+		if parsed.perkId then
+			addSet(parsed.perkId)
+			addSet(tostring(parsed.perkId))
+		end
+		if parsed.slot == "A" then
+			addSet("A")
+			addSet("a")
+			addSet(0)
+		elseif parsed.slot == "B" then
+			addSet("B")
+			addSet("b")
+			addSet(1)
+		end
+	elseif type(payload) == "table" then
 		local doorA = payload.DoorA or payload.doorA
 		local doorB = payload.DoorB or payload.doorB
 		local perkId = doorIndex == 1 and doorA or doorB
@@ -2745,6 +2772,50 @@ local function tryActivatePerkDoor(doorIndex)
 	return false
 end
 
+local function tryStartBattlePrompt(model)
+	if not model then
+		return false
+	end
+	for _, prompt in ipairs(model:GetDescendants()) do
+		if prompt:IsA("ProximityPrompt") then
+			local action = (prompt.ActionText or ""):lower()
+			local obj = (prompt.ObjectText or ""):lower()
+			for _, kw in ipairs(CONTEST_BATTLE_KEYWORDS) do
+				if action:find(kw, 1, true) or obj:find(kw, 1, true) then
+					if fireContestPrompt(prompt) then
+						return true
+					end
+				end
+			end
+		end
+	end
+	local anyPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if anyPrompt then
+		return fireContestPrompt(anyPrompt)
+	end
+	return false
+end
+
+local function engageContestEnemy(model)
+	if not model then
+		return false
+	end
+	teleportToPet(model)
+	task.wait(0.5)
+	tryStartBattlePrompt(model)
+	return true
+end
+
+local function resumeDungeonCombatIfNeeded()
+	local remaining = getDungeonPetTargets()
+	if #remaining > 0 then
+		setContestStatus(("Return to fight – %d pet(s) left"):format(#remaining))
+		engageContestEnemy(remaining[1].model)
+		return true
+	end
+	return false
+end
+
 local function chooseDungeonPerk(pickMode, roomBefore)
 	local remaining = getDungeonPetTargets()
 	if #remaining > 0 then
@@ -2793,13 +2864,17 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	teleportToPerkDoor(preferredDoor, dungeonPerkPayload)
 	task.wait(0.4)
 	for _, tryDoor in ipairs(doorsToTry) do
+		local parsedDoor = getParsedDoorBySpatialIndex(tryDoor)
+		local doorLabel = parsedDoor
+			and ("door %d slot %s id=%s"):format(tryDoor, parsedDoor.slot or "?", parsedDoor.perkId or "?")
+			or ("door " .. tryDoor)
 		teleportToPerkDoor(tryDoor, dungeonPerkPayload)
 		task.wait(0.35)
 		for _, args in ipairs(buildChoosePerkArgSets(tryDoor, dungeonPerkPayload)) do
 			local ok, result = invokeContestRemote(remote, table.unpack(args))
 			setContestStatus(("ChoosePerk(%s) [%s] => %s"):format(
 				formatInvokeArgs(args),
-				pickInfo ~= "" and pickInfo or ("door " .. tryDoor),
+				pickInfo ~= "" and pickInfo or doorLabel,
 				ok and formatRemoteResult(result) or tostring(result)
 			))
 			if ok and isRemoteSuccess(result) ~= false then
@@ -2807,6 +2882,16 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 				dungeonPerkPayload = nil
 				dungeonPerkDoorsParsed = nil
 				task.wait(0.5)
+				return true
+			end
+		end
+		if tryActivatePerkDoor(tryDoor) then
+			setContestStatus(("Perk door prompt fired [%s]"):format(doorLabel))
+			task.wait(0.5)
+			if dungeonRoomVersion > roomBefore or dungeonRunEnded then
+				dungeonPerkReady = false
+				dungeonPerkPayload = nil
+				dungeonPerkDoorsParsed = nil
 				return true
 			end
 		end
@@ -2825,30 +2910,6 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	return false
 end
 
-local function tryStartBattlePrompt(model)
-	if not model then
-		return false
-	end
-	for _, prompt in ipairs(model:GetDescendants()) do
-		if prompt:IsA("ProximityPrompt") then
-			local action = (prompt.ActionText or ""):lower()
-			local obj = (prompt.ObjectText or ""):lower()
-			for _, kw in ipairs(CONTEST_BATTLE_KEYWORDS) do
-				if action:find(kw, 1, true) or obj:find(kw, 1, true) then
-					if fireContestPrompt(prompt) then
-						return true
-					end
-				end
-			end
-		end
-	end
-	local anyPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if anyPrompt then
-		return fireContestPrompt(anyPrompt)
-	end
-	return false
-end
-
 local function tryStartContest(difficulty, useKey)
 	local started, result = startDungeonKnit(difficulty, useKey)
 	if started then
@@ -2856,28 +2917,6 @@ local function tryStartContest(difficulty, useKey)
 		return true, result
 	end
 	return false, result
-end
-
-local function engageContestEnemy(model)
-	if not model then
-		return false
-	end
-	-- Pets tab style: TP near mob, let equipped pets auto-fight with skills.
-	-- Do NOT spam SetTarget / RequestPetAttack — that resets combat.
-	teleportToPet(model)
-	task.wait(0.5)
-	tryStartBattlePrompt(model)
-	return true
-end
-
-local function resumeDungeonCombatIfNeeded()
-	local remaining = getDungeonPetTargets()
-	if #remaining > 0 then
-		setContestStatus(("Return to fight – %d pet(s) left"):format(#remaining))
-		engageContestEnemy(remaining[1].model)
-		return true
-	end
-	return false
 end
 
 local function waitForFloorBattle(durationSec, runId)
