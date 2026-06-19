@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.3"
+local VERSION = "1.15.4"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1817,6 +1817,75 @@ local function formatPerkPayload(payload)
 	return ok and text or tostring(payload)
 end
 
+local function isExactRarityLabelText(text)
+	if text == nil or text == "" then
+		return 0
+	end
+	local lower = tostring(text):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
+		if lower == name then
+			return CONTEST_PERK_RARITY_RANK[name]
+		end
+		if lower:sub(1, #name + 1) == name .. " " or lower:sub(-#name - 1) == " " .. name then
+			return CONTEST_PERK_RARITY_RANK[name]
+		end
+	end
+	return 0
+end
+
+local function perkRarityRankFromString(text)
+	if text == nil then
+		return 0
+	end
+	if typeof(text) == "EnumItem" then
+		return perkRarityRankFromString(text.Name)
+	end
+	if type(text) == "number" then
+		if text >= 1 and text <= 5 then
+			return math.floor(text)
+		end
+		return 0
+	end
+	local lower = tostring(text):lower()
+	local asNum = tonumber(lower)
+	if asNum and asNum >= 1 and asNum <= 5 then
+		return math.floor(asNum)
+	end
+	local best = 0
+	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
+		if lower:find(name, 1, true) then
+			best = math.max(best, CONTEST_PERK_RARITY_RANK[name])
+		end
+	end
+	return best
+end
+
+local function perkRarityFromOption(opt, depth)
+	depth = depth or 0
+	if depth > 4 then
+		return 0
+	end
+	if type(opt) ~= "table" then
+		return perkRarityRankFromString(opt)
+	end
+	local best = 0
+	for _, field in ipairs(CONTEST_PERK_RARITY_FIELDS) do
+		if opt[field] ~= nil then
+			best = math.max(best, perkRarityRankFromString(opt[field]))
+		end
+	end
+	if best > 0 then
+		return best
+	end
+	for _, field in ipairs(CONTEST_PERK_NESTED_FIELDS) do
+		local sub = opt[field]
+		if type(sub) == "table" then
+			best = math.max(best, perkRarityFromOption(sub, depth + 1))
+		end
+	end
+	return best
+end
+
 local function lookupPerkRarityFromId(perkId)
 	if perkId == nil or perkId == "" then
 		return 0
@@ -2039,75 +2108,6 @@ local function findPerkOptionsDeep(node, out, depth, seen)
 			findPerkOptionsDeep(v, out, depth + 1, seen)
 		end
 	end
-end
-
-local function isExactRarityLabelText(text)
-	if text == nil or text == "" then
-		return 0
-	end
-	local lower = tostring(text):lower():gsub("^%s+", ""):gsub("%s+$", "")
-	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
-		if lower == name then
-			return CONTEST_PERK_RARITY_RANK[name]
-		end
-		if lower:sub(1, #name + 1) == name .. " " or lower:sub(-#name - 1) == " " .. name then
-			return CONTEST_PERK_RARITY_RANK[name]
-		end
-	end
-	return 0
-end
-
-local function perkRarityRankFromString(text)
-	if text == nil then
-		return 0
-	end
-	if typeof(text) == "EnumItem" then
-		return perkRarityRankFromString(text.Name)
-	end
-	if type(text) == "number" then
-		if text >= 1 and text <= 5 then
-			return math.floor(text)
-		end
-		return 0
-	end
-	local lower = tostring(text):lower()
-	local asNum = tonumber(lower)
-	if asNum and asNum >= 1 and asNum <= 5 then
-		return math.floor(asNum)
-	end
-	local best = 0
-	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
-		if lower:find(name, 1, true) then
-			best = math.max(best, CONTEST_PERK_RARITY_RANK[name])
-		end
-	end
-	return best
-end
-
-local function perkRarityFromOption(opt, depth)
-	depth = depth or 0
-	if depth > 4 then
-		return 0
-	end
-	if type(opt) ~= "table" then
-		return perkRarityRankFromString(opt)
-	end
-	local best = 0
-	for _, field in ipairs(CONTEST_PERK_RARITY_FIELDS) do
-		if opt[field] ~= nil then
-			best = math.max(best, perkRarityRankFromString(opt[field]))
-		end
-	end
-	if best > 0 then
-		return best
-	end
-	for _, field in ipairs(CONTEST_PERK_NESTED_FIELDS) do
-		local sub = opt[field]
-		if type(sub) == "table" then
-			best = math.max(best, perkRarityFromOption(sub, depth + 1))
-		end
-	end
-	return best
 end
 
 local function perkRarityRank(text)
