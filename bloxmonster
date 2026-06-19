@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.8"
+local VERSION = "1.15.9"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -2682,10 +2682,19 @@ local function buildChoosePerkArgSets(doorIndex, payload)
 	return argSets
 end
 
-local function getPerkDoorPartFromPayload(payload, doorIndex)
+local function getSpatialDoorPart(doorIndex, payload)
+	if dungeonPerkDoorsParsed then
+		for _, d in ipairs(dungeonPerkDoorsParsed) do
+			if d.door == doorIndex and d.part then
+				return d.part
+			end
+		end
+	end
+	payload = payload or dungeonPerkPayload
 	if type(payload) ~= "table" then
 		return nil
 	end
+	-- Fallback when spatial mapping unavailable: assume A=left, B=right
 	if doorIndex == 1 then
 		return payload.doorAPart or payload.DoorAPart
 	end
@@ -2718,16 +2727,8 @@ end
 
 local function teleportToPerkDoor(doorIndex, payload)
 	payload = payload or dungeonPerkPayload
-	local part = getPerkDoorPartFromPayload(payload, doorIndex)
+	local part = getSpatialDoorPart(doorIndex, payload)
 	local pos = part and (getModelPosition(part) or (part:IsA("BasePart") and part.Position))
-	if not pos and dungeonPerkDoorsParsed then
-		for _, d in ipairs(dungeonPerkDoorsParsed) do
-			if d.door == doorIndex and d.part then
-				pos = getModelPosition(d.part) or (d.part:IsA("BasePart") and d.part.Position)
-				break
-			end
-		end
-	end
 	if not pos then
 		local doors = findPerkDoorParts()
 		if #doors == 0 then
@@ -2749,17 +2750,16 @@ local function teleportToPerkDoor(doorIndex, payload)
 	return false
 end
 
-local function tryActivatePerkDoor(doorIndex)
-	local doors = findPerkDoorParts()
-	if #doors == 0 then
+local function tryActivatePerkDoor(doorIndex, payload)
+	payload = payload or dungeonPerkPayload
+	local part = getSpatialDoorPart(doorIndex, payload)
+	if not part then
 		return false
 	end
-	local pick = doors[math.min(math.max(doorIndex, 1), #doors)]
-	local inst = pick.inst
-	if not teleportToPerkDoor(doorIndex) then
+	if not teleportToPerkDoor(doorIndex, payload) then
 		return false
 	end
-	local searchRoot = inst:IsA("Model") and inst or inst.Parent
+	local searchRoot = part:IsA("Model") and part or part.Parent
 	if searchRoot then
 		for _, prompt in ipairs(searchRoot:GetDescendants()) do
 			if prompt:IsA("ProximityPrompt") then
@@ -2860,9 +2860,16 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 		pickInfo = pickMode
 	end
 	preferredDoor = preferredDoor or doorsToTry[1] or 1
-	task.wait(1)
-	teleportToPerkDoor(preferredDoor, dungeonPerkPayload)
-	task.wait(0.4)
+	local parsedPick = getParsedDoorBySpatialIndex(preferredDoor)
+	if parsedPick then
+		setContestStatus(("Perk TP: door %d slot %s id=%s (%s)"):format(
+			preferredDoor,
+			parsedPick.slot or "?",
+			parsedPick.perkId or "?",
+			perkRankName(parsedPick.rarity or 0)
+		))
+	end
+	task.wait(0.5)
 	for _, tryDoor in ipairs(doorsToTry) do
 		local parsedDoor = getParsedDoorBySpatialIndex(tryDoor)
 		local doorLabel = parsedDoor
@@ -2885,7 +2892,7 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 				return true
 			end
 		end
-		if tryActivatePerkDoor(tryDoor) then
+		if tryActivatePerkDoor(tryDoor, dungeonPerkPayload) then
 			setContestStatus(("Perk door prompt fired [%s]"):format(doorLabel))
 			task.wait(0.5)
 			if dungeonRoomVersion > roomBefore or dungeonRunEnded then
