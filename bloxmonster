@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.14.9"
+local VERSION = "1.15.1"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1621,10 +1621,13 @@ local CONTEST_PERK_RARITY_RANK = {
 local CONTEST_PERK_RARITY_ORDERED = {
 	"mythical", "legendary", "uncommon", "mythic", "epic", "rare",
 }
-local CONTEST_PERK_OPTION_FIELDS = {
+-- Rarity fields only – never use Name/Label (perk names like "Lucky" are not rarities).
+local CONTEST_PERK_RARITY_FIELDS = {
 	"Rarity", "rarity", "Tier", "tier", "Grade", "grade", "Quality", "quality",
-	"Name", "name", "Label", "label", "Title", "title", "Text", "text",
-	"PerkName", "perkName", "DisplayName", "displayName",
+	"PerkRarity", "perkRarity", "RarityTier", "rarityTier", "RarityName", "rarityName",
+}
+local CONTEST_PERK_NESTED_FIELDS = {
+	"Data", "data", "Info", "info", "Perk", "perk", "Stats", "stats", "Config", "config",
 }
 local CONTEST_PERK_DOOR_FIELDS = {
 	"Door", "door", "Index", "index", "Slot", "slot", "Choice", "choice",
@@ -1844,6 +1847,43 @@ local function extractPerkOptions(payload)
 	return options
 end
 
+local function findPerkOptionsDeep(node, out, depth, seen)
+	depth = depth or 0
+	if depth > 6 or type(node) ~= "table" then
+		return
+	end
+	if seen[node] then
+		return
+	end
+	seen[node] = true
+	if type(node.Rarity) == "string" or type(node.rarity) == "string"
+		or type(node.Tier) == "number" or type(node.tier) == "number"
+		or type(node.Rarity) == "number" or type(node.rarity) == "number" then
+		table.insert(out, node)
+	end
+	for _, v in pairs(node) do
+		if type(v) == "table" then
+			findPerkOptionsDeep(v, out, depth + 1, seen)
+		end
+	end
+end
+
+local function isExactRarityLabelText(text)
+	if text == nil or text == "" then
+		return 0
+	end
+	local lower = tostring(text):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	for _, name in ipairs(CONTEST_PERK_RARITY_ORDERED) do
+		if lower == name then
+			return CONTEST_PERK_RARITY_RANK[name]
+		end
+		if lower:sub(1, #name + 1) == name .. " " or lower:sub(-#name - 1) == " " .. name then
+			return CONTEST_PERK_RARITY_RANK[name]
+		end
+	end
+	return 0
+end
+
 local function perkRarityRankFromString(text)
 	if text == nil then
 		return 0
@@ -1871,23 +1911,38 @@ local function perkRarityRankFromString(text)
 	return best
 end
 
+local function perkRarityFromOption(opt, depth)
+	depth = depth or 0
+	if depth > 4 then
+		return 0
+	end
+	if type(opt) ~= "table" then
+		return perkRarityRankFromString(opt)
+	end
+	local best = 0
+	for _, field in ipairs(CONTEST_PERK_RARITY_FIELDS) do
+		if opt[field] ~= nil then
+			best = math.max(best, perkRarityRankFromString(opt[field]))
+		end
+	end
+	if best > 0 then
+		return best
+	end
+	for _, field in ipairs(CONTEST_PERK_NESTED_FIELDS) do
+		local sub = opt[field]
+		if type(sub) == "table" then
+			best = math.max(best, perkRarityFromOption(sub, depth + 1))
+		end
+	end
+	return best
+end
+
 local function perkRarityRank(text)
 	if text == nil then
 		return 0
 	end
 	if type(text) == "table" then
-		local best = 0
-		for _, field in ipairs(CONTEST_PERK_OPTION_FIELDS) do
-			if text[field] ~= nil then
-				best = math.max(best, perkRarityRankFromString(text[field]))
-			end
-		end
-		for _, v in pairs(text) do
-			if type(v) ~= "table" then
-				best = math.max(best, perkRarityRankFromString(v))
-			end
-		end
-		return best
+		return perkRarityFromOption(text)
 	end
 	return perkRarityRankFromString(text)
 end
@@ -2000,65 +2055,64 @@ local function collectGuiTextBlob(guiObject)
 	return table.concat(parts, " ")
 end
 
-local function scanPerkDoorCandidates()
-	local doors = {}
-	local seen = {}
-	local function addDoor(inst, pos, text, doorNum)
-		if not text or text == "" then
-			return
+local function inferPerkDoorFromGuiObject(guiObj)
+	local node = guiObj
+	for _ = 1, 6 do
+		if not node then
+			break
 		end
-		local rarity = perkRarityRank(text)
-		if rarity == 0 and not text:lower():find("perk", 1, true) then
-			return
+		local n = node.Name:lower()
+		if n:find("left", 1, true) or n:find("door1", 1, true) or n:find("option1", 1, true) or n == "1" then
+			return 1
 		end
-		local key = (inst and inst:GetFullName()) or text
-		if seen[key] then
-			return
+		if n:find("right", 1, true) or n:find("door2", 1, true) or n:find("option2", 1, true) or n == "2" then
+			return 2
 		end
-		seen[key] = true
-		table.insert(doors, {
-			door = doorNum or (#doors + 1),
-			rarity = rarity,
-			text = text,
-			pos = pos,
-			inst = inst,
-		})
+		node = node.Parent
 	end
+	return nil
+end
+
+local function collectRarityLabelsFromRoot(root, posHint)
+	local found = {}
+	for _, desc in ipairs(root:GetDescendants()) do
+		if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
+			local nameLower = desc.Name:lower()
+			local text = desc.Text or ""
+			local rank = 0
+			if nameLower:find("rarity", 1, true) or nameLower:find("tier", 1, true)
+				or nameLower:find("grade", 1, true) then
+				rank = perkRarityRankFromString(text)
+			else
+				rank = isExactRarityLabelText(text)
+			end
+			if rank > 0 then
+				local pos = posHint
+				if desc:IsA("GuiObject") then
+					pos = desc.AbsolutePosition
+				end
+				table.insert(found, {
+					rank = rank,
+					door = inferPerkDoorFromGuiObject(desc),
+					pos = pos,
+					text = text,
+				})
+			end
+		end
+	end
+	return found
+end
+
+local function scanPerkDoorCandidates()
+	local labels = {}
 	local gui = LocalPlayer:FindFirstChild("PlayerGui")
 	if gui then
-		for _, desc in ipairs(gui:GetDescendants()) do
-			if desc:IsA("GuiObject") and desc.Visible then
-				local nameLower = desc.Name:lower()
-				local blob = collectGuiTextBlob(desc)
-				local blobLower = blob:lower()
-				if nameLower:find("perk", 1, true) or nameLower:find("door", 1, true)
-					or nameLower:find("portal", 1, true) or nameLower:find("choice", 1, true)
-					or perkRarityRank(blob) > 0 then
-					local doorNum = nil
-					if nameLower:find("1", 1, true) or nameLower:find("left", 1, true) then
-						doorNum = 1
-					elseif nameLower:find("2", 1, true) or nameLower:find("right", 1, true) then
-						doorNum = 2
-					end
-					if perkRarityRank(blob) > 0 or blobLower:find("perk", 1, true) then
-						addDoor(desc, nil, blob, doorNum)
-					end
-				end
-			end
+		for _, entry in ipairs(collectRarityLabelsFromRoot(gui)) do
+			table.insert(labels, entry)
 		end
 	end
 	for _, desc in ipairs(Workspace:GetDescendants()) do
-		local nameLower = desc.Name:lower()
-		if desc:IsA("Model") or desc:IsA("BasePart") then
-			if nameLower:find("portal", 1, true) or nameLower:find("door", 1, true)
-				or nameLower:find("perk", 1, true) or nameLower:find("gate", 1, true) then
-				local pos = getModelPosition(desc) or (desc:IsA("BasePart") and desc.Position)
-				local dist = pos and getPlayerPosition() and (pos - getPlayerPosition()).Magnitude
-				if not dist or dist < 250 then
-					addDoor(desc, pos, collectGuiTextBlob(desc))
-				end
-			end
-		elseif desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
+		if desc:IsA("BillboardGui") or desc:IsA("SurfaceGui") then
 			local parent = desc.Parent
 			local pos = nil
 			if parent then
@@ -2068,35 +2122,63 @@ local function scanPerkDoorCandidates()
 					pos = getModelPosition(parent)
 				end
 			end
-			addDoor(desc, pos, collectGuiTextBlob(desc))
+			if pos and getPlayerPosition() and (pos - getPlayerPosition()).Magnitude < 250 then
+				for _, entry in ipairs(collectRarityLabelsFromRoot(desc, pos)) do
+					if not entry.pos then
+						entry.pos = pos
+					end
+					table.insert(labels, entry)
+				end
+			end
 		end
 	end
 	local byDoor = {}
-	for _, door in ipairs(doors) do
-		local slot = door.door
+	for _, entry in ipairs(labels) do
+		local slot = entry.door
 		if slot == 1 or slot == 2 then
-			if not byDoor[slot] or door.rarity > byDoor[slot].rarity then
-				byDoor[slot] = door
+			if not byDoor[slot] or entry.rank > byDoor[slot].rarity then
+				byDoor[slot] = {
+					door = slot,
+					rarity = entry.rank,
+					text = entry.text,
+					pos = entry.pos,
+				}
+			end
+		end
+	end
+	local unassigned = {}
+	for _, entry in ipairs(labels) do
+		if entry.door ~= 1 and entry.door ~= 2 then
+			table.insert(unassigned, entry)
+		end
+	end
+	if #unassigned >= 2 then
+		table.sort(unassigned, function(a, b)
+			local ax = a.pos and (a.pos.X or a.pos) or 0
+			local bx = b.pos and (b.pos.X or b.pos) or 0
+			return ax < bx
+		end)
+		for i, entry in ipairs(unassigned) do
+			if i > 2 then
+				break
+			end
+			if not byDoor[i] or entry.rank > byDoor[i].rarity then
+				byDoor[i] = {
+					door = i,
+					rarity = entry.rank,
+					text = entry.text,
+					pos = entry.pos,
+				}
 			end
 		end
 	end
 	if byDoor[1] and byDoor[2] then
 		return { byDoor[1], byDoor[2] }
 	end
-	if #doors >= 2 then
-		local withPos = {}
-		for _, door in ipairs(doors) do
-			if door.pos then
-				table.insert(withPos, door)
-			end
-		end
-		if #withPos >= 2 then
-			table.sort(withPos, function(a, b)
-				return (a.pos.X or 0) < (b.pos.X or 0)
-			end)
-			withPos[1].door = 1
-			withPos[2].door = 2
-			return { withPos[1], withPos[2] }
+	local doors = {}
+	for d = 1, 2 do
+		if byDoor[d] then
+			table.insert(doors, byDoor[d])
 		end
 	end
 	return doors
@@ -2104,6 +2186,13 @@ end
 
 local function pickBestPerkDoorFromPayload(payload)
 	local options = extractPerkOptions(payload)
+	if #options < 2 and type(payload) == "table" then
+		local deep = {}
+		findPerkOptionsDeep(payload, deep, 0, {})
+		if #deep >= 2 then
+			options = { deep[1], deep[2] }
+		end
+	end
 	if #options < 2 then
 		return nil, nil, nil
 	end
@@ -2113,7 +2202,7 @@ local function pickBestPerkDoorFromPayload(payload)
 		if i > 2 then
 			break
 		end
-		local rank = perkRarityRank(opt)
+		local rank = perkRarityFromOption(opt)
 		local doorIdx = getPerkOptionDoorIndex(opt, i)
 		table.insert(compareParts, ("door %d=%s(%d)"):format(doorIdx, perkRankName(rank), rank))
 		if rank > bestRank then
@@ -2163,12 +2252,18 @@ local function pickBestPerkDoor()
 		if left.rarity > right.rarity then
 			return 1, left.rarity, detailScan .. " -> door 1"
 		end
-		return 1, left.rarity, detailScan .. " -> tie, door 1"
+		if left.rarity > 0 then
+			return 1, left.rarity, detailScan .. " -> same rarity, door 1"
+		end
+	elseif left and left.rarity > 0 then
+		return 1, left.rarity, ("scan: only door 1=%s(%d)"):format(perkRankName(left.rarity), left.rarity)
+	elseif right and right.rarity > 0 then
+		return 2, right.rarity, ("scan: only door 2=%s(%d)"):format(perkRankName(right.rarity), right.rarity)
 	end
 	if #doors == 1 and doors[1].rarity > 0 then
-		return doors[1].door or 1, doors[1].rarity, "scan single door"
+		return doors[1].door or 1, doors[1].rarity, "scan single rarity label"
 	end
-	return 1, 0, "unknown rarity – default door 1"
+	return nil, 0, "no rarity labels found"
 end
 
 local function ensureDungeonEventHooks()
@@ -2456,15 +2551,16 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	if pickMode == "best" or pickMode == nil then
 		local perkRank
 		preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
+		if not perkRank or perkRank == 0 then
+			task.wait(0.5)
+			preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
+		end
 		setContestStatus(("Perk pick: %s"):format(pickInfo or "unknown"))
-		if perkRank and perkRank > 0 then
-			-- Confident best door: never fall back to the worse door.
+		if perkRank and perkRank > 0 and preferredDoor then
 			doorsToTry = { preferredDoor }
-		elseif preferredDoor then
-			doorsToTry = { preferredDoor, preferredDoor == 1 and 2 or 1 }
 		else
 			doorsToTry = { 1, 2 }
-			pickInfo = "try both doors"
+			pickInfo = pickInfo or "rarity unknown – try both doors"
 		end
 	elseif pickMode == "second" then
 		preferredDoor = 2
@@ -2477,6 +2573,7 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	else
 		pickInfo = pickMode
 	end
+	preferredDoor = preferredDoor or doorsToTry[1] or 1
 	task.wait(1)
 	teleportToPerkDoor(preferredDoor)
 	task.wait(0.4)
@@ -6148,7 +6245,7 @@ dungeonScanContent.Position = UDim2.new(0, 4, 0, 4)
 dungeonScanContent.BackgroundColor3 = Color3.fromRGB(22, 32, 48)
 dungeonScanContent.BackgroundTransparency = 0
 dungeonScanContent.BorderSizePixel = 0
-dungeonScanContent.Text = "Tap Remotes to list DungeonService remotes.\nCopy and paste the list here in chat."
+dungeonScanContent.Text = "Dungeon log – status and perk pick messages appear here."
 dungeonScanContent.TextColor3 = Color3.fromRGB(220, 235, 255)
 dungeonScanContent.TextSize = 11
 dungeonScanContent.Font = Enum.Font.Gotham
@@ -6674,12 +6771,38 @@ TAB_PANELS = {
 	{ id = "config", panel = UI.configPanel },
 }
 
+local DUNGEON_LOG_MAX_LINES = 100
+local dungeonLogLines = {}
+
+local function appendDungeonLog(msg)
+	pcall(function()
+		local box = UI and UI.dungeonScanContent
+		if not box or not box.Parent then
+			return
+		end
+		table.insert(dungeonLogLines, tostring(msg))
+		while #dungeonLogLines > DUNGEON_LOG_MAX_LINES do
+			table.remove(dungeonLogLines, 1)
+		end
+		box.Text = table.concat(dungeonLogLines, "\n")
+		local scroll = box.Parent
+		if scroll and scroll:IsA("ScrollingFrame") then
+			task.defer(function()
+				if scroll.Parent then
+					scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
+				end
+			end)
+		end
+	end)
+end
+
 setContestStatusHandler(function(msg)
 	pcall(function()
 		local lbl = UI and UI.dungeonStatusLabel
 		if lbl and lbl.Parent then
 			lbl.Text = msg
 		end
+		appendDungeonLog(msg)
 	end)
 end)
 
@@ -8070,6 +8193,10 @@ local function runContestRemotesDump()
 	printRemotesToConsole(text)
 	if UI.dungeonScanContent then
 		UI.dungeonScanContent.Text = text
+		dungeonLogLines = {}
+		for line in string.gmatch(text, "[^\n]+") do
+			table.insert(dungeonLogLines, line)
+		end
 	end
 	local copied = copyText(text)
 	UI.dungeonStatusLabel.Text = copied
@@ -8088,7 +8215,7 @@ end
 		if (not text or text == "") and UI.dungeonScanContent then
 			text = UI.dungeonScanContent.Text or ""
 		end
-		if text == "" or text:find("Tap Remotes") then
+		if text == "" or text:find("Dungeon log") == 1 then
 			runContestRemotesDump()
 			return
 		end
