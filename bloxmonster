@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.2"
+local VERSION = "1.15.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1843,35 +1843,44 @@ local function lookupPerkRarityFromId(perkId)
 	return rank
 end
 
+local function rankFromRarityTextLabel(desc)
+	if not (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+		return 0, ""
+	end
+	if desc:IsA("GuiObject") and desc.Visible == false then
+		return 0, ""
+	end
+	local nameLower = desc.Name:lower()
+	local text = desc.Text or ""
+	local rank = 0
+	if nameLower:find("rarity", 1, true) or nameLower:find("tier", 1, true) then
+		rank = perkRarityRankFromString(text)
+	else
+		rank = isExactRarityLabelText(text)
+	end
+	return rank, text
+end
+
 local function scanRarityFromDoorInstance(inst)
 	if not inst then
 		return 0, ""
 	end
 	local best, bestText = 0, ""
 	local roots = { inst }
-	if inst:IsA("Model") then
-		table.insert(roots, inst)
-	elseif inst.Parent and inst.Parent:IsA("Model") then
+	if inst.Parent and inst.Parent:IsA("Model") then
 		table.insert(roots, inst.Parent)
 	end
 	for _, root in ipairs(roots) do
+		local rank, text = rankFromRarityTextLabel(root)
+		if rank > best then
+			best = rank
+			bestText = text
+		end
 		for _, desc in ipairs(root:GetDescendants()) do
-			if desc:IsA("BillboardGui") or desc:IsA("SurfaceGui")
-				or desc:IsA("TextLabel") or desc:IsA("TextButton") then
-				if not desc:IsA("GuiObject") or desc.Visible ~= false then
-					local nameLower = desc.Name:lower()
-					local text = desc.Text or ""
-					local rank = 0
-					if nameLower:find("rarity", 1, true) or nameLower:find("tier", 1, true) then
-						rank = perkRarityRankFromString(text)
-					else
-						rank = isExactRarityLabelText(text)
-					end
-					if rank > best then
-						best = rank
-						bestText = text
-					end
-				end
+			rank, text = rankFromRarityTextLabel(desc)
+			if rank > best then
+				best = rank
+				bestText = text
 			end
 		end
 	end
