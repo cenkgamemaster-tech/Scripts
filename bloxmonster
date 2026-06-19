@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.15.4"
+local VERSION = "1.15.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -1610,6 +1610,8 @@ local dungeonEventsHooked = false
 local dungeonPerkPayload = nil
 local dungeonPerkDoorsParsed = nil
 local perkIdRarityCache = {}
+local sharedPerkDataCache = nil
+local perkEntryCache = {}
 local CONTEST_BATTLE_KEYWORDS = { "battle", "fight", "attack", "catch", "challenge", "engage" }
 local CONTEST_PERK_RARITY_RANK = {
 	uncommon = 1,
@@ -1886,6 +1888,172 @@ local function perkRarityFromOption(opt, depth)
 	return best
 end
 
+local function findPerkEntryInTable(node, id, depth)
+	depth = depth or 0
+	if depth > 6 or type(node) ~= "table" then
+		return nil
+	end
+	local direct = node[id]
+	if type(direct) == "table" then
+		return direct
+	end
+	local peNum = id:match("^PE(%d+)$")
+	if peNum then
+		local n = tonumber(peNum)
+		if n and type(node[n]) == "table" then
+			return node[n]
+		end
+	end
+	for key, val in pairs(node) do
+		if type(val) == "table" then
+			if val.Id == id or val.id == id or val.PerkId == id or val.perkId == id
+				or val.Key == id or val.key == id or val.Code == id or val.code == id
+				or key == id or tostring(key) == id then
+				return val
+			end
+			if peNum and (val.Index == tonumber(peNum) or val.index == tonumber(peNum)) then
+				return val
+			end
+		end
+	end
+	for _, val in pairs(node) do
+		if type(val) == "table" then
+			local found = findPerkEntryInTable(val, id, depth + 1)
+			if found then
+				return found
+			end
+		end
+	end
+	return nil
+end
+
+local function loadSharedPerkData()
+	if sharedPerkDataCache ~= nil then
+		return sharedPerkDataCache or nil
+	end
+	sharedPerkDataCache = false
+	local tryNames = {
+		"Perks", "PerkConfig", "PerkConfigs", "PerkData", "DungeonPerks",
+		"ContestPerks", "PerkDefinitions", "PerkTable",
+	}
+	for _, name in ipairs(tryNames) do
+		local inst = ReplicatedStorage:FindFirstChild(name, true)
+		if inst and inst:IsA("ModuleScript") then
+			local ok, data = pcall(require, inst)
+			if ok and type(data) == "table" then
+				sharedPerkDataCache = data
+				return data
+			end
+		end
+	end
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc:IsA("ModuleScript") then
+			local nameLower = desc.Name:lower()
+			if nameLower:find("perk", 1, true)
+				and not nameLower:find("service", 1, true)
+				and not nameLower:find("door", 1, true) then
+				local ok, data = pcall(require, desc)
+				if ok and type(data) == "table" then
+					for key in pairs(data) do
+						if type(key) == "string" and key:match("^PE%d") then
+							sharedPerkDataCache = data
+							return data
+						end
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function searchModulesForPerkId(id)
+	if perkEntryCache[id] ~= nil then
+		return perkEntryCache[id] or nil
+	end
+	local searchRoots = {}
+	for _, name in ipairs({ "Assets", "Shared", "Config", "Modules", "Packages", "Data" }) do
+		local root = ReplicatedStorage:FindFirstChild(name)
+		if root then
+			table.insert(searchRoots, root)
+		end
+	end
+	if #searchRoots == 0 then
+		table.insert(searchRoots, ReplicatedStorage)
+	end
+	for _, root in ipairs(searchRoots) do
+		for _, desc in ipairs(root:GetDescendants()) do
+			if desc:IsA("ModuleScript") then
+				local ok, data = pcall(require, desc)
+				if ok and type(data) == "table" then
+					local entry = findPerkEntryInTable(data, id, 0)
+					if entry then
+						perkEntryCache[id] = entry
+						return entry
+					end
+				end
+			end
+		end
+	end
+	perkEntryCache[id] = false
+	return nil
+end
+
+local function rarityFromPayloadSlot(payload, slot)
+	if type(payload) ~= "table" then
+		return 0
+	end
+	local keySets = slot == "A"
+		and { "DoorARarity", "doorARarity", "RarityA", "PerkA", "perkA", "A" }
+		or { "DoorBRarity", "doorBRarity", "RarityB", "PerkB", "perkB", "B" }
+	for _, key in ipairs(keySets) do
+		local val = payload[key]
+		if val ~= nil then
+			local rank = perkRarityFromOption(type(val) == "table" and val or { Rarity = val, Tier = val })
+			if rank > 0 then
+				return rank
+			end
+		end
+	end
+	return 0
+end
+
+local function lookupPerkEntry(perkId)
+	local id = tostring(perkId)
+	if perkEntryCache[id] ~= nil then
+		return perkEntryCache[id] or nil
+	end
+	local entry = nil
+	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+		if desc.Name == id then
+			if desc:IsA("ModuleScript") then
+				local ok, data = pcall(require, desc)
+				if ok and type(data) == "table" then
+					entry = data
+					break
+				end
+			else
+				entry = {
+					Rarity = desc:GetAttribute("Rarity"),
+					Tier = desc:GetAttribute("Tier"),
+				}
+				break
+			end
+		end
+	end
+	if not entry then
+		local shared = loadSharedPerkData()
+		if shared then
+			entry = findPerkEntryInTable(shared, id, 0)
+		end
+	end
+	if not entry then
+		entry = searchModulesForPerkId(id)
+	end
+	perkEntryCache[id] = entry or false
+	return entry
+end
+
 local function lookupPerkRarityFromId(perkId)
 	if perkId == nil or perkId == "" then
 		return 0
@@ -1895,16 +2063,16 @@ local function lookupPerkRarityFromId(perkId)
 		return perkIdRarityCache[id]
 	end
 	local rank = 0
-	for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
-		if desc.Name == id then
-			rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("Rarity")))
-			rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("Tier")))
-			rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("RarityTier")))
-			if desc:IsA("ModuleScript") and rank == 0 then
-				local ok, data = pcall(require, desc)
-				if ok and type(data) == "table" then
-					rank = math.max(rank, perkRarityFromOption(data))
-				end
+	local entry = lookupPerkEntry(id)
+	if entry then
+		rank = perkRarityFromOption(entry)
+	end
+	if rank == 0 then
+		for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+			if desc.Name == id then
+				rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("Rarity")))
+				rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("Tier")))
+				rank = math.max(rank, perkRarityRankFromString(desc:GetAttribute("RarityTier")))
 			end
 		end
 	end
@@ -1912,55 +2080,27 @@ local function lookupPerkRarityFromId(perkId)
 	return rank
 end
 
-local function rankFromRarityTextLabel(desc)
-	if not (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
-		return 0, ""
+local function describePerkIdLookup(perkId)
+	local id = tostring(perkId or "")
+	if id == "" then
+		return "?"
 	end
-	if desc:IsA("GuiObject") and desc.Visible == false then
-		return 0, ""
+	local rank = lookupPerkRarityFromId(id)
+	if rank > 0 then
+		return ("%s=%s(%d)"):format(id, perkRankName(rank), rank)
 	end
-	local nameLower = desc.Name:lower()
-	local text = desc.Text or ""
-	local rank = 0
-	if nameLower:find("rarity", 1, true) or nameLower:find("tier", 1, true) then
-		rank = perkRarityRankFromString(text)
-	else
-		rank = isExactRarityLabelText(text)
-	end
-	return rank, text
+	return ("%s=config lookup failed"):format(id)
 end
 
-local function scanRarityFromDoorInstance(inst)
-	if not inst then
-		return 0, ""
+local function resolveDoorPerkRarity(perkId, payload, slot)
+	local rank = 0
+	if perkId then
+		rank = lookupPerkRarityFromId(perkId)
 	end
-	local best, bestText = 0, ""
-	local roots = { inst }
-	if inst.Parent and inst.Parent:IsA("Model") then
-		table.insert(roots, inst.Parent)
+	if rank == 0 and payload and slot then
+		rank = rarityFromPayloadSlot(payload, slot)
 	end
-	for _, root in ipairs(roots) do
-		local rank, text = rankFromRarityTextLabel(root)
-		if rank > best then
-			best = rank
-			bestText = text
-		end
-		for _, desc in ipairs(root:GetDescendants()) do
-			rank, text = rankFromRarityTextLabel(desc)
-			if rank > best then
-				best = rank
-				bestText = text
-			end
-		end
-	end
-	for _, attr in ipairs({ "Rarity", "Tier", "RarityTier", "PerkRarity" }) do
-		local rank = perkRarityRankFromString(inst:GetAttribute(attr))
-		if rank > best then
-			best = rank
-			bestText = tostring(inst:GetAttribute(attr))
-		end
-	end
-	return best, bestText
+	return rank
 end
 
 local function parsePerkDoorsReadyPayload(payload)
@@ -1981,19 +2121,14 @@ local function parsePerkDoorsReadyPayload(payload)
 			local part = payload[spec.partKey] or payload[spec.partKey:gsub("^d", "D")]
 			if perkId ~= nil or part ~= nil then
 				seenSlot[spec.slot] = true
-				local rank, rarityText = 0, ""
-				if part then
-					rank, rarityText = scanRarityFromDoorInstance(part)
-				end
-				if rank == 0 and perkId then
-					rank = lookupPerkRarityFromId(perkId)
-				end
+				local rank = resolveDoorPerkRarity(perkId, payload, spec.slot)
 				table.insert(doors, {
 					slot = spec.slot,
 					perkId = perkId and tostring(perkId) or nil,
 					part = part,
 					rarity = rank,
-					text = rarityText ~= "" and rarityText or (perkId and tostring(perkId) or ""),
+					text = perkId and tostring(perkId) or "",
+					raritySource = rank > 0 and "config" or nil,
 				})
 			end
 		end
@@ -2023,23 +2158,15 @@ local function parsePerkDoorsReadyPayload(payload)
 	return doors
 end
 
-local function refreshParsedDoorRarities(doors)
+local function refreshParsedDoorRarities(doors, payload)
 	if not doors then
 		return
 	end
+	payload = payload or dungeonPerkPayload
 	for _, d in ipairs(doors) do
-		if d.part then
-			local rank, text = scanRarityFromDoorInstance(d.part)
-			if rank > 0 then
-				d.rarity = rank
-				if text ~= "" then
-					d.text = text
-				end
-			end
-		end
-		if (not d.rarity or d.rarity == 0) and d.perkId then
-			d.rarity = lookupPerkRarityFromId(d.perkId)
-		end
+		local rank = resolveDoorPerkRarity(d.perkId, payload, d.slot)
+		d.rarity = rank
+		d.raritySource = rank > 0 and "config" or "unknown"
 	end
 end
 
@@ -2254,10 +2381,10 @@ local function pickBestFromDoorList(doors, sourceTag)
 		left.door = 1
 		right.door = 2
 	end
-	local detail = (" %s: door 1=%s(%d) id=%s vs door 2=%s(%d) id=%s"):format(
+	local detail = (" %s: door 1=%s(%d) id=%s [%s] vs door 2=%s(%d) id=%s [%s]"):format(
 		sourceTag,
-		perkRankName(left.rarity or 0), left.rarity or 0, left.perkId or "?",
-		perkRankName(right.rarity or 0), right.rarity or 0, right.perkId or "?"
+		perkRankName(left.rarity or 0), left.rarity or 0, left.perkId or "?", left.raritySource or "?",
+		perkRankName(right.rarity or 0), right.rarity or 0, right.perkId or "?", right.raritySource or "?"
 	)
 	if (right.rarity or 0) > (left.rarity or 0) then
 		return 2, right.rarity, detail .. " -> door 2"
@@ -2304,7 +2431,9 @@ local function pickBestPerkDoor()
 	if #doors >= 2 then
 		return pickBestFromDoorList(doors, "door parts")
 	end
-	return nil, 0, "no rarity on door parts – wait for PerkDoorsReady"
+	local idA = dungeonPerkDoorsParsed and dungeonPerkDoorsParsed[1] and dungeonPerkDoorsParsed[1].perkId
+	local idB = dungeonPerkDoorsParsed and dungeonPerkDoorsParsed[2] and dungeonPerkDoorsParsed[2].perkId
+	return nil, 0, "perk rarity unknown – config lookup failed for " .. (idA or "?") .. " / " .. (idB or "?")
 end
 
 local function ensureDungeonEventHooks()
@@ -2345,6 +2474,13 @@ local function ensureDungeonEventHooks()
 				local _, _, detail = pickBestFromDoorList(dungeonPerkDoorsParsed, "ready")
 				if detail then
 					setContestStatus("PerkDoorsReady rarities:" .. detail)
+				end
+				local a = dungeonPerkDoorsParsed[1]
+				local b = dungeonPerkDoorsParsed[2]
+				if a and b then
+					setContestStatus(("Perk config: %s vs %s (doors have no rarity text)"):format(
+						describePerkIdLookup(a.perkId), describePerkIdLookup(b.perkId)
+					))
 				end
 			end
 		end)
@@ -2634,10 +2770,6 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	if pickMode == "best" or pickMode == nil then
 		local perkRank
 		preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
-		if not perkRank or perkRank == 0 then
-			task.wait(0.5)
-			preferredDoor, perkRank, pickInfo = pickBestPerkDoor()
-		end
 		setContestStatus(("Perk pick: %s"):format(pickInfo or "unknown"))
 		if perkRank and perkRank > 0 and preferredDoor then
 			doorsToTry = { preferredDoor }
