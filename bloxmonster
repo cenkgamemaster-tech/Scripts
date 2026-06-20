@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.3"
+local VERSION = "1.16.4"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -984,51 +984,6 @@ local function getPetsInWorld(worldConfig, allPets)
 	return out
 end
 
-local function getWorldVisiblePets(worldConfig, filters, allPets)
-	if not allPets or #allPets == 0 then
-		allPets = getCachedWorldPets("auto")
-	end
-
-	local byPath = getPetsInWorld(worldConfig, allPets)
-	if filters and #filters > 0 then
-		local pathTargets = applyNameFilters(byPath, filters)
-		if #pathTargets > 0 then
-			return pathTargets, allPets
-		end
-	elseif #byPath > 0 then
-		return byPath, allPets
-	end
-
-	if filters and #filters > 0 then
-		local anchor = getPlayerPosition() or getSavedWorldPosition(worldConfig.id)
-		local byFilter = {}
-		for _, pet in ipairs(allPets) do
-			if petMatchesFilters(pet, filters) then
-				local near = true
-				if anchor then
-					local model = pet.model
-					local petPos = model and getModelPosition(model)
-					near = petPos and (petPos - anchor).Magnitude <= WORLD_HUNT_NEAR_RADIUS
-				end
-				if near then
-					table.insert(byFilter, pet)
-				end
-			end
-		end
-		if #byFilter > 0 then
-			return byFilter, allPets
-		end
-	end
-
-	return {}, allPets
-end
-
-local function getWorldHuntTargets(worldConfig, filters, scanMode)
-	local allPets = getCachedWorldPets(scanMode or "auto")
-	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
-	return applyNameFilters(visible, filters)
-end
-
 local function getInstancePosition(inst)
 	if not inst then
 		return nil
@@ -1301,6 +1256,51 @@ local function getSavedWorldPosition(worldId)
 		return nil
 	end
 	return Vector3.new(loc.x, loc.y, loc.z)
+end
+
+local function getWorldVisiblePets(worldConfig, filters, allPets)
+	if not allPets or #allPets == 0 then
+		allPets = getCachedWorldPets("auto")
+	end
+
+	local byPath = getPetsInWorld(worldConfig, allPets)
+	if filters and #filters > 0 then
+		local pathTargets = applyNameFilters(byPath, filters)
+		if #pathTargets > 0 then
+			return pathTargets, allPets
+		end
+	elseif #byPath > 0 then
+		return byPath, allPets
+	end
+
+	if filters and #filters > 0 then
+		local anchor = getPlayerPosition() or getSavedWorldPosition(worldConfig.id)
+		local byFilter = {}
+		for _, pet in ipairs(allPets) do
+			if petMatchesFilters(pet, filters) then
+				local near = true
+				if anchor then
+					local model = pet.model
+					local petPos = model and getModelPosition(model)
+					near = petPos and (petPos - anchor).Magnitude <= WORLD_HUNT_NEAR_RADIUS
+				end
+				if near then
+					table.insert(byFilter, pet)
+				end
+			end
+		end
+		if #byFilter > 0 then
+			return byFilter, allPets
+		end
+	end
+
+	return {}, allPets
+end
+
+local function getWorldHuntTargets(worldConfig, filters, scanMode)
+	local allPets = getCachedWorldPets(scanMode or "auto")
+	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
+	return applyNameFilters(visible, filters)
 end
 
 local function formatHardcodeEntry(worldId, loc)
