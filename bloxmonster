@@ -20,10 +20,10 @@ local FULL_SCAN_MIN_INTERVAL = 12
 local FARM_LIST_REFRESH_SEC = 8
 local FARM_LOCATION_HOLD_INTERVAL = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
-local DEFAULT_FARM_WAIT_SEC = 30
+local DEFAULT_FARM_WAIT_SEC = 21
 local MIN_FARM_WAIT_SEC = 5
 local MAX_FARM_WAIT_SEC = 120
-local DEFAULT_FARM_STAY_SEC = 210
+local DEFAULT_FARM_STAY_SEC = 120
 local MIN_FARM_STAY_SEC = 10
 local MAX_FARM_STAY_SEC = 600
 local WORLD_TELEPORT_SETTLE_SEC = 3
@@ -603,6 +603,9 @@ local function getCachedWorldPets(scanMode)
 end
 
 local worldPetFilters = {
+	misty_forest = {
+		{ name = "Cloverhop", priority = 1 },
+	},
 	heaven_island = {
 		{ name = "Rio", priority = 1 },
 	},
