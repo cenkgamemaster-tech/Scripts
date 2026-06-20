@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.2"
+local VERSION = "1.16.3"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -29,6 +29,9 @@ local MAX_FARM_STAY_SEC = 600
 local WORLD_TELEPORT_SETTLE_SEC = 3
 local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
+local WORLD_HUNT_NEAR_RADIUS = 1200
+local WORLD_HUNT_SPAWN_WAIT_SEC = 15
+local WORLD_HUNT_SPAWN_RETRY_SEC = 5
 
 local function nowSeconds()
 	if typeof(time) == "function" then
@@ -67,7 +70,7 @@ local WORLD_ZONES = {
 	{
 		id = "heaven_island",
 		name = "Heaven Island",
-		keywords = { "heaven", "island", "heavenisland" },
+		keywords = { "heaven", "heavenisland" },
 	},
 }
 
@@ -981,22 +984,35 @@ local function getPetsInWorld(worldConfig, allPets)
 	return out
 end
 
--- Pets for a world: path match first, then filter-matched pets from full scan (spawn paths often omit zone names).
 local function getWorldVisiblePets(worldConfig, filters, allPets)
 	if not allPets or #allPets == 0 then
 		allPets = getCachedWorldPets("auto")
 	end
 
 	local byPath = getPetsInWorld(worldConfig, allPets)
-	if #byPath > 0 then
+	if filters and #filters > 0 then
+		local pathTargets = applyNameFilters(byPath, filters)
+		if #pathTargets > 0 then
+			return pathTargets, allPets
+		end
+	elseif #byPath > 0 then
 		return byPath, allPets
 	end
 
 	if filters and #filters > 0 then
+		local anchor = getPlayerPosition() or getSavedWorldPosition(worldConfig.id)
 		local byFilter = {}
 		for _, pet in ipairs(allPets) do
 			if petMatchesFilters(pet, filters) then
-				table.insert(byFilter, pet)
+				local near = true
+				if anchor then
+					local model = pet.model
+					local petPos = model and getModelPosition(model)
+					near = petPos and (petPos - anchor).Magnitude <= WORLD_HUNT_NEAR_RADIUS
+				end
+				if near then
+					table.insert(byFilter, pet)
+				end
 			end
 		end
 		if #byFilter > 0 then
@@ -1007,8 +1023,8 @@ local function getWorldVisiblePets(worldConfig, filters, allPets)
 	return {}, allPets
 end
 
-local function getWorldHuntTargets(worldConfig, filters)
-	local allPets = getCachedWorldPets("auto")
+local function getWorldHuntTargets(worldConfig, filters, scanMode)
+	local allPets = getCachedWorldPets(scanMode or "auto")
 	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
 	return applyNameFilters(visible, filters)
 end
@@ -8087,37 +8103,53 @@ local function runWorldFarmLoop(runId)
 					end
 				end
 
+				if not refreshWorldFarmList(world, "Scanning " .. world.name .. "...", runId, "full") then
+					break
+				end
+
 				local lastWorldPriority = 0
+				local spawnWaitUntil = wallClockSeconds() + WORLD_HUNT_SPAWN_WAIT_SEC
 				while shouldFarmContinue(runId, "world") do
 					if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
 						break
 					end
-					local targets = getWorldHuntTargets(world, highFilters)
+					local targets = getWorldHuntTargets(world, highFilters, "auto")
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
-						setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
-						break
-					end
+						if wallClockSeconds() < spawnWaitUntil then
+							setWorldFarmStatus(("%s – waiting for targets (%ds)..."):format(
+								world.name, math.ceil(spawnWaitUntil - wallClockSeconds())
+							))
+							if not farmWait(WORLD_HUNT_SPAWN_RETRY_SEC, runId, "world") then
+								break
+							end
+							refreshWorldFarmList(world, "Rescanning...", runId, "full")
+						else
+							setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
+							break
+						end
+					else
+						spawnWaitUntil = wallClockSeconds() + WORLD_HUNT_SPAWN_WAIT_SEC
+						local prio = targetP or getPetFilterPriority(target.name, highFilters)
+						setWorldFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
+						teleportToPet(target.model)
+						tickFarmLists(runId, world, highFilters, "auto", "world")
 
-					local prio = targetP or getPetFilterPriority(target.name, highFilters)
-					setWorldFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
-					teleportToPet(target.model)
-					tickFarmLists(runId, world, highFilters, "auto", "world")
+						if not farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
+							setWorldFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
+						end, world, highFilters, nil, nil, "world") then
+							break
+						end
 
-					if not farmWaitWithListRefresh(getFarmWaitSec(), runId, function(sec)
-						setWorldFarmStatus(("[%s] P%s: %s – %ds"):format(world.name, tostring(prio), target.name, sec))
-					end, world, highFilters, nil, nil, "world") then
-						break
-					end
+						if not shouldFarmContinue(runId, "world") then
+							break
+						end
 
-					if not shouldFarmContinue(runId, "world") then
-						break
-					end
-
-					lastWorldPriority = prio
-					if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
-						break
+						lastWorldPriority = prio
+						if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
+							break
+						end
 					end
 				end
 			end
