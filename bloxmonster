@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.4"
+local VERSION = "1.16.5"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -638,7 +638,7 @@ local CONTEST_DIFFICULTIES = {
 local DUNGEON_FLOOR_BATTLE_SEC = 60
 local DUNGEON_FLOOR_CLEAR_CONFIRM_SEC = 3
 local DUNGEON_FLOOR_CLEAR_POLL_SEC = 0.5
-local DUNGEON_RUN_COOLDOWN_SEC = 15
+local DUNGEON_RUN_COOLDOWN_SEC = 9
 local selectedContestDifficultyId = "elite"
 local contestUseMasterKey = true
 local contestPerkPick = "best"
