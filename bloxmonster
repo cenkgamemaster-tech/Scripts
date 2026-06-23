@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.5"
+local VERSION = "1.16.6"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -30,8 +30,9 @@ local WORLD_TELEPORT_SETTLE_SEC = 3
 local WORLD_CYCLE_BONUS_SEC = 40
 local WORLD_CYCLE_BONUS_MIN_PRIORITY = 3
 local WORLD_HUNT_NEAR_RADIUS = 1200
-local WORLD_HUNT_SPAWN_WAIT_SEC = 15
-local WORLD_HUNT_SPAWN_RETRY_SEC = 5
+local WORLD_HUNT_NEAR_RADII = { 900, 1200, 2000, 2800 }
+local WORLD_HUNT_SPAWN_WAIT_SEC = 30
+local WORLD_HUNT_SPAWN_RETRY_SEC = 4
 
 local function nowSeconds()
 	if typeof(time) == "function" then
@@ -568,8 +569,15 @@ local function refreshCachedPetsLight()
 	return out
 end
 
-local function getCachedWorldPets(scanMode)
+local function getCachedWorldPets(scanMode, forceRefresh)
 	scanMode = scanMode or "auto"
+	if forceRefresh then
+		lastScanClock = 0
+		lastFullScanClock = 0
+		lastAllPets = {}
+		lastLightPetsCount = -1
+		lastLightWorldCount = -1
+	end
 	if farmLocationStayActive then
 		if #lastAllPets > 0 then
 			return refreshCachedPetsLight()
@@ -1258,35 +1266,51 @@ local function getSavedWorldPosition(worldId)
 	return Vector3.new(loc.x, loc.y, loc.z)
 end
 
-local function getWorldVisiblePets(worldConfig, filters, allPets)
+local function getWorldVisiblePets(worldConfig, filters, allPets, nearRadius)
+	nearRadius = nearRadius or WORLD_HUNT_NEAR_RADIUS
 	if not allPets or #allPets == 0 then
 		allPets = getCachedWorldPets("auto")
+	end
+
+	local anchor = getPlayerPosition() or getSavedWorldPosition(worldConfig.id)
+	local function nearPet(pet)
+		if not anchor then
+			return true
+		end
+		local model = pet.model
+		local petPos = model and getModelPosition(model)
+		return petPos and (petPos - anchor).Magnitude <= nearRadius
 	end
 
 	local byPath = getPetsInWorld(worldConfig, allPets)
 	if filters and #filters > 0 then
 		local pathTargets = applyNameFilters(byPath, filters)
-		if #pathTargets > 0 then
-			return pathTargets, allPets
+		local nearPath = {}
+		for _, pet in ipairs(pathTargets) do
+			if nearPet(pet) then
+				table.insert(nearPath, pet)
+			end
+		end
+		if #nearPath > 0 then
+			return nearPath, allPets
 		end
 	elseif #byPath > 0 then
-		return byPath, allPets
+		local nearPath = {}
+		for _, pet in ipairs(byPath) do
+			if nearPet(pet) then
+				table.insert(nearPath, pet)
+			end
+		end
+		if #nearPath > 0 then
+			return nearPath, allPets
+		end
 	end
 
 	if filters and #filters > 0 then
-		local anchor = getPlayerPosition() or getSavedWorldPosition(worldConfig.id)
 		local byFilter = {}
 		for _, pet in ipairs(allPets) do
-			if petMatchesFilters(pet, filters) then
-				local near = true
-				if anchor then
-					local model = pet.model
-					local petPos = model and getModelPosition(model)
-					near = petPos and (petPos - anchor).Magnitude <= WORLD_HUNT_NEAR_RADIUS
-				end
-				if near then
-					table.insert(byFilter, pet)
-				end
+			if petMatchesFilters(pet, filters) and nearPet(pet) then
+				table.insert(byFilter, pet)
 			end
 		end
 		if #byFilter > 0 then
@@ -1297,9 +1321,9 @@ local function getWorldVisiblePets(worldConfig, filters, allPets)
 	return {}, allPets
 end
 
-local function getWorldHuntTargets(worldConfig, filters, scanMode)
-	local allPets = getCachedWorldPets(scanMode or "auto")
-	local visible = getWorldVisiblePets(worldConfig, filters, allPets)
+local function getWorldHuntTargets(worldConfig, filters, scanMode, forceRefresh, nearRadius)
+	local allPets = getCachedWorldPets(scanMode or "auto", forceRefresh)
+	local visible = getWorldVisiblePets(worldConfig, filters, allPets, nearRadius)
 	return applyNameFilters(visible, filters)
 end
 
@@ -2974,16 +2998,11 @@ local function chooseDungeonPerk(pickMode, roomBefore)
 	return false
 end
 
-do -- dungeon run loop (nested scope – Luau 200 local limit)
-local function tryStartContest(difficulty, useKey)
-	local started, result = startDungeonKnit(difficulty, useKey)
-	if started then
-		task.wait(WORLD_TELEPORT_SETTLE_SEC)
-		return true, result
-	end
-	return false, result
-end
+local tryStartContest
+local transitionToNextFloor
+local runContestFloorBattle
 
+do -- dungeon floor helpers (nested scope – Luau 200 local limit)
 local function waitForFloorBattle(durationSec, runId)
 	local start = wallClockSeconds()
 	local clearSince = nil
@@ -3008,11 +3027,16 @@ local function waitForFloorBattle(durationSec, runId)
 	return true, "waited"
 end
 
-local function selectPerkPortal(pickMode, roomBefore)
-	return chooseDungeonPerk(pickMode, roomBefore)
+tryStartContest = function(difficulty, useKey)
+	local started, result = startDungeonKnit(difficulty, useKey)
+	if started then
+		task.wait(WORLD_TELEPORT_SETTLE_SEC)
+		return true, result
+	end
+	return false, result
 end
 
-local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
+transitionToNextFloor = function(runId, floorNum, roomWhenCleared)
 	if dungeonRunEnded then
 		return false
 	end
@@ -3029,7 +3053,7 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 	end
 	setContestStatus(("Floor %d – pick perk (once)..."):format(floorNum))
 	task.wait(1)
-	local perkOk = selectPerkPortal(contestPerkPick, roomWhenCleared)
+	local perkOk = chooseDungeonPerk(contestPerkPick, roomWhenCleared)
 	if not perkOk then
 		if resumeDungeonCombatIfNeeded() then
 			return false
@@ -3054,7 +3078,7 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 	return nil
 end
 
-local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
+runContestFloorBattle = function(runId, difficulty, floorNum, _killsNeeded)
 	local floorCombatStarted = false
 	local idleSince = wallClockSeconds()
 	local lastRescueWhileWaiting = 0
@@ -3113,7 +3137,9 @@ local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
 	return nil
 end
 
-local function runContestDungeon(runId, difficulty)
+end -- dungeon floor helpers
+
+runContestDungeon = function(runId, difficulty)
 	ensureDungeonEventHooks()
 	local started, startResult = tryStartContest(difficulty, difficulty.needsKey and contestUseMasterKey)
 	if not started then
@@ -3215,8 +3241,6 @@ startContestDungeon = function()
 		end
 	end)
 end
-
-end -- dungeon run loop
 
 stopContestDungeon = function()
 	contestRunId = contestRunId + 1
@@ -7957,7 +7981,7 @@ local function stopAllFarm()
 	stopWorldHunt()
 end
 
-local function refreshWorldFarmList(world, statusText, runId, scanMode)
+local function refreshWorldFarmList(world, statusText, runId, scanMode, forceRefresh)
 	if runId and not shouldFarmContinue(runId, "world") then
 		return false
 	end
@@ -7965,7 +7989,7 @@ local function refreshWorldFarmList(world, statusText, runId, scanMode)
 		setWorldFarmStatus(statusText)
 	end
 	local ok, err = pcall(function()
-		local pets = getCachedWorldPets(scanMode or "auto")
+		local pets = getCachedWorldPets(scanMode or "auto", forceRefresh)
 		if runId and not shouldFarmContinue(runId, "world") then
 			return
 		end
@@ -8103,33 +8127,52 @@ local function runWorldFarmLoop(runId)
 					end
 				end
 
-				if not refreshWorldFarmList(world, "Scanning " .. world.name .. "...", runId, "full") then
+				if not refreshWorldFarmList(world, "Scanning " .. world.name .. "...", runId, "full", true) then
 					break
 				end
 
 				local lastWorldPriority = 0
 				local spawnWaitUntil = wallClockSeconds() + WORLD_HUNT_SPAWN_WAIT_SEC
+				local spawnRetryCount = 0
 				while shouldFarmContinue(runId, "world") do
-					if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
-						break
+					local nearRadius = WORLD_HUNT_NEAR_RADII[
+						math.min(spawnRetryCount + 1, #WORLD_HUNT_NEAR_RADII)
+					]
+					local targets = getWorldHuntTargets(world, highFilters, "full", spawnRetryCount > 0, nearRadius)
+					if spawnRetryCount == 0 then
+						applyListsFromPets(getCachedWorldPets("full"), world, highFilters)
 					end
-					local targets = getWorldHuntTargets(world, highFilters, "auto")
 
 					local target, targetP = pickNextFarmTarget(targets, lastWorldPriority, highFilters)
 					if not target then
 						if wallClockSeconds() < spawnWaitUntil then
-							setWorldFarmStatus(("%s – waiting for targets (%ds)..."):format(
-								world.name, math.ceil(spawnWaitUntil - wallClockSeconds())
-							))
+							spawnRetryCount = spawnRetryCount + 1
+							if spawnRetryCount % 3 == 0 then
+								setWorldFarmStatus(("%s – re-travel (spawn retry %d)..."):format(
+									world.name, spawnRetryCount
+								))
+								teleportToWorld(world)
+								if not farmWait(WORLD_TELEPORT_SETTLE_SEC, runId, "world") then
+									break
+								end
+							else
+								setWorldFarmStatus(("%s – waiting for pets (%ds, scan %d)..."):format(
+									world.name,
+									math.ceil(spawnWaitUntil - wallClockSeconds()),
+									spawnRetryCount
+								))
+							end
 							if not farmWait(WORLD_HUNT_SPAWN_RETRY_SEC, runId, "world") then
 								break
 							end
-							refreshWorldFarmList(world, "Rescanning...", runId, "full")
 						else
-							setWorldFarmStatus(("No targets left in %s – next world"):format(world.name))
+							setWorldFarmStatus(("No targets in %s after %ds – next world"):format(
+								world.name, WORLD_HUNT_SPAWN_WAIT_SEC
+							))
 							break
 						end
 					else
+						spawnRetryCount = 0
 						spawnWaitUntil = wallClockSeconds() + WORLD_HUNT_SPAWN_WAIT_SEC
 						local prio = targetP or getPetFilterPriority(target.name, highFilters)
 						setWorldFarmStatus(("[%s] TP P%s: %s"):format(world.name, tostring(prio), target.name))
@@ -8147,7 +8190,7 @@ local function runWorldFarmLoop(runId)
 						end
 
 						lastWorldPriority = prio
-						if not refreshWorldFarmList(world, "Refreshing list...", runId, "auto") then
+						if not refreshWorldFarmList(world, "Refreshing list...", runId, "full", true) then
 							break
 						end
 					end
