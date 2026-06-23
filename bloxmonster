@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.5"
+local VERSION = "1.16.7"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -516,9 +516,9 @@ getDungeonPets = function()
 	end
 
 	for _, clientRoot in ipairs(getLiveMobsClientRoots()) do
-		for _, child in ipairs(clientRoot:GetChildren()) do
-			if child:IsA("Model") then
-				consider(child)
+		for _, desc in ipairs(clientRoot:GetDescendants()) do
+			if desc:IsA("Model") then
+				consider(desc)
 			end
 		end
 	end
@@ -1840,8 +1840,9 @@ end
 local function maybeRescueAfterDungeonTeleport(reason)
 	task.wait(0.2)
 	local pos = getPlayerPosition()
-	local fallen = not pos or pos.Y < -50
-	tryRescueTeleport(fallen and (reason and (reason .. ", fell") or "fell through floor") or reason or "after TP")
+	if not pos or pos.Y < -50 then
+		tryRescueTeleport(reason and (reason .. ", fell") or "fell through floor")
+	end
 end
 
 local function resetDungeonSignals()
@@ -3055,29 +3056,54 @@ local function transitionToNextFloor(runId, floorNum, roomWhenCleared)
 end
 
 local function runContestFloorBattle(runId, difficulty, floorNum, _killsNeeded)
+	local function liveMobCount()
+		local count = 0
+		for _, clientRoot in ipairs(getLiveMobsClientRoots()) do
+			for _, desc in ipairs(clientRoot:GetDescendants()) do
+				if desc:IsA("Model") then
+					local hum = desc:FindFirstChildOfClass("Humanoid")
+						or desc:FindFirstChildWhichIsA("Humanoid", true)
+					if hum and hum.Health > 0 then
+						count = count + 1
+					end
+				end
+			end
+		end
+		return count
+	end
 	local floorCombatStarted = false
 	local idleSince = wallClockSeconds()
 	local lastRescueWhileWaiting = 0
-	if floorNum > 1 then
-		task.wait(2)
-	end
+	task.wait(floorNum > 1 and WORLD_TELEPORT_SETTLE_SEC or 1)
 	tryRescueTeleport("floor " .. tostring(floorNum))
+	task.wait(0.5)
 	while contestRunning and contestRunId == runId and not dungeonRunEnded do
 		local targets = getDungeonPetTargets()
 		if #targets == 0 then
 			if not floorCombatStarted then
 				local idleFor = wallClockSeconds() - idleSince
-				if idleFor > 120 then
-					setContestStatus(("Floor %d – no pets found (120s timeout)"):format(floorNum))
+				if idleFor > 90 then
+					setContestStatus(("Floor %d – no pets (%d mobs in Client, 90s)"):format(
+						floorNum, liveMobCount()
+					))
 					return nil
 				end
 				if idleFor >= RESCUE_WAIT_FOR_PETS_SEC
 					and wallClockSeconds() - lastRescueWhileWaiting >= RESCUE_WAIT_FOR_PETS_SEC then
 					tryRescueTeleport("waiting for pets")
 					lastRescueWhileWaiting = wallClockSeconds()
+					task.wait(0.5)
+					targets = getDungeonPetTargets()
+					if #targets > 0 then
+						idleSince = wallClockSeconds()
+					end
 				end
-				setContestStatus(("Floor %d – waiting for pets..."):format(floorNum))
-				task.wait(1.5)
+				if #targets == 0 then
+					setContestStatus(("Floor %d – waiting for pets (%d mobs)..."):format(
+						floorNum, liveMobCount()
+					))
+					task.wait(1.5)
+				end
 			else
 				if confirmDungeonFloorCleared(runId) then
 					setContestStatus(("Floor %d – cleared (no pets)"):format(floorNum))
@@ -3143,6 +3169,7 @@ local function runContestDungeon(runId, difficulty)
 				if dungeonRoomVersion > roomWhenCleared then
 					setContestStatus(("Floor %d → %d: room ready, check pets"):format(floor, floor + 1))
 					task.wait(WORLD_TELEPORT_SETTLE_SEC)
+					tryRescueTeleport("floor ready")
 					moved = true
 				else
 					local transitionOk = transitionToNextFloor(runId, floor, roomWhenCleared)
