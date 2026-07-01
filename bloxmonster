@@ -13,14 +13,14 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.8"
+local VERSION = "1.16.9"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
 local FARM_LIST_REFRESH_SEC = 8
 local FARM_LOCATION_HOLD_INTERVAL = 5
 local FARM_NO_TARGET_WAIT_SEC = 2
-local DEFAULT_FARM_WAIT_SEC = 21
+local DEFAULT_FARM_WAIT_SEC = 16
 local MIN_FARM_WAIT_SEC = 5
 local MAX_FARM_WAIT_SEC = 120
 local DEFAULT_FARM_STAY_SEC = 120
@@ -72,6 +72,11 @@ local WORLD_ZONES = {
 		name = "Heaven Island",
 		keywords = { "heaven", "heavenisland" },
 	},
+	{
+		id = "steamy_town",
+		name = "Steamy Town",
+		keywords = { "steamy", "town", "steamytown" },
+	},
 }
 
 -- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
@@ -85,6 +90,7 @@ local WORLD_SPAWN_LOCATIONS = {
 	astral_grove = { x = 1043.733, y = 28.807, z = -1410.094 },
 	bamboo_temple = { x = -1958.844, y = 26.846, z = 231.372 },
 	heaven_island = { x = -665.411, y = 1025.021, z = -1662.703 },
+	steamy_town = { x = 274.824, y = 8.512, z = 3790.257 },
 }
 
 local FARM_LOCATION_ID = "farm_location"
@@ -541,7 +547,9 @@ end -- wild pet scan
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local DEFAULT_PET_FILTERS = {
-	{ name = "Rio", priority = 1 },
+	{ name = "Raybit", priority = 1 },
+	{ name = "Gleamkit", priority = 2 },
+	{ name = "Defenderlet", priority = 3 },
 }
 local nameFilters = {}
 for _, entry in ipairs(DEFAULT_PET_FILTERS) do
