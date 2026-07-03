@@ -13,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "1.16.9"
+local VERSION = "1.16.10"
 local AUTO_REFRESH_SEC = 10
 local SCAN_CACHE_SEC = 10
 local FULL_SCAN_MIN_INTERVAL = 12
@@ -77,6 +77,11 @@ local WORLD_ZONES = {
 		name = "Steamy Town",
 		keywords = { "steamy", "town", "steamytown" },
 	},
+	{
+		id = "wonderland",
+		name = "Wonderland",
+		keywords = { "wonderland", "wonder" },
+	},
 }
 
 -- Hardcoded world spawn points. Paste lines from Locations tab → Copy (or edit manually).
@@ -90,7 +95,8 @@ local WORLD_SPAWN_LOCATIONS = {
 	astral_grove = { x = 1043.733, y = 28.807, z = -1410.094 },
 	bamboo_temple = { x = -1958.844, y = 26.846, z = 231.372 },
 	heaven_island = { x = -665.411, y = 1025.021, z = -1662.703 },
-	steamy_town = { x = 274.824, y = 8.512, z = 3790.257 },
+	steamy_town = { x = -254.300, y = 312.119, z = 3707.800 },
+	wonderland = { x = 2661.520, y = 17.778, z = -657.316 },
 }
 
 local FARM_LOCATION_ID = "farm_location"
@@ -547,9 +553,9 @@ end -- wild pet scan
 
 -- Pet filters: { name = string, priority = number } (1 = highest teleport priority).
 local DEFAULT_PET_FILTERS = {
-	{ name = "Raybit", priority = 1 },
-	{ name = "Gleamkit", priority = 2 },
-	{ name = "Defenderlet", priority = 3 },
+	{ name = "Fairydeer", priority = 1 },
+	{ name = "Phantomdan", priority = 2 },
+	{ name = "Cryspirit", priority = 3 },
 }
 local nameFilters = {}
 for _, entry in ipairs(DEFAULT_PET_FILTERS) do
